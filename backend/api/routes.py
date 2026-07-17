@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.database import get_db
 from backend.models.db_models import TradeSetupRecord
 from backend.services.dashboard_service import build_dashboard_meta
@@ -14,7 +15,12 @@ router = APIRouter(prefix="/api")
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "mode": "simulated", "data_source": "local-generator"}
+    live = not settings.simulated_mode and type(market_data_service).__name__ == "LiveMarketDataService"
+    return {
+        "status": "ok",
+        "mode": "live" if live else "simulated",
+        "data_source": settings.live_price_symbol if live else "local-generator",
+    }
 
 
 @router.get("/market/snapshot")

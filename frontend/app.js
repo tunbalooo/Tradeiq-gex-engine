@@ -407,10 +407,12 @@ async function initialLoad() {
       fetch("/api/dashboard").then((response) => response.json()),
     ]);
     state.baseCandles = snapshot.candles;
-    $("modeLabel").textContent = health.mode.toUpperCase();
+    state.dataMode = health.mode.toUpperCase();
+    $("modeLabel").textContent = state.dataMode;
     renderAll(dashboard.setup, dashboard.meta);
     renderHeader(snapshot);
     setConnection(true);
+    $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataMode}`;
     connectWebSocket();
   } catch (error) {
     console.error(error); setConnection(false); $("modeLabel").textContent = "ERROR";
@@ -463,7 +465,7 @@ $("templateReset").addEventListener("click", () => {
   document.querySelectorAll(".overlay-btn").forEach((button) => button.classList.add("active"));
   state.timeframe = 5;
   document.querySelectorAll(".tf").forEach((button) => button.classList.toggle("active", Number(button.dataset.tf) === 5));
-  $("chartCaption").textContent = "NASDAQ 100 E-mini · 5m · SIMULATED";
+  $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataMode || "SIMULATED"}`;
   drawChart();
 });
 document.querySelectorAll(".overlay-btn").forEach((button) => button.addEventListener("click", () => {
@@ -473,7 +475,7 @@ document.querySelectorAll(".tf").forEach((button) => button.addEventListener("cl
   state.timeframe = Number(button.dataset.tf);
   document.querySelectorAll(".tf").forEach((item) => item.classList.remove("active")); button.classList.add("active");
   const label = state.timeframe >= 60 ? `${state.timeframe / 60}h` : `${state.timeframe}m`;
-  $("chartCaption").textContent = `NASDAQ 100 E-mini · ${label} · SIMULATED`;
+  $("chartCaption").textContent = `NASDAQ 100 E-mini · ${label} · ${state.dataMode || "SIMULATED"}`;
   state.hoverIndex = null; $("chartTooltip").style.display = "none"; drawChart();
 }));
 document.querySelectorAll("#nav a").forEach((item) => item.addEventListener("click", () => {

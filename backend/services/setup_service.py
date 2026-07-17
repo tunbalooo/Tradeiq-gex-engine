@@ -3,6 +3,7 @@ from math import exp
 
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.models.db_models import TradeSetupRecord
 from backend.models.schemas import GexSummary, TradeSetup
 from backend.services.market_data import market_data_service
@@ -121,7 +122,19 @@ def build_current_setup() -> TradeSetup:
     )
     zones = sorted(zones, key=lambda zone: (zone.strength, zone.timeframe), reverse=True)[:10]
 
-    positions = mock_option_chain(current_price)
+    if settings.simulated_mode:
+        positions = mock_option_chain(current_price)
+    else:
+        try:
+            from backend.services.live_options import live_option_chain
+
+            positions = live_option_chain(current_price)
+        except Exception:
+            positions = []
+        if not positions:
+            # Live fetch hasn't warmed up yet or failed — fall back to the
+            # synthetic chain for this cycle so the dashboard stays populated.
+            positions = mock_option_chain(current_price)
     strike_gex = aggregate_gex_by_strike(current_price, positions)
     gex_raw = derive_gex_summary(current_price, strike_gex)
     gex = GexSummary(**gex_raw)

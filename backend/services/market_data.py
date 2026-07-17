@@ -112,4 +112,22 @@ class SimulatedMarketDataService:
         ]
 
 
-market_data_service = SimulatedMarketDataService()
+def _build_market_data_service():
+    if settings.simulated_mode:
+        return SimulatedMarketDataService()
+    try:
+        from backend.services.live_market_data import LiveMarketDataService
+
+        return LiveMarketDataService()
+    except Exception as exc:  # pragma: no cover
+        import logging
+
+        logging.getLogger("tradeiq.market_data").error(
+            "Failed to start live market data (%s). Falling back to simulated mode. "
+            "Check LIVE_PRICE_SYMBOL, network access, and that yfinance is installed.",
+            exc,
+        )
+        return SimulatedMarketDataService()
+
+
+market_data_service = _build_market_data_service()
