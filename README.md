@@ -23,7 +23,12 @@ A local-first NQ trading dashboard that combines simulated NQ candles, GEX level
 - SQLite setup-history storage
 - Unit and API tests
 
-> **Current mode is SIMULATED.** The GEX values, calendar, other indices, and performance panel are development data. They are clearly labelled in the dashboard and must be replaced with licensed live feeds before real trading use.
+> **Two modes.** `SIMULATED_MODE=true` (default) runs a synthetic feed for development.
+> Set `SIMULATED_MODE=false` in `.env` for **live mode**: real MNQ/NQ price and a real
+> QQQ options chain (free, ~15-min delayed via yfinance), rescaled to NQ points for GEX.
+> The calendar and performance panels remain placeholders in both modes. Live GEX is a
+> QQQ proxy, not CME NQ options-on-futures dealer positioning — treat levels as context,
+> not exact dealer flow. Not financial advice; backtest before trading real size.
 
 ## Easiest start on Windows
 
