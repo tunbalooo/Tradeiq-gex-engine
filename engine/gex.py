@@ -87,8 +87,18 @@ def derive_gex_summary(
     net_gex = sum(strike_gex.values())
     regime = "POSITIVE" if net_gex > 0 else "NEGATIVE" if net_gex < 0 else "NEUTRAL"
 
-    call_wall = max(strike_gex, key=lambda k: strike_gex[k])
-    put_wall = min(strike_gex, key=lambda k: strike_gex[k])
+    # Walls must respect position vs spot: the call wall is the strongest
+    # positive-GEX strike AT/ABOVE price (upside resistance), the put wall is
+    # the strongest negative-GEX strike AT/BELOW price (downside support).
+    # Without this constraint a real chain can put the "call wall" below spot.
+    above = {k: v for k, v in strike_gex.items() if k >= futures_price}
+    below = {k: v for k, v in strike_gex.items() if k <= futures_price}
+
+    call_candidates = {k: v for k, v in above.items() if v > 0} or above or strike_gex
+    put_candidates = {k: v for k, v in below.items() if v < 0} or below or strike_gex
+
+    call_wall = max(call_candidates, key=lambda k: call_candidates[k])
+    put_wall = min(put_candidates, key=lambda k: put_candidates[k])
 
     sorted_strikes = sorted(strike_gex)
     cumulative = 0.0

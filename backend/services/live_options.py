@@ -91,7 +91,7 @@ def live_option_chain(nq_price: float) -> list[OptionPosition]:
             ratio = nq_price / qqq_spot if qqq_spot else 1.0
             scaled = [
                 OptionPosition(
-                    strike=round(p.strike * ratio / 5) * 5,  # snap to a clean 5pt grid
+                    strike=round(p.strike * ratio / 25) * 25,  # snap to NQ's 25pt strike grid
                     expiry_years=p.expiry_years,
                     option_type=p.option_type,
                     open_interest=p.open_interest,
