@@ -1,0 +1,10 @@
+services:
+  tradeiq:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:///./data/tradeiq.db
+      SIMULATED_MODE: "true"
+    volumes:
+      - ./data:/app/data

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TradeIQ — NQ Trade Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="mark"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#04140c" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16l4-5 4 3 6-9"/><path d="M17 5h4v4"/></svg></div>
+      <div><b>Trade<span class="g">IQ</span></b>
+        <div class="m brand-sub">Gamma Intelligence</div></div>
+    </div>
+    <nav class="nav" id="nav">
+      <a class="active"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</a>
+      <a><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg>Chart</a>
+      <a><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>GEX Analysis</a>
+      <a><svg viewBox="0 0 24 24"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="17" r="4"/><path d="M7 11v6M17 7v-.5"/></svg>Confluence</a>
+      <a><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/></svg>Trade Setups</a>
+      <a><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>Alerts</a>
+      <a><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Positions</a>
+      <a><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 16l3-3 2 2 5-6"/></svg>Backtest</a>
+      <a><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>Settings</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="side-card">
+      <div class="eyebrow overview-head">Market Overview</div>
+      <div id="overview"><div class="loading">Connecting…</div></div>
+    </div>
+    <div class="side-card session">
+      <div class="eyebrow">Session · New York (RTH)</div>
+      <div class="m mono session-hours">Open 09:30–16:00 ET</div>
+      <div class="clock g" id="sessionTimer">00:00:00</div>
+      <div class="m session-state" id="sessionState">Checking session…</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="title">NQ TRADE ENGINE</div>
+      <div class="symbol-pill">NQ1! <span class="m">▾</span></div>
+      <div class="price-lg" id="hdrPrice">—</div>
+      <div class="mono g" id="hdrChg">—</div>
+      <div class="live">
+        <span class="m mono">Time <b id="clock">--:--:--</b></span>
+        <span class="mode-badge" id="modeLabel">CONNECTING</span>
+        <span class="dot" id="liveDot"></span><span class="g" id="connectionLabel">LIVE</span>
+      </div>
+    </div>
+
+    <div class="workspace">
+      <div class="center">
+        <div class="panel chart-panel">
+          <div class="chart-toolbar">
+            <span class="tf" data-tf="1">1m</span><span class="tf" data-tf="2">2m</span><span class="tf" data-tf="3">3m</span>
+            <span class="tf active" data-tf="5">5m</span><span class="tf" data-tf="15">15m</span><span class="tf" data-tf="60">1h</span><span class="tf" data-tf="240">4h</span>
+            <span class="tool-div"></span>
+            <button class="tool-btn" id="indicatorToggle">Indicators</button>
+            <button class="tool-btn" id="templateReset">Reset View</button>
+            <span class="spacer"></span>
+            <span class="m mono chart-caption" id="chartCaption">NASDAQ 100 E-mini · 5m · SIMULATED</span>
+          </div>
+          <div class="indicator-strip" id="indicatorStrip">
+            <button class="overlay-btn active" data-overlay="emas">EMAs</button>
+            <button class="overlay-btn active" data-overlay="gex">GEX</button>
+            <button class="overlay-btn active" data-overlay="fib">Fib / OTE</button>
+            <button class="overlay-btn active" data-overlay="zones">S&amp;D</button>
+            <button class="overlay-btn active" data-overlay="trade">Entry / SL / TP</button>
+            <button class="overlay-btn active" data-overlay="vwap">VWAP / σ</button>
+          </div>
+          <div id="chartWrap">
+            <canvas id="chart"></canvas>
+            <div class="chart-tooltip" id="chartTooltip"></div>
+          </div>
+        </div>
+
+        <div class="bottom3">
+          <div class="panel">
+            <div class="panel-h"><h3>GEX Levels · All Expiries</h3></div>
+            <div class="panel-b table-pad">
+              <table><thead><tr><th>Type</th><th>Price</th><th>GEX</th><th>Str</th></tr></thead>
+              <tbody id="gexTable"><tr><td colspan="4" class="m">Loading…</td></tr></tbody></table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h3>Confluence Score</h3><span class="mono g" id="cfScoreHeader">—/100</span></div>
+            <div class="panel-b cf-panel" id="cfBreak"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h3>Key Confluences</h3></div>
+            <div class="panel-b key-panel" id="keyCf"></div>
+          </div>
+        </div>
+
+        <div class="footer3">
+          <div class="panel">
+            <div class="panel-h"><h3>Recent Alerts</h3></div>
+            <div class="panel-b table-pad"><table><tbody id="alerts"></tbody></table></div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h3>Upcoming News · Demo Calendar</h3></div>
+            <div class="panel-b table-pad"><table><tbody id="news"></tbody></table></div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h3>Performance · Simulated Week</h3></div>
+            <div class="panel-b">
+              <div class="perf-grid">
+                <div class="cell"><div class="num g" id="perfWin">—</div><div class="cap">Win rate</div></div>
+                <div class="cell"><div class="num" id="perfTrades">—</div><div class="cap">Trades</div></div>
+                <div class="cell"><div class="num" id="perfAvgR">—</div><div class="cap">Avg R</div></div>
+                <div class="cell"><div class="num" id="perfPF">—</div><div class="cap">P.Factor</div></div>
+                <div class="cell"><div class="num g" id="perfPnl">—</div><div class="cap">Net PnL</div></div>
+              </div>
+              <canvas id="equity"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="right">
+        <div class="panel">
+          <div class="panel-h"><h3>Trade Setup</h3><span class="g mono setup-side-label" id="setupLabel">SCANNING</span></div>
+          <div class="panel-b">
+            <div class="eyebrow confidence-head">Confidence Score</div>
+            <div class="gauge-wrap">
+              <div class="gauge">
+                <svg width="118" height="118" viewBox="0 0 118 118">
+                  <circle cx="59" cy="59" r="49" fill="none" stroke="var(--line2)" stroke-width="10"/>
+                  <circle id="gaugeArc" cx="59" cy="59" r="49" fill="none" stroke="var(--green)" stroke-width="10"
+                    stroke-linecap="round" stroke-dasharray="307.9" stroke-dashoffset="307.9" transform="rotate(-90 59 59)"/>
+                </svg>
+                <div class="pct"><b id="confidencePct">—</b></div>
+              </div>
+              <div><div class="g probability-label" id="probabilityLabel">Scanning</div>
+                <div class="m probability-sub" id="coreAlignment">Waiting for engine data</div></div>
+            </div>
+            <div class="setup-row"><span class="k">Direction</span><span class="v" id="setupDirection">—</span></div>
+            <div class="setup-row"><span class="k">Limit Entry</span><span class="v a" id="setupEntry">—</span></div>
+            <div class="setup-row"><span class="k">Stop Loss</span><span class="v r" id="setupStop">—</span></div>
+            <div class="setup-row"><span class="k">Take Profit 1</span><span class="v g" id="setupTp1">—</span></div>
+            <div class="setup-row"><span class="k">Take Profit 2</span><span class="v g" id="setupTp2">—</span></div>
+            <div class="setup-row"><span class="k">Risk / Reward</span><span class="v" id="setupRr">—</span></div>
+            <div class="setup-row"><span class="k">Setup Status</span><span class="v a" id="setupStatus">—</span></div>
+            <div class="setup-row"><span class="k">Valid Until</span><span class="v" id="setupValid">—</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h3>GEX Summary</h3></div>
+          <div class="panel-b">
+            <div class="setup-row"><span class="k">Regime</span><span class="v" id="gexRegime">—</span></div>
+            <div class="setup-row"><span class="k">Gamma Flip</span><span class="v" id="gammaFlip">—</span></div>
+            <div class="setup-row"><span class="k">Put Wall</span><span class="v r" id="putWall">—</span></div>
+            <div class="setup-row"><span class="k">Call Wall</span><span class="v b" id="callWall">—</span></div>
+            <div class="setup-row"><span class="k">Price vs Flip</span><span class="v" id="priceVsFlip">—</span></div>
+            <div class="eyebrow gamma-head">Near-term gamma exposure</div>
+            <div class="expobar"><div class="needle" id="gexNeedle"></div></div>
+            <div class="expo-labels m mono"><span>-GEX</span><span>0</span><span>+GEX</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h3>Supply &amp; Demand</h3></div>
+          <div class="panel-b table-pad">
+            <table><thead><tr><th>TF</th><th>Zone</th><th>Price</th><th>Str</th></tr></thead>
+            <tbody id="sdTable"></tbody></table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h3>Fib / OTE · Current Swing</h3></div>
+          <div class="panel-b table-pad"><table><tbody id="fibTable"></tbody></table></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
