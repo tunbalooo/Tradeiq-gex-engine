@@ -242,6 +242,19 @@ function renderNews(items = []) {
 }
 function renderPerformance(performance) {
   if (!performance) return;
+  const header = $("perfHeader");
+  if (header) header.textContent = performance.simulated ? "Performance · Simulated" : "Performance · Live Tracked";
+  if (!performance.trades) {
+    // No closed trades yet — show a clear waiting state instead of zeros.
+    $("perfWin").textContent = "—";
+    $("perfTrades").textContent = "0";
+    $("perfAvgR").textContent = "—";
+    $("perfPF").textContent = "—";
+    $("perfPnl").textContent = "—";
+    drawEquity([0]);
+    if (header) header.textContent = "Performance · Awaiting first trade";
+    return;
+  }
   $("perfWin").textContent = `${performance.win_rate.toFixed(0)}%`;
   $("perfTrades").textContent = performance.trades;
   $("perfAvgR").textContent = `${performance.average_r.toFixed(2)}R`;

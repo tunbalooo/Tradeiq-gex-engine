@@ -51,21 +51,9 @@ def build_dashboard_meta(setup: TradeSetup) -> DashboardMeta:
         NewsItem(time="14:00", event="FOMC Member Speech", impact="Med"),
     ]
 
-    # Development-only performance sample. The UI clearly marks the app as simulated.
-    equity = [
-        0, 140, 95, 260, 420, 355, 610, 780, 710, 980,
-        1210, 1140, 1450, 1590, 1510, 1880, 2050, 1970, 2360, 2580,
-        2490, 2870, 3010, 2920, 3260, 3420,
-    ]
-    performance = PerformanceSummary(
-        win_rate=68.0,
-        trades=22,
-        average_r=1.72,
-        profit_factor=2.31,
-        net_pnl=3420.0,
-        equity_curve=equity,
-        simulated=True,
-    )
+    # Real performance computed from tracked paper-trade outcomes (TP/SL hits).
+    from backend.services.trade_tracker import performance_summary
+    performance = performance_summary()
 
     return DashboardMeta(
         overview=market_data_service.overview(),

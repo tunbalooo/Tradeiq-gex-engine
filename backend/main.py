@@ -12,6 +12,7 @@ from backend.core.database import Base, engine
 from backend.services.dashboard_service import build_dashboard_meta
 from backend.services.market_data import market_data_service
 from backend.services.setup_service import build_current_setup
+from backend.services.trade_tracker import process_tick
 
 
 @asynccontextmanager
@@ -42,6 +43,12 @@ async def market_websocket(websocket: WebSocket):
         while True:
             candle = market_data_service.next_candle()
             setup = build_current_setup()
+            # Advance paper trades using the latest bar's high/low so TP/SL
+            # touches are detected intrabar, then build meta (real performance).
+            try:
+                process_tick(setup, candle.high, candle.low, candle.close)
+            except Exception:
+                pass
             meta = build_dashboard_meta(setup)
             await websocket.send_json(
                 {
