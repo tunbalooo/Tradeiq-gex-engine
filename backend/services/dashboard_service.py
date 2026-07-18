@@ -61,17 +61,9 @@ def build_dashboard_meta(setup: TradeSetup) -> DashboardMeta:
     from backend.services.finnhub_calendar import get_calendar
     news = get_calendar()
 
-    # No invented performance. These remain zero until the outcome logger/backtest
-    # has enough completed trades to calculate real metrics.
-    performance = PerformanceSummary(
-        win_rate=0.0,
-        trades=0,
-        average_r=0.0,
-        profit_factor=0.0,
-        net_pnl=0.0,
-        equity_curve=[0.0, 0.0],
-        simulated=True,
-    )
+    # Real performance computed from logged lifecycle outcomes (empty-safe).
+    from backend.services.outcome_logger import performance_summary
+    performance = performance_summary()
 
     return DashboardMeta(
         overview=market_data_service.overview(),

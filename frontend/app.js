@@ -74,11 +74,31 @@ function stars(strength) {
   return "★".repeat(n) + "☆".repeat(5 - n);
 }
 
+function setHealth(status, message) {
+  state.connected = status !== "error";
+  const dot = $("liveDot"); const label = $("connectionLabel");
+  if (!dot || !label) return;
+  const map = {
+    live: { text: "LIVE", cls: "g", dotCls: "" },
+    warn: { text: message || "DELAYED", cls: "a", dotCls: "warn" },
+    error: { text: message || "NO DATA", cls: "r", dotCls: "offline" },
+  };
+  const s = map[status] || map.error;
+  dot.classList.remove("warn", "offline");
+  if (s.dotCls) dot.classList.add(s.dotCls);
+  label.textContent = s.text; label.className = s.cls; label.title = message || "";
+}
+let lastPrice = null, lastPriceChangeTs = Date.now();
+function evaluateHealth() {
+  const price = state.baseCandles.at(-1)?.close;
+  const now = Date.now();
+  if (price !== undefined && price !== lastPrice) { lastPrice = price; lastPriceChangeTs = now; }
+  const open = typeof marketStatus === "function" ? marketStatus().open : true;
+  if (open && now - lastPriceChangeTs > 90000) { setHealth("warn", "STALE PRICE"); return; }
+  setHealth("live");
+}
 function setConnection(connected) {
-  state.connected = connected;
-  $("liveDot").classList.toggle("offline", !connected);
-  $("connectionLabel").textContent = connected ? "LIVE" : "RECONNECTING";
-  $("connectionLabel").className = connected ? "g" : "r";
+  if (connected) evaluateHealth(); else setHealth("error", "RECONNECTING");
 }
 
 function renderHeader(snapshot) {
@@ -357,6 +377,7 @@ function connectWebSocket() {
     else state.baseCandles.push(candle);
     if (state.baseCandles.length > 2400) state.baseCandles.shift();
     renderAll(data.setup, data.meta, true);
+    evaluateHealth();
   };
   socket.onerror = () => socket.close();
   socket.onclose = () => { setConnection(false); setTimeout(connectWebSocket, 2000); };
@@ -368,21 +389,55 @@ function getNewYorkParts(date = new Date()) {
   }).formatToParts(date);
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
 }
+function marketStatus() {
+  const parts = getNewYorkParts();
+  const day = parts.weekday;
+  const etHour = Number(parts.hour) + Number(parts.minute) / 60;
+  const closedWeekend = (day === "Fri" && etHour >= 17) || day === "Sat" || (day === "Sun" && etHour < 18);
+  const dailyHalt = day !== "Sat" && day !== "Sun" && etHour >= 17 && etHour < 18;
+  return { open: !closedWeekend && !dailyHalt };
+}
+function currentSession() {
+  if (!marketStatus().open) return { name: "Market Closed", color: "#6E7F97", open: false };
+  const nowUtc = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
+  const inRange = (a, b) => a < b ? (nowUtc >= a && nowUtc < b) : (nowUtc >= a || nowUtc < b);
+  if (inRange(13.5, 20)) return { name: "New York", color: "#26D07C", open: true };
+  if (inRange(7, 13.5)) return { name: "London", color: "#48A3FF", open: true };
+  if (inRange(0, 7)) return { name: "Asia", color: "#A98BFF", open: true };
+  return { name: "Sydney", color: "#F5B93B", open: true };
+}
 function tick() {
   const parts = getNewYorkParts();
   $("clock").textContent = `${parts.hour}:${parts.minute}:${parts.second} ET`;
-  const seconds = Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  const open = 9 * 3600 + 30 * 60; const close = 16 * 3600;
-  let remaining; let label;
-  if (["Sat", "Sun"].includes(parts.weekday)) { remaining = 0; label = "WEEKEND CLOSED"; }
-  else if (seconds < open) { remaining = open - seconds; label = "UNTIL RTH OPEN"; }
-  else if (seconds < close) { remaining = close - seconds; label = "UNTIL RTH CLOSE"; }
-  else { remaining = 0; label = "RTH CLOSED"; }
-  const hours = String(Math.floor(remaining / 3600)).padStart(2, "0");
-  const minutes = String(Math.floor((remaining % 3600) / 60)).padStart(2, "0");
-  const secs = String(remaining % 60).padStart(2, "0");
-  $("sessionTimer").textContent = `${hours}:${minutes}:${secs}`;
+  const now = new Date();
+  const etNow = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const status = marketStatus();
+  let target = new Date(etNow); let label;
+  if (status.open) {
+    target.setHours(17, 0, 0, 0);
+    if (target <= etNow) target.setDate(target.getDate() + 1);
+    label = "MARKET CLOSES IN";
+  } else {
+    target.setHours(18, 0, 0, 0);
+    while (target <= etNow || target.getDay() === 6 || (target.getDay() === 5 && target.getHours() >= 17)) {
+      target.setDate(target.getDate() + 1); target.setHours(18, 0, 0, 0);
+    }
+    label = "MARKET OPENS IN";
+  }
+  let remaining = Math.max(0, Math.floor((target - etNow) / 1000));
+  const days = Math.floor(remaining / 86400); remaining %= 86400;
+  const hh = String(Math.floor(remaining / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((remaining % 3600) / 60)).padStart(2, "0");
+  const ss = String(remaining % 60).padStart(2, "0");
+  const timer = $("sessionTimer");
+  timer.textContent = days > 0 ? `${days}d ${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}`;
+  timer.className = status.open ? "clock g" : "clock r";
   $("sessionState").textContent = label;
+  const s = currentSession();
+  const eyebrow = document.querySelector(".session .eyebrow");
+  const hrs = document.querySelector(".session-hours");
+  if (eyebrow) eyebrow.textContent = status.open ? `Session · ${s.name}` : "CME Globex · Closed";
+  if (hrs) hrs.textContent = status.open ? "NQ trading now" : "Reopens Sun 18:00 ET";
 }
 
 $("indicatorToggle").addEventListener("click", () => $("indicatorStrip").classList.toggle("hidden"));
@@ -412,4 +467,6 @@ window.addEventListener("resize", () => {
   if (window.TradeIQChart) window.TradeIQChart.resize();
   if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve);
 });
-setInterval(tick, 1000); tick(); initialLoad();
+setInterval(tick, 1000); tick();
+setInterval(() => { if (state.connected) evaluateHealth(); }, 15000);
+initialLoad();

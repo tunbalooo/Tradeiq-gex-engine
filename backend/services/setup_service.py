@@ -342,7 +342,13 @@ def build_current_setup() -> TradeSetup:
     from backend.services.setup_lifecycle import setup_lifecycle_service
 
     candidate = build_candidate_setup()
-    return setup_lifecycle_service.process(candidate, market_data_service.latest_candle())
+    result = setup_lifecycle_service.process(candidate, market_data_service.latest_candle())
+    try:
+        from backend.services.outcome_logger import log_outcome
+        log_outcome(result)
+    except Exception:
+        pass
+    return result
 
 
 def save_setup(db: Session, setup: TradeSetup) -> TradeSetupRecord:
