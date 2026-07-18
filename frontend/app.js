@@ -67,11 +67,47 @@ function stars(strength) {
   return "★".repeat(n) + "☆".repeat(5 - n);
 }
 
+// Single health light — the one green dot doubles as the system status
+// indicator. States: live (green) / warn (amber) / error (red).
+// warn = connected but data looks wrong (frozen price, or fell back to
+// simulated when live was expected). error = socket down / fetch failing.
+function setHealth(status, message) {
+  state.connected = status !== "error";
+  const dot = $("liveDot");
+  const label = $("connectionLabel");
+  if (!dot || !label) return;
+  const map = {
+    live: { text: "LIVE", cls: "g", dotCls: "" },
+    warn: { text: message || "DELAYED", cls: "a", dotCls: "warn" },
+    error: { text: message || "NO DATA", cls: "r", dotCls: "offline" },
+  };
+  const s = map[status] || map.error;
+  dot.classList.remove("warn", "offline");
+  if (s.dotCls) dot.classList.add(s.dotCls);
+  label.textContent = s.text;
+  label.className = s.cls;
+  label.title = message || "";
+}
+
+// Backwards-compatible wrapper for existing callers.
 function setConnection(connected) {
-  state.connected = connected;
-  $("liveDot").classList.toggle("offline", !connected);
-  $("connectionLabel").textContent = connected ? "LIVE" : "RECONNECTING";
-  $("connectionLabel").className = connected ? "g" : "r";
+  if (connected) evaluateHealth(); else setHealth("error", "RECONNECTING");
+}
+
+// Decide health from the latest data: are we live, and is the tape moving?
+let lastPrice = null;
+let lastPriceChangeTs = Date.now();
+function evaluateHealth() {
+  const price = state.baseCandles.at(-1)?.close;
+  const now = Date.now();
+  if (price !== undefined && price !== lastPrice) { lastPrice = price; lastPriceChangeTs = now; }
+
+  const marketOpen = typeof marketStatus === "function" ? marketStatus().open : true;
+  // If live mode but the engine fell back to simulated, warn.
+  if (state.dataMode && state.dataMode !== "LIVE") { setHealth("warn", "SIMULATED"); return; }
+  // Price frozen for >90s while the market is open = likely a data problem.
+  if (marketOpen && now - lastPriceChangeTs > 90000) { setHealth("warn", "STALE PRICE"); return; }
+  setHealth("live");
 }
 
 function renderHeader(snapshot) {
@@ -321,14 +357,13 @@ async function initialLoad() {
     ]);
     state.baseCandles = snapshot.candles;
     state.dataMode = health.mode.toUpperCase();
-    $("modeLabel").textContent = state.dataMode;
     renderAll(dashboard.setup, dashboard.meta);
     renderHeader(snapshot);
-    setConnection(true);
+    evaluateHealth();
     $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataMode}`;
     connectWebSocket();
   } catch (error) {
-    console.error(error); setConnection(false); $("modeLabel").textContent = "ERROR";
+    console.error(error); setHealth("error", "NO DATA");
   }
 }
 
@@ -344,9 +379,10 @@ function connectWebSocket() {
     else state.baseCandles.push(candle);
     if (state.baseCandles.length > 2400) state.baseCandles.shift();
     renderAll(data.setup, data.meta, true);
+    evaluateHealth();
   };
   socket.onerror = () => socket.close();
-  socket.onclose = () => { setConnection(false); setTimeout(connectWebSocket, 2000); };
+  socket.onclose = () => { setHealth("error", "RECONNECTING"); setTimeout(connectWebSocket, 2000); };
 }
 
 function getNewYorkParts(date = new Date()) {
@@ -444,6 +480,8 @@ function updateSessionBadge() {
 }
 updateSessionBadge();
 setInterval(updateSessionBadge, 30000);
+// Periodic health re-check catches a frozen tape even if no ticks arrive.
+setInterval(() => { if (state.connected) evaluateHealth(); }, 15000);
 
 // Lightweight Charts handles crosshair/tooltip natively — no manual canvas
 // mouse tracking needed. Just keep panels responsive on window resize.
