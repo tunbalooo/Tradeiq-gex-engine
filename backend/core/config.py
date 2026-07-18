@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     admin_token: str | None = None
     allow_public_admin: bool = False
 
+    finnhub_api_key: str | None = None
+    finnhub_news_refresh_seconds: int = 300
+    finnhub_request_timeout_seconds: float = 12.0
+
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-5"
     claude_analysis_enabled: bool = False

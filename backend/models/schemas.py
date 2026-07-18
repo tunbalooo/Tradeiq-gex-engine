@@ -74,6 +74,10 @@ class NewsItem(BaseModel):
     time: str
     event: str
     impact: Literal["High", "Med", "Low"]
+    source: str = "Finnhub"
+    url: str | None = None
+    summary: str | None = None
+    published_at: datetime | None = None
 
 
 class PerformanceSummary(BaseModel):

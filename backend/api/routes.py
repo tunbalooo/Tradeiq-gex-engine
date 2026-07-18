@@ -6,6 +6,7 @@ from backend.models.schemas import BacktestRequest
 from backend.services.backtest_service import run_backtest
 from backend.services.claude_analysis import claude_analysis_service
 from backend.services.dashboard_service import build_dashboard_meta
+from backend.services.finnhub_news import finnhub_news_service
 from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
 from backend.services.session_service import get_session_status
@@ -96,7 +97,17 @@ def backtest(request: BacktestRequest):
 
 @router.get("/settings")
 def read_settings():
-    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "dataset": settings.databento_dataset, "futures_symbol": settings.databento_futures_symbol, "options_parent": settings.databento_options_parent, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model}
+    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "dataset": settings.databento_dataset, "futures_symbol": settings.databento_futures_symbol, "options_parent": settings.databento_options_parent, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled}
+
+
+@router.get("/news")
+def latest_news(limit: int = Query(8, ge=1, le=20)):
+    return {"items": finnhub_news_service.latest(limit), "status": finnhub_news_service.status()}
+
+
+@router.get("/news/status")
+def news_status():
+    return finnhub_news_service.status()
 
 
 @router.get("/ai/status")

@@ -453,7 +453,18 @@ function renderAlerts(items = []) {
     <tr><td colspan="2" class="m" style="border-top:none;padding-top:0;font-size:11px">${item.detail}</td></tr>`).join("");
 }
 function renderNews(items = []) {
-  $("news").innerHTML = items.map((item) => `<tr><td>${item.time}</td><td>${item.event}</td><td class="${item.impact === "High" ? "r" : item.impact === "Med" ? "a" : "m"}" style="text-align:right">${item.impact}</td></tr>`).join("");
+  const target = $("news");
+  if (!target) return;
+  target.innerHTML = items.length ? items.map((item) => {
+    const impactClass = item.impact === "High" ? "r" : item.impact === "Med" ? "a" : "m";
+    const headline = escapeHtml(item.event || "Untitled headline");
+    const source = escapeHtml(item.source || "Finnhub");
+    const safeUrl = typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? item.url : "";
+    const headlineHtml = safeUrl
+      ? `<a class="news-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${headline}</a>`
+      : headline;
+    return `<tr class="news-row"><td class="mono m">${escapeHtml(item.time || "—")}</td><td>${headlineHtml}<div class="m news-source">${source}</div></td><td class="${impactClass}" style="text-align:right">${escapeHtml(item.impact || "Low")}</td></tr>`;
+  }).join("") : '<tr><td colspan="3" class="m">No recent headlines available</td></tr>';
 }
 function renderPerformance(performance) {
   if (!performance) return;

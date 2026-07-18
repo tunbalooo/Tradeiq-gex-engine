@@ -163,3 +163,5 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 
 @media(max-width:1280px){.tv-chart-layout{grid-template-columns:minmax(0,1fr) 300px}.chart-overlay-toggles{width:100%;margin-left:0;overflow-x:auto;flex-wrap:nowrap}}
 @media(max-width:900px){.chart-page-shell{height:auto;overflow:auto}.tv-chart-layout{grid-template-columns:1fr;height:auto}.tv-workstation{height:620px}.tv-chart-rail{height:auto;border-left:0;border-top:1px solid var(--line)}.claude-panel{min-height:360px}.chart-mode-actions{overflow-x:auto}.tradeiq-chart-bar{align-items:flex-start}.chart-overlay-toggles{width:100%}}
+
+.news-link{color:var(--text);text-decoration:none;line-height:1.35}.news-link:hover{color:var(--blue);text-decoration:underline}.news-source{font-size:9px;margin-top:3px}.news-row td{vertical-align:top}
