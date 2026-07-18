@@ -74,3 +74,13 @@ body.chart-mode #chartWrap { flex: 1; height: auto; }
 body.chart-mode .right { overflow-y: auto; height: 100%; }
 .session-badge { font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 6px;
   background: rgba(72,163,255,.12); color: var(--blue); border: 1px solid rgba(72,163,255,.35); margin-left: 10px; }
+
+/* ── Chart nav buttons (TradingView-style cluster) ────────────────── */
+.chart-nav { position: absolute; left: 12px; bottom: 34px; z-index: 6; display: flex; gap: 5px; }
+.chart-nav button {
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  background: rgba(19,32,47,.85); color: #B7C4D6; border: 1px solid #243448;
+  font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px); transition: background .12s, color .12s;
+}
+.chart-nav button:hover { background: #1B2A3D; color: #fff; border-color: #2E4159; }

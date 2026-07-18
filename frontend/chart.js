@@ -56,7 +56,15 @@
         vertLine: { color: "#3A4658", labelBackgroundColor: "#1A2636" },
         horzLine: { color: "#3A4658", labelBackgroundColor: "#1A2636" },
       },
-      handleScroll: true, handleScale: true, autoSize: true,
+      handleScroll: {
+        mouseWheel: true, pressedMouseMove: true,
+        horzTouchDrag: true, vertTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: true, mouseWheel: true, pinch: true,
+      },
+      kineticScroll: { touch: true, mouse: false },
+      autoSize: true,
     });
 
     candleSeries = chart.addCandlestickSeries({
@@ -69,6 +77,37 @@
       21: chart.addLineSeries({ color: C.blue, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }),
       55: chart.addLineSeries({ color: C.purple, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }),
     };
+
+    addNavButtons(container);
+  }
+
+  function addNavButtons(container) {
+    const ts = () => chart.timeScale();
+    const bar = document.createElement("div");
+    bar.className = "chart-nav";
+    const mk = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.title = title; b.type = "button";
+      b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+      bar.appendChild(b); return b;
+    };
+    const shift = (bars) => {
+      const r = ts().getVisibleLogicalRange();
+      if (r) ts().setVisibleLogicalRange({ from: r.from + bars, to: r.to + bars });
+    };
+    const zoom = (factor) => {
+      const r = ts().getVisibleLogicalRange();
+      if (!r) return;
+      const mid = (r.from + r.to) / 2, half = (r.to - r.from) * factor / 2;
+      ts().setVisibleLogicalRange({ from: mid - half, to: mid + half });
+    };
+    mk("−", "Zoom out", () => zoom(1.25));
+    mk("+", "Zoom in", () => zoom(0.8));
+    mk("‹", "Scroll back", () => shift(-12));
+    mk("›", "Scroll forward", () => shift(12));
+    mk("⟲", "Reset to latest", () => { ts().scrollToRealTime(); ts().fitContent(); });
+    container.style.position = "relative";
+    container.appendChild(bar);
   }
 
   function setCandles(candles) {
