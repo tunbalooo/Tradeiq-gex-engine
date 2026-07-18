@@ -1,71 +1,70 @@
-# TradeIQ GEX Engine — Databento v0.4
+# TradeIQ GEX Engine v0.5
 
-TradeIQ is a local or Railway-hosted NQ decision-support dashboard. It combines native NQ options-derived GEX with trend, liquidity, displacement/FVG, Fib/OTE, supply/demand, VWAP, volatility and risk structure.
+TradeIQ is a local/Railway NQ decision-support dashboard combining native NQ market data, estimated dealer GEX, EMA trend, liquidity, displacement/FVG, Fib/OTE, supply/demand, risk targets, lifecycle tracking, persistence, alerts, and research backtesting.
 
-## What v0.4 does
+## v0.5 highlights
 
-- Streams NQ futures through Databento.
-- Loads native CME NQ options definitions and open interest.
-- Calculates Black-76 gamma and GEX by strike.
-- Separately derives call wall and put wall.
-- Reprices the option book to estimate gamma flip.
-- Detects fresh multi-timeframe supply/demand zones and removes invalidated zones.
-- Requires direction-specific liquidity sweeps and displacement.
-- Detects GEX + OTE + supply/demand price clusters.
-- Selects targets from market structure before using a 2R fallback.
-- Separates preview setups from actionable armed limits.
-- Freezes an armed trade plan and tracks fill, TP1, TP2, stop, invalidation and expiry.
+- Every sidebar item opens a working page: Dashboard, Chart, GEX Analysis, Confluence, Trade Setups, Alerts, Positions, Backtest, and Settings.
+- One central trade-engine loop processes candles; dashboard reads no longer mutate trade state.
+- Prevents retroactive fills by recording `armed_candle_time` and processing each closed candle once.
+- Directional sequence validation: sweep → displacement → FVG within a configurable number of bars.
+- True New York RTH filtering for VWAP, session high/low, standard deviation, and daily change.
+- Databento historical range requests are clamped to available data.
+- NQ option definitions are grouped by `underlying_id` to reduce mixing different futures books.
+- PostgreSQL/Supabase support through `DATABASE_URL` and `psycopg`.
+- Persistent setup history, lifecycle transitions, alerts, and performance statistics.
+- Admin endpoints are protected with `ADMIN_TOKEN` by default.
+- 2R fallback remains active when no valid market target is available.
 
-> Confidence is a confluence score, not a guaranteed win probability.
-> The app does not place broker orders.
-
-## Local start
+## Start locally
 
 ```powershell
-py -3.12 -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-Copy-Item .env.example .env
 python -m uvicorn backend.main:app --reload
 ```
 
-Open:
+Open `http://127.0.0.1:8000`.
 
-- Dashboard: `http://127.0.0.1:8000`
-- API docs: `http://127.0.0.1:8000/docs`
-- Health: `http://127.0.0.1:8000/api/health`
+## Databento live mode
 
-## Railway variables
-
-Add these in Railway Variables, not GitHub:
+Create `.env` from `.env.example` and set:
 
 ```env
 DATA_PROVIDER=databento
 SIMULATED_MODE=false
-DATABENTO_API_KEY=db-your-private-key
-DATABENTO_DATASET=GLBX.MDP3
-DATABENTO_FUTURES_SYMBOL=NQ.v.0
-DATABENTO_OPTIONS_PARENT=NQ.OPT
-DATABASE_URL=sqlite:////app/data/tradeiq.db
+DATABENTO_API_KEY=db-your-key
 ```
 
-Recommended Railway start command:
+Never commit `.env`.
+
+## Supabase / PostgreSQL
+
+Use the Supabase session-pooler connection string in Railway:
+
+```env
+DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/postgres?sslmode=require
+```
+
+## Railway
+
+Start command:
 
 ```bash
 uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 ```
 
-## Update GitHub and Railway
+Set an `ADMIN_TOKEN` Railway variable. The Settings page uses that token only for refresh/reset actions.
 
-Copy this update over the existing repository without deleting `.git`, then run:
+## Tests
 
 ```powershell
-git add .
-git commit -m "Upgrade confluence, targets and trade lifecycle"
-git push
+python -m pytest -q
 ```
 
-Railway should redeploy automatically from the `main` branch.
+The test environment forces simulated data and does not call the paid Databento service.
 
-See `CHANGELOG_v0.4.md` for the full update list.
+## Important
+
+GEX is estimated from options open interest, volatility/gamma assumptions, and dealer-side sign conventions. TradeIQ is decision support and research software, not a guarantee of profitability and not a live broker execution system.

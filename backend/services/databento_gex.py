@@ -8,6 +8,7 @@ from typing import Any
 from backend.core.config import settings
 from backend.models.schemas import GexSummary
 from engine.gex import OptionPosition, derive_gex_summary_from_positions
+from backend.services.market_data import available_dataset_end
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class OptionDefinition:
     option_type: str
     expiration: datetime
     multiplier: int
+    underlying_id: int | None = None
 
 
 def _char(value: Any) -> str:
@@ -118,7 +120,10 @@ class DatabentoGexService:
 
     def _load_definitions(self, client: Any, day: date, futures_price: float) -> list[OptionDefinition]:
         start = datetime.combine(day, time.min, tzinfo=timezone.utc)
-        end = start + timedelta(days=1)
+        requested_end = start + timedelta(days=1)
+        end = available_dataset_end(client, settings.databento_dataset, "definition", requested_end)
+        if end <= start:
+            return []
         store = client.timeseries.get_range(
             dataset=settings.databento_dataset,
             schema="definition",
@@ -156,11 +161,23 @@ class DatabentoGexService:
                 option_type="CALL" if instrument_class == "C" else "PUT",
                 expiration=expiration,
                 multiplier=settings.nq_contract_multiplier,
+                underlying_id=int(getattr(record, "underlying_id", 0)) or None,
             )
 
         expirations = sorted({definition.expiration for definition in definitions.values()})
         allowed = set(expirations[: settings.gex_expiry_count])
-        return [definition for definition in definitions.values() if definition.expiration in allowed]
+        selected = [definition for definition in definitions.values() if definition.expiration in allowed]
+        # NQ.OPT can contain contracts tied to more than one futures month. Select
+        # the dominant underlying_id group to avoid mixing multiple futures books
+        # against one continuous NQ price. If the feed omits underlying_id, retain
+        # the filtered chain and expose the estimate label in the dashboard.
+        groups: dict[int, list[OptionDefinition]] = {}
+        for definition in selected:
+            if definition.underlying_id:
+                groups.setdefault(definition.underlying_id, []).append(definition)
+        if groups:
+            selected = max(groups.values(), key=len)
+        return selected
 
     def _load_stats(
         self,
@@ -172,7 +189,10 @@ class DatabentoGexService:
             return {}, {}
 
         start = datetime.combine(day, time.min, tzinfo=timezone.utc)
-        end = min(datetime.now(timezone.utc) + timedelta(minutes=1), start + timedelta(days=1))
+        requested_end = min(datetime.now(timezone.utc) + timedelta(minutes=1), start + timedelta(days=1))
+        end = available_dataset_end(client, settings.databento_dataset, "statistics", requested_end)
+        if end <= start:
+            return {}, {}
         symbols = [definition.symbol for definition in definitions]
         oi: dict[int, int] = {}
         iv: dict[int, float] = {}

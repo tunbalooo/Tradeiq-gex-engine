@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     simulation_symbol: str = "NQ"
     simulation_start_price: float = 24892.25
     update_interval_seconds: int = 2
+    engine_cycle_seconds: int = 2
 
     databento_api_key: str | None = None
     databento_dataset: str = "GLBX.MDP3"
@@ -20,6 +21,7 @@ class Settings(BaseSettings):
     databento_history_limit: int = 2400
 
     gex_refresh_seconds: int = 300
+    gex_reprice_seconds: int = 30
     gex_max_dte: int = 45
     gex_strike_range_points: float = 700.0
     gex_expiry_count: int = 6
@@ -32,6 +34,16 @@ class Settings(BaseSettings):
     cluster_min_score: float = 0.65
     cluster_tolerance_atr: float = 0.25
     nq_tick_size: float = 0.25
+    event_sequence_max_bars: int = 4
+    event_max_age_bars: int = 12
+
+    admin_token: str | None = None
+    allow_public_admin: bool = False
+    rth_timezone: str = "America/New_York"
+    rth_start_hour: int = 9
+    rth_start_minute: int = 30
+    rth_end_hour: int = 16
+    rth_end_minute: int = 0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

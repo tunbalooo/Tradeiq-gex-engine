@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -67,6 +67,7 @@ class AlertItem(BaseModel):
     title: str
     detail: str
     severity: Literal["positive", "negative", "warning", "info"] = "info"
+    created_at: datetime | None = None
 
 
 class NewsItem(BaseModel):
@@ -94,11 +95,14 @@ class TradeSetup(BaseModel):
     confidence: float = Field(ge=0, le=100)
     confidence_components: dict[str, float]
     confidence_maximums: dict[str, float]
-    signals: dict[str, bool]
+    signals: dict[str, Any]
 
     actionable: bool = False
     entry_valid: bool = False
     order_state: str = "PREVIEW_ONLY"
+    armed_at: datetime | None = None
+    armed_candle_time: datetime | None = None
+    last_processed_candle_time: datetime | None = None
     filled_at: datetime | None = None
     closed_at: datetime | None = None
     outcome: str | None = None
@@ -137,3 +141,32 @@ class DashboardMeta(BaseModel):
     alerts: list[AlertItem]
     news: list[NewsItem]
     performance: PerformanceSummary
+
+
+class EngineSnapshot(BaseModel):
+    running: bool
+    last_cycle_at: datetime | None = None
+    last_processed_candle_time: datetime | None = None
+    current_setup: TradeSetup | None = None
+    last_error: str | None = None
+
+
+class BacktestRequest(BaseModel):
+    timeframe: int = Field(default=5, ge=1, le=240)
+    minimum_score: float = Field(default=75, ge=0, le=100)
+    target_r: float = Field(default=2.0, ge=0.5, le=10)
+    max_bars: int = Field(default=1200, ge=100, le=2400)
+
+
+class BacktestResult(BaseModel):
+    generated_at: datetime
+    trades: int
+    wins: int
+    losses: int
+    expired: int
+    win_rate: float
+    average_r: float
+    profit_factor: float
+    net_r: float
+    equity_curve: list[float]
+    rows: list[dict[str, Any]]
