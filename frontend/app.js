@@ -394,18 +394,48 @@ function getNewYorkParts(date = new Date()) {
 function tick() {
   const parts = getNewYorkParts();
   $("clock").textContent = `${parts.hour}:${parts.minute}:${parts.second} ET`;
-  const seconds = Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  const open = 9 * 3600 + 30 * 60; const close = 16 * 3600;
-  let remaining; let label;
-  if (["Sat", "Sun"].includes(parts.weekday)) { remaining = 0; label = "WEEKEND CLOSED"; }
-  else if (seconds < open) { remaining = open - seconds; label = "UNTIL RTH OPEN"; }
-  else if (seconds < close) { remaining = close - seconds; label = "UNTIL RTH CLOSE"; }
-  else { remaining = 0; label = "RTH CLOSED"; }
+
+  // Seconds until the next CME Globex state change (open<->close).
+  // Globex: Sun 18:00 ET open → Fri 17:00 ET close, daily halt 17:00–18:00.
+  const now = new Date();
+  const etNow = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const status = marketStatus();
+
+  let target = new Date(etNow);
+  let label;
+  if (status.open) {
+    // Next close is today at 17:00 ET (Mon–Fri).
+    target.setHours(17, 0, 0, 0);
+    if (target <= etNow) target.setDate(target.getDate() + 1);
+    label = "MARKET CLOSES IN";
+  } else {
+    // Next open: today 18:00 ET, unless we're past it or it's the weekend,
+    // in which case roll forward to the next valid open (skip Fri/Sat night).
+    target.setHours(18, 0, 0, 0);
+    while (target <= etNow || target.getDay() === 6 || (target.getDay() === 5 && target.getHours() >= 17)) {
+      target.setDate(target.getDate() + 1);
+      target.setHours(18, 0, 0, 0);
+    }
+    label = "MARKET OPENS IN";
+  }
+
+  let remaining = Math.max(0, Math.floor((target - etNow) / 1000));
+  const days = Math.floor(remaining / 86400); remaining %= 86400;
   const hours = String(Math.floor(remaining / 3600)).padStart(2, "0");
   const minutes = String(Math.floor((remaining % 3600) / 60)).padStart(2, "0");
   const secs = String(remaining % 60).padStart(2, "0");
-  $("sessionTimer").textContent = `${hours}:${minutes}:${secs}`;
+
+  const timer = $("sessionTimer");
+  timer.textContent = days > 0 ? `${days}d ${hours}:${minutes}:${secs}` : `${hours}:${minutes}:${secs}`;
+  timer.className = status.open ? "clock g" : "clock r";
   $("sessionState").textContent = label;
+
+  // Session box header mirrors the header session name.
+  const s = currentSession();
+  const hdr = document.querySelector(".session-hours");
+  const eyebrow = document.querySelector(".side-card.session .eyebrow, .session .eyebrow");
+  if (eyebrow) eyebrow.textContent = status.open ? `Session · ${s.name}` : "CME Globex · Closed";
+  if (hdr) hdr.textContent = status.open ? "NQ trading now" : "Reopens Sun 18:00 ET";
 }
 
 $("indicatorToggle").addEventListener("click", () => $("indicatorStrip").classList.toggle("hidden"));
