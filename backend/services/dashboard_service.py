@@ -44,12 +44,8 @@ def build_dashboard_meta(setup: TradeSetup) -> DashboardMeta:
             )
         )
 
-    news = [
-        NewsItem(time="10:00", event="US JOLTS Job Openings", impact="High"),
-        NewsItem(time="10:30", event="Crude Oil Inventories", impact="Med"),
-        NewsItem(time="11:00", event="Fed Chair / Member Speech", impact="High"),
-        NewsItem(time="14:00", event="FOMC Member Speech", impact="Med"),
-    ]
+    from backend.services.finnhub_calendar import get_calendar
+    news = get_calendar()
 
     # Real performance computed from tracked paper-trade outcomes (TP/SL hits).
     from backend.services.trade_tracker import performance_summary
