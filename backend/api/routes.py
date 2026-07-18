@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.core.config import settings
 from backend.core.database import get_db
 from backend.models.db_models import TradeSetupRecord
 from backend.services.dashboard_service import build_dashboard_meta
+from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
-from backend.services.setup_service import build_current_setup, save_setup
+from backend.services.setup_lifecycle import setup_lifecycle_service
+from backend.services.setup_service import build_candidate_setup, build_current_setup, save_setup
 from backend.services.timeframes import aggregate_candles
 
 router = APIRouter(prefix="/api")
@@ -15,15 +16,14 @@ router = APIRouter(prefix="/api")
 
 @router.get("/health")
 def health():
-    live = not settings.simulated_mode and type(market_data_service).__name__ != "SimulatedMarketDataService"
-    provider = (settings.data_provider or "yfinance").lower() if live else "simulated"
-    native = provider == "databento" and type(market_data_service).__name__ == "DatabentoMarketDataService"
+    market = market_data_service.health()
     return {
-        "status": "ok",
-        "mode": "live" if live else "simulated",
-        "provider": provider,
-        "gex_source": "native_nq" if native else ("qqq_proxy" if live else "simulated"),
-        "data_source": settings.databento_price_symbol if native else (settings.live_price_symbol if live else "local-generator"),
+        "status": "ok" if market.get("candle_count", 0) else "degraded",
+        "mode": market["mode"],
+        "data_source": market["data_source"],
+        "market": market,
+        "gex": gex_service.health(),
+        "setup_lifecycle": setup_lifecycle_service.health(),
     }
 
 
@@ -41,13 +41,20 @@ def market_snapshot(
         "change": change,
         "change_percent": change_percent,
         "timeframe_minutes": timeframe,
+        "data_source": market_data_service.data_source,
         "candles": candles,
     }
 
 
 @router.get("/gex/summary")
 def gex_summary():
-    return build_current_setup().gex
+    return build_candidate_setup().gex
+
+
+@router.post("/gex/refresh")
+async def refresh_gex():
+    refreshed = await gex_service.refresh()
+    return {"refreshed": refreshed, "gex": gex_service.health()}
 
 
 @router.get("/setup/current")
@@ -66,6 +73,12 @@ def recalculate_setup(db: Session = Depends(get_db)):
     setup = build_current_setup()
     save_setup(db, setup)
     return setup
+
+
+@router.post("/setup/reset")
+def reset_setup():
+    setup_lifecycle_service.reset()
+    return {"reset": True, "setup_lifecycle": setup_lifecycle_service.health()}
 
 
 @router.get("/setups/history")

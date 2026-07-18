@@ -1,12 +1,12 @@
 const $ = (id) => document.getElementById(id);
 const SCORE_LABELS = {
   trend_alignment: "Trend (EMA 9/21/55)",
-  level_cluster: "3-Way Cluster (OTE+S&D+GEX)",
   gex_alignment: "GEX Alignment",
   liquidity_sweep: "Liquidity Sweep",
   displacement: "FVG / Displacement",
   ote_overlap: "OTE 0.618–0.786",
   supply_demand: "Supply / Demand Zone",
+  gex_ote_zone_cluster: "GEX + OTE + Zone Cluster",
   std_dev_confluence: "Std Dev Confluence",
   vwap_alignment: "VWAP Alignment",
   session_volatility: "Session / Volatility",
@@ -19,10 +19,14 @@ const SIGNAL_LABELS = {
   displacement: "Displacement candle detected",
   ote_overlap: "Price near active OTE",
   supply_demand: "Supply / demand confluence",
+  gex_ote_zone_cluster: "GEX + OTE + zone cluster",
+  gex_inside_cluster: "GEX level inside cluster",
+  directional_fvg: "Directional FVG confirmed",
+  valid_limit: "Valid resting limit",
+  target_not_blocked: "Target path is not blocked",
   std_dev_confluence: "Standard-deviation confluence",
   vwap_alignment: "Price aligned with VWAP",
   approaching_wall: "Approaching directional GEX wall",
-  level_cluster: "OTE + S&D + GEX cluster aligned",
 };
 const COLORS = {
   green: "#26D07C", red: "#FF4D5E", amber: "#F5B93B", blue: "#48A3FF",
@@ -34,6 +38,7 @@ const state = {
   meta: null,
   timeframe: 5,
   connected: false,
+  dataSource: "SIMULATED",
   hoverIndex: null,
   chartMeta: null,
   overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
@@ -69,47 +74,11 @@ function stars(strength) {
   return "★".repeat(n) + "☆".repeat(5 - n);
 }
 
-// Single health light — the one green dot doubles as the system status
-// indicator. States: live (green) / warn (amber) / error (red).
-// warn = connected but data looks wrong (frozen price, or fell back to
-// simulated when live was expected). error = socket down / fetch failing.
-function setHealth(status, message) {
-  state.connected = status !== "error";
-  const dot = $("liveDot");
-  const label = $("connectionLabel");
-  if (!dot || !label) return;
-  const map = {
-    live: { text: "LIVE", cls: "g", dotCls: "" },
-    warn: { text: message || "DELAYED", cls: "a", dotCls: "warn" },
-    error: { text: message || "NO DATA", cls: "r", dotCls: "offline" },
-  };
-  const s = map[status] || map.error;
-  dot.classList.remove("warn", "offline");
-  if (s.dotCls) dot.classList.add(s.dotCls);
-  label.textContent = s.text;
-  label.className = s.cls;
-  label.title = message || "";
-}
-
-// Backwards-compatible wrapper for existing callers.
 function setConnection(connected) {
-  if (connected) evaluateHealth(); else setHealth("error", "RECONNECTING");
-}
-
-// Decide health from the latest data: are we live, and is the tape moving?
-let lastPrice = null;
-let lastPriceChangeTs = Date.now();
-function evaluateHealth() {
-  const price = state.baseCandles.at(-1)?.close;
-  const now = Date.now();
-  if (price !== undefined && price !== lastPrice) { lastPrice = price; lastPriceChangeTs = now; }
-
-  const marketOpen = typeof marketStatus === "function" ? marketStatus().open : true;
-  // If live mode but the engine fell back to simulated, warn.
-  if (state.dataMode && state.dataMode !== "LIVE") { setHealth("warn", "SIMULATED"); return; }
-  // Price frozen for >90s while the market is open = likely a data problem.
-  if (marketOpen && now - lastPriceChangeTs > 90000) { setHealth("warn", "STALE PRICE"); return; }
-  setHealth("live");
+  state.connected = connected;
+  $("liveDot").classList.toggle("offline", !connected);
+  $("connectionLabel").textContent = connected ? "LIVE" : "RECONNECTING";
+  $("connectionLabel").className = connected ? "g" : "r";
 }
 
 function renderHeader(snapshot) {
@@ -134,10 +103,10 @@ function renderOverview(items = []) {
 function renderGexTable(setup) {
   const gex = setup.gex;
   const rows = [
-    { type: "Call Wall", price: gex.call_wall, gex: Math.max(...gex.levels.map((x) => x.gex || 0), 0), strength: 5, cls: "b" },
+    { type: "Call Wall", price: gex.call_wall, gex: gex.call_wall_gex, strength: 5, cls: "b" },
     ...gex.levels.slice(0, 6).map((level) => ({ ...level, cls: (level.gex || 0) >= 0 ? "g" : "r" })),
     { type: "Gamma Flip", price: gex.gamma_flip, gex: null, strength: 0, cls: "a" },
-    { type: "Put Wall", price: gex.put_wall, gex: Math.min(...gex.levels.map((x) => x.gex || 0), 0), strength: 5, cls: "r" },
+    { type: "Put Wall", price: gex.put_wall, gex: gex.put_wall_gex, strength: 5, cls: "r" },
   ];
   const seen = new Set();
   const deduped = rows.filter((row) => {
@@ -180,44 +149,45 @@ function renderTradeSetup(setup) {
   const confidence = Math.max(0, Math.min(100, Number(setup.confidence)));
   const circumference = 307.9;
   $("gaugeArc").style.strokeDashoffset = String(circumference * (1 - confidence / 100));
-  const gaugeColor = confidence >= 70 ? COLORS.green : confidence >= 50 ? COLORS.amber : COLORS.red;
+  const gaugeColor = setup.actionable ? COLORS.green : confidence >= 55 ? COLORS.amber : COLORS.red;
   $("gaugeArc").style.stroke = gaugeColor;
   $("confidencePct").textContent = `${Math.round(confidence)}%`;
   $("confidencePct").style.color = gaugeColor;
 
-  const quality = confidence >= 80 ? "High Confluence" : confidence >= 70 ? "Strong Confluence" : confidence >= 55 ? "Developing Setup" : "Low Confluence";
+  const activeStates = ["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"];
+  const quality = setup.order_state === "PREVIEW_ONLY" ? "Preview Only" :
+    setup.order_state === "WAITING_FOR_LIMIT" ? "Limit Armed" :
+    setup.order_state === "FILLED" ? "Position Filled" :
+    setup.order_state === "TP1_HIT" ? "TP1 Hit — Running" :
+    setup.order_state.replaceAll("_", " ");
   $("probabilityLabel").textContent = quality;
   $("probabilityLabel").style.color = gaugeColor;
-  const coreKeys = ["trend_alignment", "gex_alignment", "ote_overlap", "supply_demand"];
+  const coreKeys = ["trend_alignment", "gex_alignment", "ote_overlap", "supply_demand", "gex_ote_zone_cluster"];
   const aligned = coreKeys.filter((key) => setup.signals[key]).length;
-  $("coreAlignment").textContent = `${aligned} / ${coreKeys.length} core confluences aligned`;
+  $("coreAlignment").textContent = setup.actionable
+    ? `${aligned} / ${coreKeys.length} core confluences aligned — actionable`
+    : `${aligned} / ${coreKeys.length} core confluences aligned — do not place yet`;
 
-  $("setupLabel").textContent = `${setup.direction} SETUP`;
+  const label = setup.order_state === "PREVIEW_ONLY" ? `${setup.direction} PREVIEW` : `${setup.direction} ${setup.order_state.replaceAll("_", " ")}`;
+  $("setupLabel").textContent = label;
   $("setupLabel").className = `${classForDirection(setup.direction)} mono setup-side-label`;
   $("setupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("setupDirection").className = `v ${classForDirection(setup.direction)}`;
+  $("entryLabel").textContent = setup.order_state === "PREVIEW_ONLY" ? "Preview Limit" : setup.order_state === "WAITING_FOR_LIMIT" ? "Armed Limit" : "Filled Entry";
   $("setupEntry").textContent = fmt(setup.entry);
   $("setupStop").textContent = fmt(setup.stop_loss);
-  $("setupTp1").textContent = fmt(setup.take_profit_1);
-  $("setupTp2").textContent = fmt(setup.take_profit_2);
+  $("setupTp1").textContent = fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "");
+  $("setupTp2").textContent = fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "");
+  $("setupTp1Source").textContent = setup.target_sources?.tp1 || "—";
+  $("setupTp2Source").textContent = setup.target_sources?.tp2 || "—";
   $("setupRr").textContent = setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  const statusText = setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
+  const statusText = setup.order_state === "PREVIEW_ONLY" ? "Not Ready To Place" : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
-  // Lifecycle colors: in-position = blue, target = green, stopped/invalid = red,
-  // waiting-limit = green, developing = amber, scanning/waiting-setup = muted.
-  const st = setup.status;
-  const cls =
-    (st === "IN_SHORT" || st === "IN_LONG") ? "b" :
-    st === "TARGET_HIT" ? "g" :
-    (st === "STOPPED_OUT" || st === "INVALIDATED") ? "r" :
-    st.startsWith("WAITING_FOR_SELL") || st.startsWith("WAITING_FOR_BUY") ? "g" :
-    st === "DEVELOPING" ? "a" : "m";
-  $("setupStatus").className = "v " + cls;
-  const card = $("setupStatus").closest(".panel");
-  if (card) card.style.opacity = st === "INVALIDATED" ? "0.55" : "1";
+  $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
+  $("setupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
+  $("setupCluster").className = `v ${setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupValid").textContent = new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
 }
-
 function renderGexSummary(setup) {
   const gex = setup.gex;
   $("gexRegime").textContent = `${gex.regime.charAt(0)}${gex.regime.slice(1).toLowerCase()} Gamma`;
@@ -229,6 +199,8 @@ function renderGexSummary(setup) {
   const above = price >= gex.gamma_flip;
   $("priceVsFlip").textContent = above ? "Above Flip" : "Below Flip";
   $("priceVsFlip").className = `v ${above ? "g" : "r"}`;
+  const sourceEl = $("gexSource");
+  if (sourceEl) sourceEl.textContent = gex.source === "databento-native-nq" ? "Databento Native NQ" : gex.source;
   const normalized = 50 + Math.tanh(gex.net_gex / 1e9) * 42;
   $("gexNeedle").style.left = `${Math.max(2, Math.min(98, normalized))}%`;
 }
@@ -237,7 +209,7 @@ function renderZones(setup) {
   const zones = setup.zones.slice(0, 7);
   $("sdTable").innerHTML = zones.length ? zones.map((zone) => `<tr>
     <td>${zone.timeframe}</td><td class="${zone.kind === "DEMAND" ? "g" : "r"}">${zone.kind[0]}${zone.kind.slice(1).toLowerCase()}</td>
-    <td>${fmt(zone.low)}–${fmt(zone.high)}</td><td class="a stars">${stars(zone.strength)}</td></tr>`).join("") : '<tr><td colspan="4" class="m">No fresh zones detected</td></tr>';
+    <td>${fmt(zone.low)}–${fmt(zone.high)}<div class="m" style="font-size:9px">${zone.fresh ? "Fresh" : `${zone.touches} touch(es)`}</div></td><td class="a stars">${stars(zone.strength)}</td></tr>`).join("") : '<tr><td colspan="4" class="m">No fresh zones detected</td></tr>';
 }
 
 function renderFib(setup) {
@@ -257,19 +229,6 @@ function renderNews(items = []) {
 }
 function renderPerformance(performance) {
   if (!performance) return;
-  const header = $("perfHeader");
-  if (header) header.textContent = performance.simulated ? "Performance · Simulated" : "Performance · Live Tracked";
-  if (!performance.trades) {
-    // No closed trades yet — show a clear waiting state instead of zeros.
-    $("perfWin").textContent = "—";
-    $("perfTrades").textContent = "0";
-    $("perfAvgR").textContent = "—";
-    $("perfPF").textContent = "—";
-    $("perfPnl").textContent = "—";
-    drawEquity([0]);
-    if (header) header.textContent = "Performance · Awaiting first trade";
-    return;
-  }
   $("perfWin").textContent = `${performance.win_rate.toFixed(0)}%`;
   $("perfTrades").textContent = performance.trades;
   $("perfAvgR").textContent = `${performance.average_r.toFixed(2)}R`;
@@ -293,8 +252,6 @@ function renderAll(setup, meta, liveTick = false) {
   renderAlerts(meta.alerts);
   renderNews(meta.news);
   renderPerformance(meta.performance);
-  // On live websocket ticks, update just the last bar + overlays so the
-  // user's zoom/pan is preserved. Full redraw only on initial load / TF change.
   if (liveTick) updateChartLive(); else drawChart();
 }
 
@@ -353,7 +310,6 @@ function ensureChart() {
   chartReady = true;
   return true;
 }
-
 function drawChart() {
   if (!ensureChart()) return;
   const aggregated = aggregateCandles(state.baseCandles, state.timeframe);
@@ -361,19 +317,12 @@ function drawChart() {
   window.TradeIQChart.setCandles(aggregated);
   if (state.setup) window.TradeIQChart.renderOverlays(state.setup, state.overlays);
 }
-
-// Called on every websocket tick: update just the last bar + overlays,
-// without resetting the user's zoom/pan.
 function updateChartLive() {
   if (!ensureChart()) return;
   const aggregated = aggregateCandles(state.baseCandles, state.timeframe);
   if (!aggregated.length) return;
   window.TradeIQChart.updateLast(aggregated[aggregated.length - 1]);
   if (state.setup) window.TradeIQChart.renderOverlays(state.setup, state.overlays);
-}
-
-function refreshOverlays() {
-  if (chartReady && state.setup) window.TradeIQChart.renderOverlays(state.setup, state.overlays);
 }
 
 async function initialLoad() {
@@ -384,21 +333,15 @@ async function initialLoad() {
       fetch("/api/dashboard").then((response) => response.json()),
     ]);
     state.baseCandles = snapshot.candles;
-    state.dataMode = health.mode.toUpperCase();
+    state.dataSource = health.data_source === "databento" ? "DATABENTO LIVE" : health.mode.toUpperCase();
+    $("modeLabel").textContent = state.dataSource;
     renderAll(dashboard.setup, dashboard.meta);
+    $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataSource}`;
     renderHeader(snapshot);
-    evaluateHealth();
-    state.gexSource = health.gex_source;
-    const gexSrc = $("gexSource");
-    if (gexSrc) {
-      gexSrc.textContent = health.gex_source === "native_nq" ? "NATIVE NQ · CME"
-        : health.gex_source === "qqq_proxy" ? "QQQ PROXY · ~15m DELAYED" : "SIMULATED";
-      gexSrc.className = health.gex_source === "native_nq" ? "mono g" : "mono a";
-    }
-    $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataMode}`;
+    setConnection(true);
     connectWebSocket();
   } catch (error) {
-    console.error(error); setHealth("error", "NO DATA");
+    console.error(error); setConnection(false); $("modeLabel").textContent = "ERROR";
   }
 }
 
@@ -414,10 +357,9 @@ function connectWebSocket() {
     else state.baseCandles.push(candle);
     if (state.baseCandles.length > 2400) state.baseCandles.shift();
     renderAll(data.setup, data.meta, true);
-    evaluateHealth();
   };
   socket.onerror = () => socket.close();
-  socket.onclose = () => { setHealth("error", "RECONNECTING"); setTimeout(connectWebSocket, 2000); };
+  socket.onclose = () => { setConnection(false); setTimeout(connectWebSocket, 2000); };
 }
 
 function getNewYorkParts(date = new Date()) {
@@ -429,48 +371,18 @@ function getNewYorkParts(date = new Date()) {
 function tick() {
   const parts = getNewYorkParts();
   $("clock").textContent = `${parts.hour}:${parts.minute}:${parts.second} ET`;
-
-  // Seconds until the next CME Globex state change (open<->close).
-  // Globex: Sun 18:00 ET open → Fri 17:00 ET close, daily halt 17:00–18:00.
-  const now = new Date();
-  const etNow = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-  const status = marketStatus();
-
-  let target = new Date(etNow);
-  let label;
-  if (status.open) {
-    // Next close is today at 17:00 ET (Mon–Fri).
-    target.setHours(17, 0, 0, 0);
-    if (target <= etNow) target.setDate(target.getDate() + 1);
-    label = "MARKET CLOSES IN";
-  } else {
-    // Next open: today 18:00 ET, unless we're past it or it's the weekend,
-    // in which case roll forward to the next valid open (skip Fri/Sat night).
-    target.setHours(18, 0, 0, 0);
-    while (target <= etNow || target.getDay() === 6 || (target.getDay() === 5 && target.getHours() >= 17)) {
-      target.setDate(target.getDate() + 1);
-      target.setHours(18, 0, 0, 0);
-    }
-    label = "MARKET OPENS IN";
-  }
-
-  let remaining = Math.max(0, Math.floor((target - etNow) / 1000));
-  const days = Math.floor(remaining / 86400); remaining %= 86400;
+  const seconds = Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
+  const open = 9 * 3600 + 30 * 60; const close = 16 * 3600;
+  let remaining; let label;
+  if (["Sat", "Sun"].includes(parts.weekday)) { remaining = 0; label = "WEEKEND CLOSED"; }
+  else if (seconds < open) { remaining = open - seconds; label = "UNTIL RTH OPEN"; }
+  else if (seconds < close) { remaining = close - seconds; label = "UNTIL RTH CLOSE"; }
+  else { remaining = 0; label = "RTH CLOSED"; }
   const hours = String(Math.floor(remaining / 3600)).padStart(2, "0");
   const minutes = String(Math.floor((remaining % 3600) / 60)).padStart(2, "0");
   const secs = String(remaining % 60).padStart(2, "0");
-
-  const timer = $("sessionTimer");
-  timer.textContent = days > 0 ? `${days}d ${hours}:${minutes}:${secs}` : `${hours}:${minutes}:${secs}`;
-  timer.className = status.open ? "clock g" : "clock r";
+  $("sessionTimer").textContent = `${hours}:${minutes}:${secs}`;
   $("sessionState").textContent = label;
-
-  // Session box header mirrors the header session name.
-  const s = currentSession();
-  const hdr = document.querySelector(".session-hours");
-  const eyebrow = document.querySelector(".side-card.session .eyebrow, .session .eyebrow");
-  if (eyebrow) eyebrow.textContent = status.open ? `Session · ${s.name}` : "CME Globex · Closed";
-  if (hdr) hdr.textContent = status.open ? "NQ trading now" : "Reopens Sun 18:00 ET";
 }
 
 $("indicatorToggle").addEventListener("click", () => $("indicatorStrip").classList.toggle("hidden"));
@@ -479,7 +391,7 @@ $("templateReset").addEventListener("click", () => {
   document.querySelectorAll(".overlay-btn").forEach((button) => button.classList.add("active"));
   state.timeframe = 5;
   document.querySelectorAll(".tf").forEach((button) => button.classList.toggle("active", Number(button.dataset.tf) === 5));
-  $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataMode || "SIMULATED"}`;
+  $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataSource}`;
   drawChart();
 });
 document.querySelectorAll(".overlay-btn").forEach((button) => button.addEventListener("click", () => {
@@ -489,67 +401,13 @@ document.querySelectorAll(".tf").forEach((button) => button.addEventListener("cl
   state.timeframe = Number(button.dataset.tf);
   document.querySelectorAll(".tf").forEach((item) => item.classList.remove("active")); button.classList.add("active");
   const label = state.timeframe >= 60 ? `${state.timeframe / 60}h` : `${state.timeframe}m`;
-  $("chartCaption").textContent = `NASDAQ 100 E-mini · ${label} · ${state.dataMode || "SIMULATED"}`;
+  $("chartCaption").textContent = `NASDAQ 100 E-mini · ${label} · ${state.dataSource}`;
   state.hoverIndex = null; $("chartTooltip").style.display = "none"; drawChart();
 }));
 document.querySelectorAll("#nav a").forEach((item) => item.addEventListener("click", () => {
   document.querySelectorAll("#nav a").forEach((other) => other.classList.remove("active")); item.classList.add("active");
-  const label = item.textContent.trim().toLowerCase();
-  const chartMode = label === "chart";
-  document.body.classList.toggle("chart-mode", chartMode);
-  // Let the layout settle, then tell Lightweight Charts to resize + fit.
-  setTimeout(() => {
-    if (window.TradeIQChart) { window.TradeIQChart.resize(); if (chartMode) window.TradeIQChart.fit(); }
-  }, 60);
 }));
 
-// ── CME Globex market hours + live session name ──────────────────
-// NQ trades Sun 18:00 ET → Fri 17:00 ET, with a daily maintenance halt
-// 17:00–18:00 ET. Outside those windows the market is CLOSED.
-function marketStatus() {
-  const parts = getNewYorkParts(); // {weekday, hour, minute} in ET
-  const day = parts.weekday;       // "Sun".."Sat"
-  const etHour = Number(parts.hour) + Number(parts.minute) / 60;
-  const closedWeekend =
-    (day === "Fri" && etHour >= 17) ||
-    day === "Sat" ||
-    (day === "Sun" && etHour < 18);
-  const dailyHalt = day !== "Sat" && day !== "Sun" && etHour >= 17 && etHour < 18;
-  const open = !closedWeekend && !dailyHalt;
-  return { open, day, etHour };
-}
-
-function currentSession() {
-  const status = marketStatus();
-  if (!status.open) return { name: "Market Closed", color: "#6E7F97", open: false };
-  const nowUtc = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
-  const inRange = (start, end) => start < end ? (nowUtc >= start && nowUtc < end) : (nowUtc >= start || nowUtc < end);
-  if (inRange(13.5, 20)) return { name: "New York", color: "#26D07C", open: true };
-  if (inRange(7, 13.5)) return { name: "London", color: "#48A3FF", open: true };
-  if (inRange(0, 7)) return { name: "Asia", color: "#A98BFF", open: true };
-  return { name: "Sydney", color: "#F5B93B", open: true };
-}
-
-function updateSessionBadge() {
-  const s = currentSession();
-  const badge = $("sessionBadge");
-  const title = $("sessionTitle");
-  if (badge) {
-    badge.textContent = s.name.toUpperCase();
-    badge.style.color = s.color;
-    badge.style.borderColor = s.color + "59";
-    badge.style.background = s.color + "1f";
-  }
-  // Header now shows the session itself (title text) instead of "NQ TRADE ENGINE".
-  if (title) { title.textContent = s.open ? `${s.name} Session`.toUpperCase() : "MARKET CLOSED"; title.style.color = s.color; }
-}
-updateSessionBadge();
-setInterval(updateSessionBadge, 30000);
-// Periodic health re-check catches a frozen tape even if no ticks arrive.
-setInterval(() => { if (state.connected) evaluateHealth(); }, 15000);
-
-// Lightweight Charts handles crosshair/tooltip natively — no manual canvas
-// mouse tracking needed. Just keep panels responsive on window resize.
 window.addEventListener("resize", () => {
   if (window.TradeIQChart) window.TradeIQChart.resize();
   if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve);

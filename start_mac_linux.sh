@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
 cd "$(dirname "$0")"
-if [ ! -d .venv ]; then
+if [ ! -x ".venv/bin/python" ]; then
   python3 -m venv .venv
 fi
 source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-python -m webbrowser http://127.0.0.1:8000 >/dev/null 2>&1 || true
-uvicorn backend.main:app --reload
+python -m pip install -r requirements.txt
+[ -f .env ] || cp .env.example .env
+echo "Edit .env and insert your Databento API key before live mode will work."
+python -m uvicorn backend.main:app --reload

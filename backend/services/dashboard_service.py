@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from backend.models.schemas import AlertItem, DashboardMeta, NewsItem, PerformanceSummary, TradeSetup
 from backend.services.market_data import market_data_service
 
@@ -10,12 +8,19 @@ def build_dashboard_meta(setup: TradeSetup) -> DashboardMeta:
     tp_text = f"{setup.take_profit_1:,.2f}" if setup.take_profit_1 is not None else "—"
     flip_text = f"{setup.gex.gamma_flip:,.2f}"
 
+    if setup.order_state == "PREVIEW_ONLY":
+        title = f"{direction_text} preview — not armed"
+        severity = "warning"
+    else:
+        title = f"{direction_text} {setup.order_state.replace('_', ' ').title()}"
+        severity = "positive" if setup.order_state in {"WAITING_FOR_LIMIT", "FILLED", "TP1_HIT", "TP2_HIT"} else "warning"
+
     alerts = [
         AlertItem(
             time=setup.timestamp.astimezone().strftime("%H:%M:%S"),
-            title=f"{direction_text} setup {setup.status.replace('_', ' ').title()}",
-            detail=f"Confidence {setup.confidence:.0f}% · Entry {entry_text} · TP1 {tp_text}",
-            severity="positive" if setup.confidence >= 70 else "warning",
+            title=title,
+            detail=f"Confidence {setup.confidence:.0f}/100 · Entry {entry_text} · TP1 {tp_text}",
+            severity=severity,
         ),
         AlertItem(
             time=setup.timestamp.astimezone().strftime("%H:%M:%S"),
@@ -25,12 +30,21 @@ def build_dashboard_meta(setup: TradeSetup) -> DashboardMeta:
         ),
     ]
 
+    if setup.signals.get("gex_ote_zone_cluster"):
+        alerts.append(
+            AlertItem(
+                time=setup.timestamp.astimezone().strftime("%H:%M:%S"),
+                title="Three-Way Cluster",
+                detail=f"GEX + OTE + {setup.selected_zone_timeframe or ''} zone aligned near the proposed limit.",
+                severity="positive",
+            )
+        )
     if setup.signals.get("liquidity_sweep"):
         alerts.append(
             AlertItem(
                 time=setup.timestamp.astimezone().strftime("%H:%M:%S"),
-                title="Liquidity Sweep",
-                detail="The structure engine detected a recent liquidity sweep.",
+                title="Directional Liquidity Sweep",
+                detail="The sweep direction agrees with the proposed trade.",
                 severity="positive",
             )
         )
@@ -47,13 +61,21 @@ def build_dashboard_meta(setup: TradeSetup) -> DashboardMeta:
     from backend.services.finnhub_calendar import get_calendar
     news = get_calendar()
 
-    # Real performance computed from tracked paper-trade outcomes (TP/SL hits).
-    from backend.services.trade_tracker import performance_summary
-    performance = performance_summary()
+    # No invented performance. These remain zero until the outcome logger/backtest
+    # has enough completed trades to calculate real metrics.
+    performance = PerformanceSummary(
+        win_rate=0.0,
+        trades=0,
+        average_r=0.0,
+        profit_factor=0.0,
+        net_pnl=0.0,
+        equity_curve=[0.0, 0.0],
+        simulated=True,
+    )
 
     return DashboardMeta(
         overview=market_data_service.overview(),
-        alerts=alerts[:4],
+        alerts=alerts[:5],
         news=news,
         performance=performance,
     )

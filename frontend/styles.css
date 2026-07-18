@@ -63,29 +63,3 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--line2);border-radius:5px}::-webkit-scrollbar-track{background:transparent}
 @media(max-width:1100px){.workspace{grid-template-columns:1fr}.bottom3,.footer3,.perf-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:760px){body{overflow:auto}.app{grid-template-columns:1fr;height:auto}.side{display:none}.main{overflow:visible}.workspace{overflow:visible}.bottom3,.footer3{grid-template-columns:1fr}.topbar{gap:10px;padding:0 10px}.topbar .title{display:none}.price-lg{font-size:19px}.live .m{display:none}}
-
-/* ── Chart mode: TradingView-style full view ──────────────────────── */
-body.chart-mode .bottom3,
-body.chart-mode .footer3 { display: none; }
-body.chart-mode .workspace { grid-template-columns: 1fr 300px; height: calc(100vh - 56px); overflow: hidden; }
-body.chart-mode .center { height: 100%; }
-body.chart-mode .chart-panel { flex: 1; display: flex; flex-direction: column; }
-body.chart-mode #chartWrap { flex: 1; height: auto; }
-body.chart-mode .right { overflow-y: auto; height: 100%; }
-.session-badge { font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 6px;
-  background: rgba(72,163,255,.12); color: var(--blue); border: 1px solid rgba(72,163,255,.35); margin-left: 10px; }
-
-/* ── Chart nav buttons (TradingView-style cluster) ────────────────── */
-.chart-nav { position: absolute; left: 12px; bottom: 34px; z-index: 6; display: flex; gap: 5px; }
-.chart-nav button {
-  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
-  background: rgba(19,32,47,.85); color: #B7C4D6; border: 1px solid #243448;
-  font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center;
-  backdrop-filter: blur(4px); transition: background .12s, color .12s;
-}
-.chart-nav button:hover { background: #1B2A3D; color: #fff; border-color: #2E4159; }
-
-/* Health dot states */
-.dot.warn { background: var(--amber) !important; box-shadow: 0 0 0 0 rgba(245,185,59,.5); animation: pulseWarn 2s infinite; }
-.dot.offline { background: var(--red) !important; animation: none; }
-@keyframes pulseWarn { 0%{box-shadow:0 0 0 0 rgba(245,185,59,.5)} 70%{box-shadow:0 0 0 7px rgba(245,185,59,0)} 100%{box-shadow:0 0 0 0 rgba(245,185,59,0)} }

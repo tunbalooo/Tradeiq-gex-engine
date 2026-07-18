@@ -10,20 +10,26 @@ from backend.api.routes import router
 from backend.core.config import settings
 from backend.core.database import Base, engine
 from backend.services.dashboard_service import build_dashboard_meta
+from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
 from backend.services.setup_service import build_current_setup
-from backend.services.trade_tracker import process_tick
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
-    yield
+    await market_data_service.start()
+    await gex_service.start()
+    try:
+        yield
+    finally:
+        await gex_service.stop()
+        await market_data_service.stop()
 
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0",
+    version="0.4.0-confluence-lifecycle",
     lifespan=lifespan,
 )
 
@@ -41,14 +47,8 @@ async def market_websocket(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            candle = market_data_service.next_candle()
+            candle = market_data_service.latest_candle()
             setup = build_current_setup()
-            # Advance paper trades using the latest bar's high/low so TP/SL
-            # touches are detected intrabar, then build meta (real performance).
-            try:
-                process_tick(setup, candle.high, candle.low, candle.close)
-            except Exception:
-                pass
             meta = build_dashboard_meta(setup)
             await websocket.send_json(
                 {
@@ -56,6 +56,8 @@ async def market_websocket(websocket: WebSocket):
                     "candle": candle.model_dump(mode="json"),
                     "setup": setup.model_dump(mode="json"),
                     "meta": meta.model_dump(mode="json"),
+                    "market": market_data_service.health(),
+                    "gex_health": gex_service.health(),
                 }
             )
             await asyncio.sleep(settings.update_interval_seconds)

@@ -9,6 +9,7 @@ def test_full_score_is_100():
         "displacement": True,
         "ote_overlap": True,
         "supply_demand": True,
+        "gex_ote_zone_cluster": True,
         "std_dev_confluence": True,
         "vwap_alignment": True,
         "session_volatility": 1.0,

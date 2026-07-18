@@ -1,4 +1,4 @@
-﻿fastapi
+fastapi
 uvicorn[standard]
 pydantic
 pydantic-settings
@@ -6,8 +6,5 @@ sqlalchemy
 python-dotenv
 pytest
 httpx
-yfinance>=0.2.40
-pandas>=2.0
+databento>=0.81.0
 requests>=2.31
-databento
-python-dotenv

@@ -1,29 +1,31 @@
 from datetime import datetime, timedelta, timezone
 from math import exp
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.models.db_models import TradeSetupRecord
 from backend.models.schemas import GexSummary, TradeSetup
+from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
 from backend.services.timeframes import aggregate_candles
 from engine.confidence import DEFAULT_WEIGHTS, calculate_confidence
+from engine.confluence_cluster import find_confluence_cluster
 from engine.fib_ote import calculate_fib_levels, ote_zone
-from engine.gex import OptionPosition, aggregate_gex_by_strike, derive_gex_summary
+from engine.gex import OptionPosition, derive_gex_summary_from_positions
 from engine.market_structure import analyze_market_structure
 from engine.risk_engine import build_trade_levels
 from engine.supply_demand import detect_supply_demand
 
 
 def average_true_range(candles, period: int = 14) -> float:
-    if len(candles) < period + 1:
+    if len(candles) < 2:
         return 12.0
-
     true_ranges = []
-    for i in range(1, len(candles)):
-        current = candles[i]
-        previous = candles[i - 1]
+    for index in range(1, len(candles)):
+        current = candles[index]
+        previous = candles[index - 1]
         true_ranges.append(
             max(
                 current.high - current.low,
@@ -31,7 +33,8 @@ def average_true_range(candles, period: int = 14) -> float:
                 abs(current.low - previous.close),
             )
         )
-    return sum(true_ranges[-period:]) / period
+    sample = true_ranges[-period:]
+    return sum(sample) / len(sample) if sample else 12.0
 
 
 def calculate_vwap(candles) -> float:
@@ -52,51 +55,22 @@ def standard_deviation_levels(candles, vwap: float) -> tuple[float, float]:
 
 
 def mock_option_chain(price: float) -> list[OptionPosition]:
-    """Stable synthetic NQ option chain for development without paid data."""
     positions: list[OptionPosition] = []
     center = round(price / 25) * 25
-
     for strike in range(int(center - 300), int(center + 325), 25):
         distance = abs(strike - center)
         decay = exp(-distance / 155)
         base_oi = int(650 + 5100 * decay)
         expiry = 7 / 365
         iv = 0.185 + distance / max(price, 1) * 2.25
-
-        call_boost = 1.0
-        put_boost = 1.0
-        if strike == center + 75:
-            call_boost = 2.85
-        elif strike == center + 50:
-            call_boost = 1.75
-        if strike == center - 100:
-            put_boost = 3.0
-        elif strike == center - 75:
-            put_boost = 1.85
-
-        # A deterministic skew keeps the prototype stable between updates.
+        call_boost = 2.85 if strike == center + 75 else 1.75 if strike == center + 50 else 1.0
+        put_boost = 3.0 if strike == center - 100 else 1.85 if strike == center - 75 else 1.0
         call_oi = int(base_oi * call_boost * (1.02 + ((strike // 25) % 5) * 0.025))
         put_oi = int(base_oi * put_boost * (0.98 + ((strike // 25) % 4) * 0.03))
-
-        positions.append(
-            OptionPosition(
-                strike=strike,
-                expiry_years=expiry,
-                option_type="CALL",
-                open_interest=call_oi,
-                implied_volatility=iv,
-            )
-        )
-        positions.append(
-            OptionPosition(
-                strike=strike,
-                expiry_years=expiry,
-                option_type="PUT",
-                open_interest=put_oi,
-                implied_volatility=iv * 1.035,
-            )
-        )
-
+        positions.extend([
+            OptionPosition(strike, expiry, "CALL", call_oi, iv),
+            OptionPosition(strike, expiry, "PUT", put_oi, iv * 1.035),
+        ])
     return positions
 
 
@@ -107,8 +81,23 @@ def proximity_score(price: float, low: float, high: float, tolerance: float) -> 
     return max(0.0, 1.0 - distance / max(tolerance, 0.25))
 
 
-def build_current_setup() -> TradeSetup:
+def _direction_from_structure(structure: dict, current_price: float, gex: GexSummary) -> str:
+    if structure["trend"] == "BULLISH":
+        return "LONG"
+    if structure["trend"] == "BEARISH":
+        return "SHORT"
+    return "LONG" if current_price >= gex.gamma_flip else "SHORT"
+
+
+def _ideal_ote(fib_points) -> float:
+    return next(point.price for point in fib_points if abs(point.ratio - 0.705) < 0.001)
+
+
+def build_candidate_setup() -> TradeSetup:
     base_candles = market_data_service.snapshot()
+    if not base_candles:
+        raise RuntimeError("No market candles are available.")
+
     candles_5m = aggregate_candles(base_candles, 5)
     candles_15m = aggregate_candles(base_candles, 15)
     candles_60m = aggregate_candles(base_candles, 60)
@@ -116,256 +105,219 @@ def build_current_setup() -> TradeSetup:
 
     structure = analyze_market_structure(candles_5m)
     zones = (
-        detect_supply_demand(candles_5m, timeframe="5m", lookback=70)
-        + detect_supply_demand(candles_15m, timeframe="15m", lookback=48)
-        + detect_supply_demand(candles_60m, timeframe="1H", lookback=24)
+        detect_supply_demand(candles_5m, timeframe="5m", lookback=90)
+        + detect_supply_demand(candles_15m, timeframe="15m", lookback=70)
+        + detect_supply_demand(candles_60m, timeframe="1H", lookback=45)
     )
-    zones = sorted(zones, key=lambda zone: (zone.strength, zone.timeframe), reverse=True)[:10]
+    zones = sorted(
+        zones,
+        key=lambda zone: (zone.fresh, zone.strength, zone.created_at or base_candles[0].time),
+        reverse=True,
+    )[:12]
 
-    if settings.simulated_mode:
+    gex = gex_service.get_summary(current_price)
+    if gex is None:
         positions = mock_option_chain(current_price)
-    else:
-        positions = []
-        provider = (settings.data_provider or "yfinance").lower()
-        try:
-            if provider == "databento":
-                from backend.services.databento_options import databento_option_chain
+        gex_raw = derive_gex_summary_from_positions(current_price, positions, flip_range_points=450)
+        gex_raw.update({
+            "source": "simulated-fallback",
+            "updated_at": datetime.now(timezone.utc),
+            "contract_count": len(positions),
+            "expiry_count": 1,
+            "is_estimate": True,
+        })
+        gex = GexSummary(**gex_raw)
 
-                positions = databento_option_chain(current_price)
-            else:
-                from backend.services.live_options import live_option_chain
-
-                positions = live_option_chain(current_price)
-        except Exception:
-            positions = []
-        if not positions:
-            # Native/live fetch not ready or failed — fall back to the
-            # synthetic chain for this cycle so the dashboard stays populated.
-            positions = mock_option_chain(current_price)
-    strike_gex = aggregate_gex_by_strike(current_price, positions)
-    gex_raw = derive_gex_summary(current_price, strike_gex)
-    gex = GexSummary(**gex_raw)
-
-    direction = (
-        "LONG"
-        if structure["trend"] == "BULLISH"
-        else "SHORT"
-        if structure["trend"] == "BEARISH"
-        else "LONG"
-        if current_price >= gex.gamma_flip
-        else "SHORT"
-    )
-
+    direction = _direction_from_structure(structure, current_price, gex)
     swing_low = structure["swing_low"]
     swing_high = structure["swing_high"]
     if swing_high <= swing_low:
         swing_high = swing_low + 20
 
     fib_points = calculate_fib_levels(swing_low, swing_high, direction)
-    fib_levels = [
-        {"ratio": point.ratio, "price": point.price, "label": point.label}
-        for point in fib_points
-    ]
+    fib_levels = [{"ratio": point.ratio, "price": point.price, "label": point.label} for point in fib_points]
     ote_low, ote_high = ote_zone(swing_low, swing_high, direction)
-
+    ideal_ote = _ideal_ote(fib_points)
     atr = average_true_range(candles_5m)
+
+    cluster = find_confluence_cluster(
+        direction=direction,
+        ote_low=ote_low,
+        ote_high=ote_high,
+        zones=zones,
+        gex=gex,
+        atr=atr,
+        current_price=current_price,
+        tolerance_atr=settings.cluster_tolerance_atr,
+    )
+
+    session_candles = base_candles[-390:]
+    session_high = max(candle.high for candle in session_candles)
+    session_low = min(candle.low for candle in session_candles)
+    vwap = calculate_vwap(session_candles)
+    std_low, std_high = standard_deviation_levels(session_candles, vwap)
+
+    direction_sweep = structure["sell_side_sweep"] if direction == "LONG" else structure["buy_side_sweep"]
+    direction_displacement = structure["bullish_displacement"] if direction == "LONG" else structure["bearish_displacement"]
+    direction_fvg = structure["bullish_fvg"] if direction == "LONG" else structure["bearish_fvg"]
+    trend_alignment = structure["bullish_ema_aligned"] if direction == "LONG" else structure["bearish_ema_aligned"]
+
     levels = build_trade_levels(
         direction=direction,
         current_price=current_price,
         ote_low=ote_low,
         ote_high=ote_high,
+        ideal_ote=ideal_ote,
         zones=zones,
         atr=atr,
+        cluster=cluster,
+        gex=gex,
+        previous_liquidity_high=structure["previous_liquidity_high"],
+        previous_liquidity_low=structure["previous_liquidity_low"],
+        session_high=session_high,
+        session_low=session_low,
+        sweep_price=structure["sweep_price"] if direction_sweep else None,
+        tick_size=settings.nq_tick_size,
     )
 
-    session_candles = base_candles[-390:]
-    vwap = calculate_vwap(session_candles)
-    std_low, std_high = standard_deviation_levels(session_candles, vwap)
-
-    matching_zones = [
-        zone
-        for zone in zones
-        if ((direction == "LONG" and zone.kind == "DEMAND") or (direction == "SHORT" and zone.kind == "SUPPLY"))
-    ]
+    analysis_price = levels["entry"] if levels["entry"] is not None else current_price
+    selected_zone = cluster.zone
     zone_quality = 0.0
-    for zone in matching_zones:
-        overlap = not (zone.high < ote_low or zone.low > ote_high)
-        if overlap:
-            zone_quality = max(zone_quality, zone.strength / 5)
-        else:
-            zone_quality = max(
-                zone_quality,
-                proximity_score(current_price, zone.low, zone.high, atr * 3) * zone.strength / 5,
-            )
+    if selected_zone is not None:
+        freshness = 1.0 if selected_zone.fresh else max(0.45, 0.85 - selected_zone.touches * 0.12)
+        zone_quality = selected_zone.strength / 5 * freshness
 
-    gex_alignment = (direction == "LONG" and current_price >= gex.gamma_flip) or (
+    gex_alignment = (
+        direction == "LONG" and current_price >= gex.gamma_flip
+    ) or (
         direction == "SHORT" and current_price <= gex.gamma_flip
     )
-    vwap_alignment = (direction == "LONG" and current_price >= vwap) or (
+    vwap_alignment = (
+        direction == "LONG" and current_price >= vwap
+    ) or (
         direction == "SHORT" and current_price <= vwap
     )
     std_score = max(
-        proximity_score(current_price, std_low - atr * 0.25, std_low + atr * 0.25, atr * 2),
-        proximity_score(current_price, std_high - atr * 0.25, std_high + atr * 0.25, atr * 2),
+        proximity_score(analysis_price, std_low - atr * 0.25, std_low + atr * 0.25, atr * 2),
+        proximity_score(analysis_price, std_high - atr * 0.25, std_high + atr * 0.25, atr * 2),
     )
-    ote_score = proximity_score(current_price, ote_low, ote_high, atr * 3.5)
+    ote_score = proximity_score(analysis_price, ote_low, ote_high, atr * 1.5)
+    displacement_quality = 1.0 if direction_displacement and direction_fvg else 0.75 if direction_displacement else 0.0
 
-    ranges = [c.high - c.low for c in candles_5m[-30:]]
+    ranges = [candle.high - candle.low for candle in candles_5m[-30:]]
     normal_range = sum(ranges) / len(ranges) if ranges else atr
-    volatility_quality = max(0.2, min(1.0, normal_range / max(atr, 0.25)))
-
-    # ── Three-way level cluster: OTE + S/D zone + supportive GEX level ──
-    # Sub-scores per spec: overlap +5, GEX level in the area +5, flip near
-    # entry +3, zone+GEX agree with direction +2  (max 15, passed as 0..1).
-    cluster_tol = max(atr * 0.25, 10.0)  # "same area" = 0.25 ATR or 10 NQ pts
-    entry_ref = levels.get("entry") or current_price
-
-    overlap_zone = None
-    for zone in matching_zones:
-        if not (zone.high < ote_low or zone.low > ote_high):
-            overlap_zone = zone
-            break
-    cluster_pts = 0.0
-    if overlap_zone is not None:
-        cluster_pts += 5.0
-        area_low = max(min(overlap_zone.low, ote_low) - cluster_tol, 0)
-        area_high = max(overlap_zone.high, ote_high) + cluster_tol
-        # Supportive GEX strike inside the cluster area:
-        #   LONG -> positive-GEX strike at/below entry area (support)
-        #   SHORT -> negative-GEX strike at/above entry area (resistance)
-        supportive = [
-            strike for strike, value in strike_gex.items()
-            if area_low <= strike <= area_high
-            and ((direction == "LONG" and value > 0 and strike <= entry_ref + cluster_tol)
-                 or (direction == "SHORT" and value < 0 and strike >= entry_ref - cluster_tol))
-        ]
-        if supportive:
-            cluster_pts += 5.0
-        if abs(entry_ref - gex.gamma_flip) <= cluster_tol * 2:
-            cluster_pts += 3.0
-        if gex_alignment:  # zone matched direction by construction; GEX agrees
-            cluster_pts += 2.0
-    cluster_quality = cluster_pts / 15.0
+    volatility_quality = max(0.0, min(1.0, normal_range / max(atr, 0.25)))
+    risk_quality = 1.0 if (
+        levels["entry_valid"]
+        and not levels["blocked_by_near_target"]
+        and (levels["tp2_r"] or 0) >= 2.0
+    ) else 0.0
 
     flags = {
-        "trend_alignment": structure["ema_aligned"],
+        "trend_alignment": trend_alignment,
         "gex_alignment": gex_alignment,
-        "liquidity_sweep": structure["liquidity_sweep"],
-        "displacement": structure["displacement"],
+        "liquidity_sweep": direction_sweep,
+        "displacement": displacement_quality,
         "ote_overlap": ote_score,
         "supply_demand": zone_quality,
+        "gex_ote_zone_cluster": cluster.score,
         "std_dev_confluence": std_score,
         "vwap_alignment": vwap_alignment,
         "session_volatility": volatility_quality,
-        "risk_reward": 1.0 if (levels["risk_reward"] or 0) >= 2 else 0.0,
-        "level_cluster": cluster_quality,
+        "risk_reward": risk_quality,
     }
     confidence, components = calculate_confidence(flags)
 
     nearest_target_wall = gex.call_wall if direction == "LONG" else gex.put_wall
     approaching_wall = abs(nearest_target_wall - current_price) <= atr * 5
     signals = {
-        "trend_alignment": bool(structure["ema_aligned"]),
-        "gex_alignment": gex_alignment,
-        "liquidity_sweep": bool(structure["liquidity_sweep"]),
-        "displacement": bool(structure["displacement"]),
+        "trend_alignment": bool(trend_alignment),
+        "gex_alignment": bool(gex_alignment),
+        "liquidity_sweep": bool(direction_sweep),
+        "displacement": bool(direction_displacement),
+        "directional_fvg": bool(direction_fvg),
         "ote_overlap": ote_score >= 0.72,
         "supply_demand": zone_quality >= 0.65,
+        "gex_ote_zone_cluster": cluster.score >= settings.cluster_min_score,
+        "gex_inside_cluster": cluster.gex_inside_cluster,
         "std_dev_confluence": std_score >= 0.7,
-        "vwap_alignment": vwap_alignment,
+        "vwap_alignment": bool(vwap_alignment),
+        "valid_limit": bool(levels["entry_valid"]),
+        "target_not_blocked": not levels["blocked_by_near_target"],
         "approaching_wall": approaching_wall,
-        "level_cluster": cluster_pts >= 10.0,
     }
 
+    mandatory = all([
+        trend_alignment,
+        gex_alignment,
+        cluster.score >= settings.cluster_min_score,
+        levels["entry_valid"],
+        not levels["blocked_by_near_target"],
+        direction_sweep or direction_displacement,
+        (levels["tp2_r"] or 0) >= 2.0,
+    ])
+    actionable = confidence >= settings.setup_actionable_score and mandatory
+
     rationale: list[str] = []
-    if structure["ema_aligned"]:
-        rationale.append("The 9/21/55 EMA structure is aligned with the setup direction.")
+    if trend_alignment:
+        rationale.append(f"The 9/21/55 EMA structure is {direction.lower()}-aligned.")
     if gex_alignment:
-        rationale.append("Price is on the supportive side of the current gamma flip.")
-    if structure["liquidity_sweep"]:
-        rationale.append("A recent liquidity sweep was detected before the proposed entry.")
-    if structure["displacement"]:
-        rationale.append("Recent price action contains a displacement candle.")
-    if ote_score >= 0.72:
-        rationale.append("Price is inside or close to the active 0.618–0.786 OTE zone.")
-    if zone_quality >= 0.65:
-        rationale.append("The OTE area overlaps or approaches a strong supply/demand zone.")
-    if vwap_alignment:
-        rationale.append("Price is aligned with session VWAP.")
-    if std_score >= 0.7:
-        rationale.append("A session standard-deviation level supports the setup area.")
-    if cluster_pts >= 10:
-        rationale.append("Three-way cluster: OTE, a supply/demand zone, and a supportive GEX level align in the same price area.")
+        rationale.append("Price is on the supportive side of the repriced gamma flip.")
+    if direction_sweep:
+        sweep_name = "sell-side" if direction == "LONG" else "buy-side"
+        rationale.append(f"A directionally valid {sweep_name} liquidity sweep was detected.")
+    if direction_displacement:
+        rationale.append(f"A {direction.lower()} displacement candle confirms participation.")
+    if direction_fvg:
+        rationale.append("The displacement also created a directional fair-value gap.")
+    if cluster.score >= settings.cluster_min_score:
+        zone_name = f"{cluster.zone.timeframe} {cluster.zone.kind.lower()}" if cluster.zone else "zone"
+        rationale.append(
+            f"OTE, {zone_name}, and {cluster.gex_type or 'GEX'} cluster around "
+            f"{cluster.low:,.2f}–{cluster.high:,.2f}."
+        )
+    if levels["blocked_by_near_target"]:
+        rationale.append("A nearby market level blocks enough reward; the setup is preview-only.")
+    if not levels["entry_valid"]:
+        rationale.append("The calculated price is not a valid resting limit relative to current NQ price.")
+    if levels["target_sources"]:
+        rationale.append(
+            f"TP1 uses {levels['target_sources']['tp1']}; TP2 uses {levels['target_sources']['tp2']}."
+        )
     if not rationale:
-        rationale.append("The system is scanning; the setup does not yet have enough independent confluence.")
+        rationale.append("The system is scanning; the setup lacks enough independent confluence.")
 
-    now = datetime.now(timezone.utc)
-
-    # Directional limit wording + invalidation.
-    # A limit is a retracement entry: LONG waits for a dip UP-into? no —
-    # LONG buy-limit sits BELOW price, SHORT sell-limit sits ABOVE price.
-    # If price has already traded through the STOP without first reaching the
-    # entry, the plan is void — mark INVALIDATED so the UI stops showing it
-    # as actionable (matches the "don't chase / invalidate on stop" rule).
-    entry_px = levels.get("entry")
-    stop_px = levels.get("stop_loss")
-    invalidated = False
-    if entry_px is not None and stop_px is not None:
-        recent = base_candles[-3:]
-        hi = max(c.high for c in recent)
-        lo = min(c.low for c in recent)
-        if direction == "LONG":
-            reached_entry = lo <= entry_px
-            hit_stop = lo <= stop_px
-            invalidated = hit_stop and not reached_entry
-        else:  # SHORT
-            reached_entry = hi >= entry_px
-            hit_stop = hi >= stop_px
-            invalidated = hit_stop and not reached_entry
-
-    # ── Setup Status lifecycle ──────────────────────────────────────
-    # Priority: live position (from the paper-trade tracker) > invalidation >
-    # pre-trade waiting/developing/scanning. A "no real plan" case shows
-    # 'Waiting for Setup' rather than a misleading direction.
-    has_plan = entry_px is not None and stop_px is not None and direction in ("LONG", "SHORT")
-
-    live = None
-    try:
-        from backend.services.trade_tracker import live_status
-        live = live_status()
-    except Exception:
-        live = None
-
-    if live and live["state"] == "ACTIVE":
-        status = "IN_SHORT" if live["direction"] == "SHORT" else "IN_LONG"
-    elif live and live["state"] == "WIN":
-        status = "TARGET_HIT"
-    elif live and live["state"] == "LOSS":
-        status = "STOPPED_OUT"
-    elif invalidated:
-        status = "INVALIDATED"
-    elif not has_plan or confidence < 45:
-        status = "WAITING_FOR_SETUP"
-    elif confidence >= 75:
-        status = "WAITING_FOR_SELL_LIMIT" if direction == "SHORT" else "WAITING_FOR_BUY_LIMIT"
-    elif confidence >= 55:
+    if actionable:
+        status = "WAITING_FOR_LIMIT"
+        order_state = "ARMED"
+    elif confidence >= 55 and levels["entry_valid"]:
         status = "DEVELOPING"
+        order_state = "PREVIEW_ONLY"
     else:
         status = "SCANNING"
+        order_state = "PREVIEW_ONLY"
 
+    now = datetime.now(timezone.utc)
     return TradeSetup(
+        setup_id=f"preview-{uuid4()}",
         timestamp=now,
-        valid_until=now + timedelta(minutes=30),
+        valid_until=now + timedelta(minutes=settings.setup_expiry_minutes),
         direction=direction,
         confidence=confidence,
         confidence_components=components,
         confidence_maximums={name: float(weight) for name, weight in DEFAULT_WEIGHTS.items()},
         signals=signals,
+        actionable=actionable,
+        entry_valid=bool(levels["entry_valid"]),
+        order_state=order_state,
         entry=levels["entry"],
         stop_loss=levels["stop_loss"],
         take_profit_1=levels["take_profit_1"],
         take_profit_2=levels["take_profit_2"],
         risk_reward=levels["risk_reward"],
+        tp1_r=levels["tp1_r"],
+        tp2_r=levels["tp2_r"],
+        target_sources=levels["target_sources"],
         status=status,
         rationale=rationale,
         gex=gex,
@@ -375,7 +327,22 @@ def build_current_setup() -> TradeSetup:
         vwap=round(vwap, 2),
         standard_deviation_high=round(std_high, 2),
         standard_deviation_low=round(std_low, 2),
+        cluster_score=round(cluster.score, 3),
+        cluster_low=cluster.low,
+        cluster_high=cluster.high,
+        cluster_gex_level=cluster.gex_level,
+        cluster_gex_type=cluster.gex_type,
+        selected_zone_low=selected_zone.low if selected_zone else None,
+        selected_zone_high=selected_zone.high if selected_zone else None,
+        selected_zone_timeframe=selected_zone.timeframe if selected_zone else None,
     )
+
+
+def build_current_setup() -> TradeSetup:
+    from backend.services.setup_lifecycle import setup_lifecycle_service
+
+    candidate = build_candidate_setup()
+    return setup_lifecycle_service.process(candidate, market_data_service.latest_candle())
 
 
 def save_setup(db: Session, setup: TradeSetup) -> TradeSetupRecord:

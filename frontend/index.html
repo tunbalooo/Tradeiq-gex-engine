@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/styles.css" />
-<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <div class="app">
@@ -44,13 +43,13 @@
 
   <div class="main">
     <div class="topbar">
-      <div class="title" id="sessionTitle">—</div>
-      <span class="session-badge" id="sessionBadge">—</span>
+      <div class="title">NQ TRADE ENGINE</div>
       <div class="symbol-pill">NQ1! <span class="m">▾</span></div>
       <div class="price-lg" id="hdrPrice">—</div>
       <div class="mono g" id="hdrChg">—</div>
       <div class="live">
         <span class="m mono">Time <b id="clock">--:--:--</b></span>
+        <span class="mode-badge" id="modeLabel">CONNECTING</span>
         <span class="dot" id="liveDot"></span><span class="g" id="connectionLabel">LIVE</span>
       </div>
     </div>
@@ -64,9 +63,8 @@
             <span class="tool-div"></span>
             <button class="tool-btn" id="indicatorToggle">Indicators</button>
             <button class="tool-btn" id="templateReset">Reset View</button>
-            <button class="tool-btn" id="fullscreenBtn">⛶ Fullscreen</button>
             <span class="spacer"></span>
-            <span class="m mono chart-caption" id="chartCaption">NASDAQ 100 E-mini · 5m · SIMULATED</span>
+            <span class="m mono chart-caption" id="chartCaption">NASDAQ 100 E-mini · 5m · CONNECTING</span>
           </div>
           <div class="indicator-strip" id="indicatorStrip">
             <button class="overlay-btn active" data-overlay="emas">EMAs</button>
@@ -110,7 +108,7 @@
             <div class="panel-b table-pad"><table><tbody id="news"></tbody></table></div>
           </div>
           <div class="panel">
-            <div class="panel-h"><h3 id="perfHeader">Performance · Tracked</h3></div>
+            <div class="panel-h"><h3>Performance · Logged Setups</h3></div>
             <div class="panel-b">
               <div class="perf-grid">
                 <div class="cell"><div class="num g" id="perfWin">—</div><div class="cap">Win rate</div></div>
@@ -143,24 +141,28 @@
                 <div class="m probability-sub" id="coreAlignment">Waiting for engine data</div></div>
             </div>
             <div class="setup-row"><span class="k">Direction</span><span class="v" id="setupDirection">—</span></div>
-            <div class="setup-row"><span class="k">Limit Entry</span><span class="v a" id="setupEntry">—</span></div>
+            <div class="setup-row"><span class="k" id="entryLabel">Limit Entry</span><span class="v a" id="setupEntry">—</span></div>
             <div class="setup-row"><span class="k">Stop Loss</span><span class="v r" id="setupStop">—</span></div>
             <div class="setup-row"><span class="k">Take Profit 1</span><span class="v g" id="setupTp1">—</span></div>
+            <div class="setup-row"><span class="k">TP1 Source</span><span class="v m" id="setupTp1Source">—</span></div>
             <div class="setup-row"><span class="k">Take Profit 2</span><span class="v g" id="setupTp2">—</span></div>
+            <div class="setup-row"><span class="k">TP2 Source</span><span class="v m" id="setupTp2Source">—</span></div>
             <div class="setup-row"><span class="k">Risk / Reward</span><span class="v" id="setupRr">—</span></div>
             <div class="setup-row"><span class="k">Setup Status</span><span class="v a" id="setupStatus">—</span></div>
+            <div class="setup-row"><span class="k">Cluster</span><span class="v" id="setupCluster">—</span></div>
             <div class="setup-row"><span class="k">Valid Until</span><span class="v" id="setupValid">—</span></div>
           </div>
         </div>
 
         <div class="panel">
-          <div class="panel-h"><h3>GEX Summary</h3><span class="mono a" id="gexSource" style="font-size:10px">—</span></div>
+          <div class="panel-h"><h3>GEX Summary</h3></div>
           <div class="panel-b">
             <div class="setup-row"><span class="k">Regime</span><span class="v" id="gexRegime">—</span></div>
             <div class="setup-row"><span class="k">Gamma Flip</span><span class="v" id="gammaFlip">—</span></div>
             <div class="setup-row"><span class="k">Put Wall</span><span class="v r" id="putWall">—</span></div>
             <div class="setup-row"><span class="k">Call Wall</span><span class="v b" id="callWall">—</span></div>
             <div class="setup-row"><span class="k">Price vs Flip</span><span class="v" id="priceVsFlip">—</span></div>
+            <div class="setup-row"><span class="k">GEX Source</span><span class="v b" id="gexSource">—</span></div>
             <div class="eyebrow gamma-head">Near-term gamma exposure</div>
             <div class="expobar"><div class="needle" id="gexNeedle"></div></div>
             <div class="expo-labels m mono"><span>-GEX</span><span>0</span><span>+GEX</span></div>
@@ -183,6 +185,7 @@
     </div>
   </div>
 </div>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script src="/static/chart.js"></script>
 <script src="/static/app.js"></script>
 </body>

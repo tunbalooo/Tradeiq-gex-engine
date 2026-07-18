@@ -1,119 +1,71 @@
-# TradeIQ — NQ GEX Engine
+# TradeIQ GEX Engine — Databento v0.4
 
-A local-first NQ trading dashboard that combines simulated NQ candles, GEX levels, market structure, Fib/OTE, supply and demand, VWAP, standard-deviation levels, confidence scoring, and suggested limit-entry risk plans.
+TradeIQ is a local or Railway-hosted NQ decision-support dashboard. It combines native NQ options-derived GEX with trend, liquidity, displacement/FVG, Fib/OTE, supply/demand, VWAP, volatility and risk structure.
 
-## What is connected in this build
+## What v0.4 does
 
-- The full TradeIQ dashboard design supplied for the project
-- FastAPI backend and interactive API documentation
-- WebSocket updates every two seconds
-- Accelerated simulated one-minute NQ feed
-- Working 1m, 2m, 3m, 5m, 15m, 1h, and 4h chart aggregation
-- 9/21/55 EMA chart overlays
-- Black-76 gamma and strike-level GEX calculations using a synthetic options chain
-- Call wall, put wall, gamma flip, positive/negative GEX levels, and gamma regime
-- Automatic swing Fib with 0.618–0.786 OTE highlighting
-- Multi-timeframe 5m, 15m, and 1H supply/demand detection
-- Liquidity sweep and displacement checks
-- VWAP and ±1 standard-deviation levels
-- Transparent 100-point confluence score
-- Suggested limit entry, stop loss, TP1, TP2, R:R, setup status, and expiry
-- Chart overlays for the trade plan, zones, GEX, Fib, EMAs, VWAP, and standard deviation
-- Recent alerts, news-calendar placeholders, and simulated performance display
-- SQLite setup-history storage
-- Unit and API tests
+- Streams NQ futures through Databento.
+- Loads native CME NQ options definitions and open interest.
+- Calculates Black-76 gamma and GEX by strike.
+- Separately derives call wall and put wall.
+- Reprices the option book to estimate gamma flip.
+- Detects fresh multi-timeframe supply/demand zones and removes invalidated zones.
+- Requires direction-specific liquidity sweeps and displacement.
+- Detects GEX + OTE + supply/demand price clusters.
+- Selects targets from market structure before using a 2R fallback.
+- Separates preview setups from actionable armed limits.
+- Freezes an armed trade plan and tracks fill, TP1, TP2, stop, invalidation and expiry.
 
-> **Two modes.** `SIMULATED_MODE=true` (default) runs a synthetic feed for development.
-> Set `SIMULATED_MODE=false` in `.env` for **live mode**: real MNQ/NQ price and a real
-> QQQ options chain (free, ~15-min delayed via yfinance), rescaled to NQ points for GEX.
-> The calendar and performance panels remain placeholders in both modes. Live GEX is a
-> QQQ proxy, not CME NQ options-on-futures dealer positioning — treat levels as context,
-> not exact dealer flow. Not financial advice; backtest before trading real size.
+> Confidence is a confluence score, not a guaranteed win probability.
+> The app does not place broker orders.
 
-## Easiest start on Windows
-
-1. Extract the ZIP.
-2. Open the extracted `Tradeiq-gex-engine` folder.
-3. Double-click `start_windows.bat`.
-4. When installation finishes, open `http://127.0.0.1:8000`.
-
-## Manual start
-
-### Windows PowerShell
+## Local start
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn backend.main:app --reload
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+python -m uvicorn backend.main:app --reload
 ```
 
-### macOS/Linux
-
-```bash
-./start_mac_linux.sh
-```
-
-Then open:
+Open:
 
 - Dashboard: `http://127.0.0.1:8000`
 - API docs: `http://127.0.0.1:8000/docs`
 - Health: `http://127.0.0.1:8000/api/health`
 
-## Useful endpoints
+## Railway variables
 
-- `GET /api/dashboard`
-- `GET /api/market/snapshot?timeframe=5&limit=1000`
-- `GET /api/gex/summary`
-- `GET /api/setup/current`
-- `POST /api/setup/recalculate`
-- `GET /api/setups/history`
-- `WS /ws/market`
+Add these in Railway Variables, not GitHub:
 
-## Run tests
+```env
+DATA_PROVIDER=databento
+SIMULATED_MODE=false
+DATABENTO_API_KEY=db-your-private-key
+DATABENTO_DATASET=GLBX.MDP3
+DATABENTO_FUTURES_SYMBOL=NQ.v.0
+DATABENTO_OPTIONS_PARENT=NQ.OPT
+DATABASE_URL=sqlite:////app/data/tradeiq.db
+```
+
+Recommended Railway start command:
 
 ```bash
-pytest -q
+uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 ```
 
-## Connecting real data later
+## Update GitHub and Railway
 
-The next live-data adapter must supply:
+Copy this update over the existing repository without deleting `.git`, then run:
 
-- NQ futures OHLCV
-- Option strike and expiration
-- Call/put classification
-- Open interest and volume
-- Implied volatility or enough option data to solve IV
-- Option mark, bid/ask, or mid-price
-
-Replace `SimulatedMarketDataService` and `mock_option_chain()` with the selected provider adapters. The frontend and strategy engines can remain unchanged.
-
-## Project structure
-
-```text
-Tradeiq-gex-engine/
-├── backend/
-│   ├── api/
-│   ├── core/
-│   ├── models/
-│   ├── services/
-│   └── main.py
-├── engine/
-│   ├── confidence.py
-│   ├── fib_ote.py
-│   ├── gex.py
-│   ├── market_structure.py
-│   ├── risk_engine.py
-│   └── supply_demand.py
-├── frontend/
-│   ├── app.js
-│   ├── index.html
-│   └── styles.css
-├── tests/
-├── start_windows.bat
-├── start_mac_linux.sh
-└── requirements.txt
+```powershell
+git add .
+git commit -m "Upgrade confluence, targets and trade lifecycle"
+git push
 ```
 
-This software is for research and decision support. A confluence score is not a guaranteed probability of profit, and the application does not place live orders.
+Railway should redeploy automatically from the `main` branch.
+
+See `CHANGELOG_v0.4.md` for the full update list.
