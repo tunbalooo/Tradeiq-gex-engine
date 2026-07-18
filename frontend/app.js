@@ -201,7 +201,14 @@ function renderTradeSetup(setup) {
   $("setupTp1").textContent = fmt(setup.take_profit_1);
   $("setupTp2").textContent = fmt(setup.take_profit_2);
   $("setupRr").textContent = setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  $("setupStatus").textContent = setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
+  const statusText = setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
+  $("setupStatus").textContent = statusText;
+  // Color the status: invalidated = red, waiting = green, developing = amber.
+  const st = setup.status;
+  $("setupStatus").className = "v " + (st === "INVALIDATED" ? "r" : st.startsWith("WAITING") ? "g" : st === "DEVELOPING" ? "a" : "m");
+  // Dim the whole setup card when the plan is void so it can't be mistaken for actionable.
+  const card = $("setupStatus").closest(".panel");
+  if (card) card.style.opacity = st === "INVALIDATED" ? "0.55" : "1";
   $("setupValid").textContent = new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
 }
 

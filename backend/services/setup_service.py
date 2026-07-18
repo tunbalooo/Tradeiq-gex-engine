@@ -299,14 +299,39 @@ def build_current_setup() -> TradeSetup:
     if not rationale:
         rationale.append("The system is scanning; the setup does not yet have enough independent confluence.")
 
-    if confidence >= 75:
-        status = "WAITING_FOR_LIMIT"
+    now = datetime.now(timezone.utc)
+
+    # Directional limit wording + invalidation.
+    # A limit is a retracement entry: LONG waits for a dip UP-into? no —
+    # LONG buy-limit sits BELOW price, SHORT sell-limit sits ABOVE price.
+    # If price has already traded through the STOP without first reaching the
+    # entry, the plan is void — mark INVALIDATED so the UI stops showing it
+    # as actionable (matches the "don't chase / invalidate on stop" rule).
+    entry_px = levels.get("entry")
+    stop_px = levels.get("stop_loss")
+    invalidated = False
+    if entry_px is not None and stop_px is not None:
+        recent = base_candles[-3:]
+        hi = max(c.high for c in recent)
+        lo = min(c.low for c in recent)
+        if direction == "LONG":
+            reached_entry = lo <= entry_px
+            hit_stop = lo <= stop_px
+            invalidated = hit_stop and not reached_entry
+        else:  # SHORT
+            reached_entry = hi >= entry_px
+            hit_stop = hi >= stop_px
+            invalidated = hit_stop and not reached_entry
+
+    if invalidated:
+        status = "INVALIDATED"
+    elif confidence >= 75:
+        status = "WAITING_FOR_SELL_LIMIT" if direction == "SHORT" else "WAITING_FOR_BUY_LIMIT"
     elif confidence >= 55:
         status = "DEVELOPING"
     else:
         status = "SCANNING"
 
-    now = datetime.now(timezone.utc)
     return TradeSetup(
         timestamp=now,
         valid_until=now + timedelta(minutes=30),

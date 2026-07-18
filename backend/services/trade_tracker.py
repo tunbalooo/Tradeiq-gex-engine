@@ -60,6 +60,7 @@ def _actionable(setup: TradeSetup) -> bool:
         and setup.take_profit_1 is not None
         and setup.confidence >= MIN_CONFIDENCE
         and setup.direction in ("LONG", "SHORT")
+        and setup.status.startswith("WAITING")  # not SCANNING/DEVELOPING/INVALIDATED
     )
 
 
