@@ -9,6 +9,13 @@ DEFAULT_WEIGHTS = {
     "vwap_alignment": 5,
     "session_volatility": 5,
     "risk_reward": 10,
+    # Three-way spatial cluster BONUS: OTE + supply/demand + supportive GEX
+    # level in the same price area. Sub-scored in setup_service:
+    #   OTE overlaps S/D zone (+5), relevant GEX level inside that area (+5),
+    #   gamma flip near entry (+3), zone+GEX agree with direction (+2).
+    # Weights now sum to 115; the final score is capped at 100, so the
+    # cluster acts as a bonus that lifts spatially-aligned setups.
+    "level_cluster": 15,
 }
 
 
@@ -17,7 +24,7 @@ def calculate_confidence(flags: dict[str, bool | float]) -> tuple[float, dict[st
 
     Boolean flags receive either all or none of a component's weight. Numeric
     flags are interpreted as a normalized 0..1 quality value and receive a
-    proportional score.
+    proportional score. Total is capped at 100 (level_cluster is a bonus).
     """
     components: dict[str, float] = {}
 
@@ -29,4 +36,4 @@ def calculate_confidence(flags: dict[str, bool | float]) -> tuple[float, dict[st
             awarded = max(0.0, min(float(weight), float(value) * weight))
         components[name] = round(awarded, 1)
 
-    return round(sum(components.values()), 1), components
+    return round(min(100.0, sum(components.values())), 1), components

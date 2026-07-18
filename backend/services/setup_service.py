@@ -207,6 +207,39 @@ def build_current_setup() -> TradeSetup:
     normal_range = sum(ranges) / len(ranges) if ranges else atr
     volatility_quality = max(0.2, min(1.0, normal_range / max(atr, 0.25)))
 
+    # ── Three-way level cluster: OTE + S/D zone + supportive GEX level ──
+    # Sub-scores per spec: overlap +5, GEX level in the area +5, flip near
+    # entry +3, zone+GEX agree with direction +2  (max 15, passed as 0..1).
+    cluster_tol = max(atr * 0.25, 10.0)  # "same area" = 0.25 ATR or 10 NQ pts
+    entry_ref = levels.get("entry") or current_price
+
+    overlap_zone = None
+    for zone in matching_zones:
+        if not (zone.high < ote_low or zone.low > ote_high):
+            overlap_zone = zone
+            break
+    cluster_pts = 0.0
+    if overlap_zone is not None:
+        cluster_pts += 5.0
+        area_low = max(min(overlap_zone.low, ote_low) - cluster_tol, 0)
+        area_high = max(overlap_zone.high, ote_high) + cluster_tol
+        # Supportive GEX strike inside the cluster area:
+        #   LONG -> positive-GEX strike at/below entry area (support)
+        #   SHORT -> negative-GEX strike at/above entry area (resistance)
+        supportive = [
+            strike for strike, value in strike_gex.items()
+            if area_low <= strike <= area_high
+            and ((direction == "LONG" and value > 0 and strike <= entry_ref + cluster_tol)
+                 or (direction == "SHORT" and value < 0 and strike >= entry_ref - cluster_tol))
+        ]
+        if supportive:
+            cluster_pts += 5.0
+        if abs(entry_ref - gex.gamma_flip) <= cluster_tol * 2:
+            cluster_pts += 3.0
+        if gex_alignment:  # zone matched direction by construction; GEX agrees
+            cluster_pts += 2.0
+    cluster_quality = cluster_pts / 15.0
+
     flags = {
         "trend_alignment": structure["ema_aligned"],
         "gex_alignment": gex_alignment,
@@ -218,6 +251,7 @@ def build_current_setup() -> TradeSetup:
         "vwap_alignment": vwap_alignment,
         "session_volatility": volatility_quality,
         "risk_reward": 1.0 if (levels["risk_reward"] or 0) >= 2 else 0.0,
+        "level_cluster": cluster_quality,
     }
     confidence, components = calculate_confidence(flags)
 
@@ -233,6 +267,7 @@ def build_current_setup() -> TradeSetup:
         "std_dev_confluence": std_score >= 0.7,
         "vwap_alignment": vwap_alignment,
         "approaching_wall": approaching_wall,
+        "level_cluster": cluster_pts >= 10.0,
     }
 
     rationale: list[str] = []
@@ -252,6 +287,8 @@ def build_current_setup() -> TradeSetup:
         rationale.append("Price is aligned with session VWAP.")
     if std_score >= 0.7:
         rationale.append("A session standard-deviation level supports the setup area.")
+    if cluster_pts >= 10:
+        rationale.append("Three-way cluster: OTE, a supply/demand zone, and a supportive GEX level align in the same price area.")
     if not rationale:
         rationale.append("The system is scanning; the setup does not yet have enough independent confluence.")
 

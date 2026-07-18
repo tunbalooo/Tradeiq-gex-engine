@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const SCORE_LABELS = {
   trend_alignment: "Trend (EMA 9/21/55)",
+  level_cluster: "3-Way Cluster (OTE+S&D+GEX)",
   gex_alignment: "GEX Alignment",
   liquidity_sweep: "Liquidity Sweep",
   displacement: "FVG / Displacement",
@@ -21,6 +22,7 @@ const SIGNAL_LABELS = {
   std_dev_confluence: "Standard-deviation confluence",
   vwap_alignment: "Price aligned with VWAP",
   approaching_wall: "Approaching directional GEX wall",
+  level_cluster: "OTE + S&D + GEX cluster aligned",
 };
 const COLORS = {
   green: "#26D07C", red: "#FF4D5E", amber: "#F5B93B", blue: "#48A3FF",
@@ -373,6 +375,8 @@ async function initialLoad() {
     renderAll(dashboard.setup, dashboard.meta);
     renderHeader(snapshot);
     evaluateHealth();
+    const gexSrc = $("gexSource");
+    if (gexSrc) gexSrc.textContent = state.dataMode === "LIVE" ? "QQQ PROXY · ~15m DELAYED" : "SIMULATED";
     $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataMode}`;
     connectWebSocket();
   } catch (error) {
