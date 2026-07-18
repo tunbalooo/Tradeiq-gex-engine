@@ -186,7 +186,6 @@ class ClaudeAnalysisService:
                 async with client.messages.stream(
                     model=settings.anthropic_model,
                     max_tokens=settings.claude_max_output_tokens,
-                    temperature=0.1,
                     system=SYSTEM_PROMPT,
                     messages=[{
                         "role": "user",
