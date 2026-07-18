@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - surfaced by status endpoint
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """You are the read-only market analyst inside TradeIQ, an NQ futures decision-support dashboard.
+SYSTEM_PROMPT = """You are the read-only market analyst inside TradeIQ, a multi-market futures decision-support dashboard for NQ, MNQ, ES, MES, GC, and MGC.
 The deterministic TradeIQ engine is the source of truth. Never change, invent, or override its confidence score,
 entry, stop, targets, state, session gate, GEX values, or confluences. Explain only the supplied snapshot.
 Do not provide hidden chain-of-thought. Give concise conclusions and observable evidence.
@@ -71,6 +71,13 @@ class ClaudeAnalysisService:
             "analysis_interval_seconds": settings.claude_analysis_interval_seconds,
         }
 
+
+    def reset_cache(self) -> None:
+        self._cached_text = ""
+        self._cached_key = None
+        self._cached_at = None
+        self._last_error = None
+
     def _snapshot(self) -> dict:
         setup = trade_engine_service.current_setup()
         if setup is None:
@@ -108,6 +115,7 @@ class ClaudeAnalysisService:
         session = snapshot["session"]
         gex = setup.get("gex") or {}
         important = {
+            "symbol": snapshot.get("market", {}).get("symbol"),
             "direction": setup.get("direction"),
             "state": setup.get("order_state"),
             "actionable": setup.get("actionable"),

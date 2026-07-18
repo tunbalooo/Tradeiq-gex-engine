@@ -34,6 +34,11 @@ class GexSummary(BaseModel):
     contract_count: int = 0
     expiry_count: int = 0
     is_estimate: bool = True
+    source_symbol: str | None = None
+    applied_to_symbol: str | None = None
+    options_parent: str | None = None
+    source_label: str | None = None
+    is_parent_market: bool = False
 
 
 class Zone(BaseModel):
@@ -153,6 +158,10 @@ class EngineSnapshot(BaseModel):
     last_processed_candle_time: datetime | None = None
     current_setup: TradeSetup | None = None
     last_error: str | None = None
+
+
+class MarketSymbolRequest(BaseModel):
+    symbol: str
 
 
 class BacktestRequest(BaseModel):

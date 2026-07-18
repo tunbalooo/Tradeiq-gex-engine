@@ -43,15 +43,40 @@ const state = {
   currentPage: "dashboard",
   hoverIndex: null,
   chartMeta: null,
+  instrument: null,
+  switchingSymbol: false,
+  socket: null,
   overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
   claude: { enabled: false, auto: true, busy: false, source: null, text: "", model: "—", lastStartedAt: 0 },
 };
 
-function fmt(value, digits = 2) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
-  return Number(value).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+function activeSymbol() { return state.instrument?.symbol || state.setup?.symbol || "NQ"; }
+function displaySymbol() { return state.instrument?.display_symbol || `${activeSymbol()}1!`; }
+function instrumentName() { return state.instrument?.name || "Futures market"; }
+function pricePrecision() { return Number.isInteger(state.instrument?.price_precision) ? state.instrument.price_precision : 2; }
+function tickSize() { return Number(state.instrument?.tick_size || 0.25); }
+function timeframeLabel() { return state.timeframe >= 60 ? `${state.timeframe / 60}h` : `${state.timeframe}m`; }
+function chartFeedLabel() { return `${instrumentName()} · ${timeframeLabel()} · ${state.dataSource}`; }
+
+function applyInstrument(instrument) {
+  if (!instrument) return;
+  state.instrument = instrument;
+  const selector = $("symbolSelect");
+  if (selector && selector.value !== instrument.symbol) selector.value = instrument.symbol;
+  document.title = `TradeIQ — ${instrument.symbol} ${instrument.name}`;
+  if ($("chartBrandTitle")) $("chartBrandTitle").innerHTML = `Trade<span>IQ</span> · ${escapeHtml(instrument.symbol)}`;
+  if ($("chartCaption")) $("chartCaption").textContent = chartFeedLabel();
+  if ($("chartLargeStatus")) $("chartLargeStatus").textContent = chartFeedLabel();
+  if ($("newsPanelTitle")) $("newsPanelTitle").textContent = `${instrument.symbol} Market News · Finnhub`;
+  if ($("pageTitle")) setPage(state.currentPage, false);
 }
-function fmtSigned(value, digits = 2) {
+
+function fmt(value, digits = null) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  const resolvedDigits = digits === null ? pricePrecision() : digits;
+  return Number(value).toLocaleString("en-US", { minimumFractionDigits: resolvedDigits, maximumFractionDigits: resolvedDigits });
+}
+function fmtSigned(value, digits = null) {
   const number = Number(value || 0);
   return `${number >= 0 ? "+" : ""}${fmt(number, digits)}`;
 }
@@ -236,9 +261,9 @@ function setConnection(connected) {
 function renderHeader(snapshot) {
   const current = snapshot?.price ?? state.baseCandles.at(-1)?.close;
   if (current === undefined) return;
-  const nq = state.meta?.overview?.find((item) => item.symbol === "NQ1!");
-  const change = nq?.change ?? snapshot?.change ?? 0;
-  const percent = nq?.change_percent ?? snapshot?.change_percent ?? 0;
+  const active = state.meta?.overview?.find((item) => item.symbol === displaySymbol()) || state.meta?.overview?.[0];
+  const change = active?.change ?? snapshot?.change ?? 0;
+  const percent = active?.change_percent ?? snapshot?.change_percent ?? 0;
   $("hdrPrice").textContent = fmt(current);
   $("hdrChg").textContent = `${fmtSigned(change)} (${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`;
   $("hdrChg").className = `mono ${change >= 0 ? "g" : "r"}`;
@@ -247,8 +272,8 @@ function renderHeader(snapshot) {
 function renderOverview(items = []) {
   $("overview").innerHTML = items.map((item) => {
     const cls = item.change_percent >= 0 ? "g" : "r";
-    const priceDigits = item.symbol === "YM1!" ? 0 : 2;
-    return `<div class="ov-row"><span>${item.symbol}</span><span>${fmt(item.price, priceDigits)} <span class="${cls}">${item.change_percent >= 0 ? "+" : ""}${item.change_percent.toFixed(2)}%</span></span></div>`;
+    const itemDigits = item.symbol === displaySymbol() ? pricePrecision() : 2;
+    return `<div class="ov-row"><span>${item.symbol}</span><span>${fmt(item.price, itemDigits)} <span class="${cls}">${item.change_percent >= 0 ? "+" : ""}${item.change_percent.toFixed(2)}%</span></span></div>`;
   }).join("") || '<div class="loading">No overview data</div>';
 }
 
@@ -315,7 +340,7 @@ function renderSession(session) {
   $("sessionTimer").textContent = remainingText(session.countdown_target);
   $("sessionTimer").className = `clock ${open ? "g" : "r"}`;
   $("sessionState").textContent = session.countdown_label;
-  if (state.currentPage === "dashboard") $("pageTitle").textContent = open ? session.display_name : "MARKET CLOSED";
+  if (state.currentPage === "dashboard") $("pageTitle").textContent = open ? `${activeSymbol()} · ${session.display_name}` : `${activeSymbol()} · MARKET CLOSED`;
 }
 
 function renderTradeSetup(setup) {
@@ -428,7 +453,7 @@ function renderGexSummary(setup) {
   $("priceVsFlip").textContent = above ? "Above Flip" : "Below Flip";
   $("priceVsFlip").className = `v ${above ? "g" : "r"}`;
   const sourceEl = $("gexSource");
-  if (sourceEl) sourceEl.textContent = gex.source === "databento-native-nq" ? "Databento Native NQ" : gex.source;
+  if (sourceEl) sourceEl.textContent = gex.source_label || gex.source || "—";
   const normalized = 50 + Math.tanh(gex.net_gex / 1e9) * 42;
   $("gexNeedle").style.left = `${Math.max(2, Math.min(98, normalized))}%`;
 }
@@ -551,16 +576,18 @@ function drawEquity(points = []) {
 function drawChart(chartId = "chart") {
   const manager = window.TradeIQChartManager;
   if (!manager) return;
-  if (chartId === "chartLarge" && $("chartLargeStatus")) {
-    const label = state.timeframe >= 60 ? `${state.timeframe / 60}h` : `${state.timeframe}m`;
-    $("chartLargeStatus").textContent = `NASDAQ 100 E-mini · ${label} · ${state.dataSource}`;
-  }
+  if (chartId === "chartLarge" && $("chartLargeStatus")) $("chartLargeStatus").textContent = chartFeedLabel();
   manager.render(chartId, {
     candles: aggregateCandles(state.baseCandles, state.timeframe),
     setup: state.setup,
     overlays: state.overlays,
     timeframe: state.timeframe,
     dataSource: state.dataSource,
+    symbol: activeSymbol(),
+    displaySymbol: displaySymbol(),
+    instrumentName: instrumentName(),
+    tickSize: tickSize(),
+    pricePrecision: pricePrecision(),
   });
 }
 
@@ -573,9 +600,10 @@ async function initialLoad() {
     ]);
     state.baseCandles = snapshot.candles;
     state.dataSource = health.data_source === "databento" ? "DATABENTO LIVE" : health.mode.toUpperCase();
+    applyInstrument(snapshot.instrument || health.instrument || health.market?.instrument);
     $("modeLabel").textContent = state.dataSource;
     renderAll(dashboard.setup, dashboard.meta, dashboard.session || health.session);
-    $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataSource}`;
+    $("chartCaption").textContent = chartFeedLabel();
     renderHeader(snapshot);
     setConnection(true);
     await loadClaudeStatus();
@@ -588,9 +616,16 @@ async function initialLoad() {
 function connectWebSocket() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${protocol}://${location.host}/ws/market`);
+  state.socket = socket;
   socket.onopen = () => setConnection(true);
   socket.onmessage = (event) => {
+    if (state.switchingSymbol) return;
     const data = JSON.parse(event.data);
+    const incomingInstrument = data.market?.instrument;
+    if (incomingInstrument && incomingInstrument.symbol !== activeSymbol()) {
+      state.baseCandles = [];
+      applyInstrument(incomingInstrument);
+    }
     const candle = data.candle;
     const last = state.baseCandles.at(-1);
     if (last && new Date(last.time).getTime() === new Date(candle.time).getTime()) state.baseCandles[state.baseCandles.length - 1] = candle;
@@ -599,7 +634,58 @@ function connectWebSocket() {
     renderAll(data.setup, data.meta, data.session);
   };
   socket.onerror = () => socket.close();
-  socket.onclose = () => { setConnection(false); setTimeout(connectWebSocket, 2000); };
+  socket.onclose = () => {
+    if (state.socket === socket) state.socket = null;
+    setConnection(false);
+    setTimeout(connectWebSocket, 2000);
+  };
+}
+
+async function switchMarket(symbol) {
+  const selector = $("symbolSelect");
+  if (!selector || state.switchingSymbol || symbol === activeSymbol()) return;
+  state.switchingSymbol = true;
+  selector.disabled = true;
+  selector.closest(".symbol-selector")?.classList.add("busy");
+  stopClaudeStream();
+  setClaudeStatus("WAITING", "cached");
+  toast(`Switching TradeIQ to ${symbol}…`);
+  try {
+    const response = await fetch("/api/market/symbol", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol }),
+    });
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      throw new Error(failure.detail || `Market switch failed (${response.status})`);
+    }
+    const selected = await response.json();
+    const [snapshot, dashboard] = await Promise.all([
+      fetch("/api/market/snapshot?timeframe=1&limit=1400").then((item) => item.json()),
+      fetch("/api/dashboard").then((item) => item.json()),
+    ]);
+    state.baseCandles = snapshot.candles || [];
+    state.hoverIndex = null;
+    state.claude.text = "";
+    applyInstrument(snapshot.instrument || selected.instrument);
+    renderAll(dashboard.setup, dashboard.meta, dashboard.session || selected.session);
+    renderHeader(snapshot);
+    window.TradeIQChartManager?.marketChanged?.("chart");
+    window.TradeIQChartManager?.marketChanged?.("chartLarge");
+    drawChart();
+    if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
+    await loadClaudeStatus();
+    toast(`${symbol} market loaded`);
+  } catch (error) {
+    console.error(error);
+    selector.value = activeSymbol();
+    toast(error.message || "Could not switch market");
+  } finally {
+    state.switchingSymbol = false;
+    selector.disabled = false;
+    selector.closest(".symbol-selector")?.classList.remove("busy");
+  }
 }
 
 function getNewYorkParts(date = new Date()) {
@@ -628,13 +714,15 @@ function toast(message) {
 function pageRow(label, value, cls = "") {
   return `<div><span>${label}</span><b class="${cls}">${value ?? "—"}</b></div>`;
 }
-function setPage(name) {
+function setPage(name, runLoaders = true) {
   document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === `page-${name}`));
   document.querySelectorAll("#nav button[data-page]").forEach((button) => button.classList.toggle("active", button.dataset.page === name));
   state.currentPage = name;
-  const dashboardTitle = state.session ? (state.session.is_open ? state.session.display_name : "MARKET CLOSED") : "NQ TRADE ENGINE";
-  const titles = { dashboard:dashboardTitle, chart:"ADVANCED NQ CHART", gex:"GEX ANALYSIS", confluence:"CONFLUENCE ENGINE", setups:"TRADE SETUPS", alerts:"ALERT CENTER", positions:"POSITIONS", backtest:"BACKTEST LAB", settings:"SETTINGS" };
+  const symbol = activeSymbol();
+  const dashboardTitle = state.session ? (state.session.is_open ? `${symbol} · ${state.session.display_name}` : `${symbol} · MARKET CLOSED`) : `${symbol} TRADE ENGINE`;
+  const titles = { dashboard:dashboardTitle, chart:`ADVANCED ${symbol} CHART`, gex:`${symbol} GEX ANALYSIS`, confluence:`${symbol} CONFLUENCE ENGINE`, setups:`${symbol} TRADE SETUPS`, alerts:"ALERT CENTER", positions:"POSITIONS", backtest:`${symbol} BACKTEST LAB`, settings:"SETTINGS" };
   $("pageTitle").textContent = titles[name] || dashboardTitle;
+  if (!runLoaders) return;
   if (name === "chart") setTimeout(() => { drawChart("chartLarge"); if (state.claude.enabled && state.claude.auto && !state.claude.text) startClaudeAnalysis(false); }, 30);
   if (name === "setups") loadSetups();
   if (name === "alerts") loadAlertsPage();
@@ -651,9 +739,10 @@ function renderScorePage(id, components = {}, maximums = {}) {
 function renderGexPage(setup) {
   if (!setup || !$("gexProfile")) return;
   const g = setup.gex;
+  const parentNote = g.is_parent_market ? ` Parent-market levels are applied to the ${activeSymbol()} chart.` : "";
   $("gexProfile").innerHTML = `<div class="page-stats">${[
     ["Regime",g.regime],["Net GEX",fmtGex(g.net_gex)],["Gamma flip",fmt(g.gamma_flip)],["Call wall",fmt(g.call_wall)],["Put wall",fmt(g.put_wall)]
-  ].map(([label,value]) => `<div class="page-stat"><b>${value}</b><small>${label}</small></div>`).join("")}</div><p class="note">Native NQ options data when Databento is available. Dealer-side sign remains an estimate.</p>`;
+  ].map(([label,value]) => `<div class="page-stat"><b>${value}</b><small>${label}</small></div>`).join("")}</div><p class="note">GEX source: ${escapeHtml(g.source_label || g.source || "fallback")}.${parentNote} Dealer-side sign remains an estimate.</p>`;
   const levels = [
     {type:"CALL WALL",price:g.call_wall,gex:g.call_wall_gex,strength:5},
     ...(g.levels || []).slice(0,12),
@@ -704,7 +793,7 @@ $("templateReset").addEventListener("click", () => {
   document.querySelectorAll(".overlay-btn").forEach((button) => button.classList.add("active"));
   state.timeframe = 5;
   document.querySelectorAll(".tf").forEach((button) => button.classList.toggle("active", Number(button.dataset.tf) === 5));
-  $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataSource}`;
+  $("chartCaption").textContent = chartFeedLabel();
   drawChart();
   if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
   window.TradeIQChartManager?.reset("chart");
@@ -718,12 +807,12 @@ document.querySelectorAll(".overlay-btn").forEach((button) => button.addEventLis
 document.querySelectorAll(".tf").forEach((button) => button.addEventListener("click", () => {
   state.timeframe = Number(button.dataset.tf);
   document.querySelectorAll(".tf").forEach((item) => item.classList.toggle("active", Number(item.dataset.tf) === state.timeframe));
-  const label = state.timeframe >= 60 ? `${state.timeframe / 60}h` : `${state.timeframe}m`;
-  $("chartCaption").textContent = `NASDAQ 100 E-mini · ${label} · ${state.dataSource}`;
+  $("chartCaption").textContent = chartFeedLabel();
   state.hoverIndex = null; drawChart();
   if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
 }));
 document.querySelectorAll("#nav button[data-page]").forEach((item) => item.addEventListener("click", () => setPage(item.dataset.page)));
+if ($("symbolSelect")) $("symbolSelect").addEventListener("change", (event) => switchMarket(event.target.value));
 
 window.addEventListener("resize", () => { drawChart(); if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge"); if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve); });
 

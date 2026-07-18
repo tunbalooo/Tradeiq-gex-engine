@@ -99,6 +99,7 @@ class TradeEngineService:
 
     def _refresh_context(self, active: TradeSetup, candidate: TradeSetup) -> TradeSetup:
         fields = {
+            "symbol": candidate.symbol,
             "confidence": candidate.confidence, "confidence_components": candidate.confidence_components,
             "confidence_maximums": candidate.confidence_maximums, "signals": candidate.signals,
             "rationale": candidate.rationale, "gex": candidate.gex, "zones": candidate.zones,
@@ -180,6 +181,14 @@ class TradeEngineService:
     def reset(self) -> None:
         with self._lock:
             self._current = None
+            self._last_processed_candle_time = None
+
+    def reset_for_symbol(self, symbol: str) -> None:
+        with self._lock:
+            self._current = None
+            self._last_terminal = None
+            self._last_processed_candle_time = None
+            self._last_error = None
 
     def snapshot(self) -> EngineSnapshot:
         with self._lock:

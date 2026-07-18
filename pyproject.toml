@@ -1,7 +1,7 @@
 [project]
 name = "tradeiq-gex-engine"
-version = "0.1.0"
-description = "Local NQ GEX and confluence dashboard"
+version = "1.2.0"
+description = "Multi-market futures GEX and confluence dashboard"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]

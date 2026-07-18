@@ -6,6 +6,7 @@ from backend.core.config import settings
 from backend.models.schemas import GexSummary, TradeSetup
 from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service, rth_candles
+from backend.services.instruments import InstrumentProfile, instrument_registry
 from backend.services.timeframes import aggregate_candles
 from engine.confidence import DEFAULT_WEIGHTS, calculate_confidence
 from engine.confluence_cluster import find_confluence_cluster
@@ -43,21 +44,25 @@ def standard_deviation_levels(candles, vwap: float) -> tuple[float, float]:
     return vwap - sigma, vwap + sigma
 
 
-def mock_option_chain(price: float) -> list[OptionPosition]:
+def mock_option_chain(price: float, profile: InstrumentProfile | None = None) -> list[OptionPosition]:
+    instrument = profile or instrument_registry.active
     positions: list[OptionPosition] = []
-    center = round(price / 25) * 25
-    for strike in range(int(center - 300), int(center + 325), 25):
+    increment = instrument.option_strike_increment
+    center = round(price / increment) * increment
+    count = int((instrument.mock_option_width * 2) / increment)
+    for index in range(count + 1):
+        strike = center - instrument.mock_option_width + index * increment
         distance = abs(strike - center)
-        base_oi = int(650 + 5100 * exp(-distance / 155))
-        iv = .185 + distance / max(price, 1) * 2.25
-        call_boost = 2.85 if strike == center + 75 else 1.75 if strike == center + 50 else 1.0
-        put_boost = 3.0 if strike == center - 100 else 1.85 if strike == center - 75 else 1.0
+        decay = max(instrument.mock_option_width * 0.52, increment)
+        base_oi = int(650 + 5100 * exp(-distance / decay))
+        iv = instrument.default_iv + distance / max(price, 1) * 2.25
+        call_boost = 2.85 if abs(strike - (center + increment * 3)) < increment / 10 else 1.75 if abs(strike - (center + increment * 2)) < increment / 10 else 1.0
+        put_boost = 3.0 if abs(strike - (center - increment * 4)) < increment / 10 else 1.85 if abs(strike - (center - increment * 3)) < increment / 10 else 1.0
         positions.extend([
-            OptionPosition(strike, 7 / 365, "CALL", int(base_oi * call_boost), iv),
-            OptionPosition(strike, 7 / 365, "PUT", int(base_oi * put_boost), iv * 1.035),
+            OptionPosition(strike, 7 / 365, "CALL", int(base_oi * call_boost), iv, contract_multiplier=instrument.gex_contract_multiplier),
+            OptionPosition(strike, 7 / 365, "PUT", int(base_oi * put_boost), iv * 1.035, contract_multiplier=instrument.gex_contract_multiplier),
         ])
     return positions
-
 
 def proximity_score(price: float, low: float, high: float, tolerance: float) -> float:
     if low <= price <= high:
@@ -74,6 +79,7 @@ def _direction_from_structure(structure: dict, current_price: float, gex: GexSum
 
 
 def build_candidate_setup(candles_override=None) -> TradeSetup:
+    profile = instrument_registry.active
     base_candles = candles_override or market_data_service.snapshot()
     if not base_candles:
         raise RuntimeError("No market candles are available.")
@@ -92,9 +98,25 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
 
     gex = gex_service.get_summary(current_price)
     if gex is None:
-        positions = mock_option_chain(current_price)
-        raw = derive_gex_summary_from_positions(current_price, positions, flip_range_points=450)
-        raw.update({"source": "simulated-fallback", "updated_at": datetime.now(timezone.utc), "contract_count": len(positions), "expiry_count": 1, "is_estimate": True})
+        positions = mock_option_chain(current_price, profile)
+        raw = derive_gex_summary_from_positions(
+            current_price,
+            positions,
+            flip_range_points=profile.gex_strike_range_points,
+            flip_step=profile.gex_flip_step,
+        )
+        raw.update({
+            "source": "simulated-fallback",
+            "updated_at": datetime.now(timezone.utc),
+            "contract_count": len(positions),
+            "expiry_count": 1,
+            "is_estimate": True,
+            "source_symbol": profile.gex_source_symbol,
+            "applied_to_symbol": profile.symbol,
+            "options_parent": profile.options_parent,
+            "source_label": f"Fallback {profile.gex_source_label}",
+            "is_parent_market": profile.uses_parent_gex,
+        })
         gex = GexSummary(**raw)
 
     direction = _direction_from_structure(structure, current_price, gex)
@@ -108,7 +130,7 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
     atr = average_true_range(candles_5m)
 
     cluster = find_confluence_cluster(direction, ote_low, ote_high, zones, gex, atr, current_price, settings.cluster_tolerance_atr)
-    session = rth_candles(base_candles)
+    session = rth_candles(base_candles, profile=profile)
     session_high, session_low = max(c.high for c in session), min(c.low for c in session)
     vwap = calculate_vwap(session)
     std_low, std_high = standard_deviation_levels(session, vwap)
@@ -126,7 +148,7 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         previous_liquidity_low=structure["previous_liquidity_low"],
         session_high=session_high, session_low=session_low,
         sweep_price=structure["sweep_price"] if direction_sweep else None,
-        tick_size=settings.nq_tick_size,
+        tick_size=profile.tick_size,
     )
 
     analysis_price = levels["entry"] if levels["entry"] is not None else current_price
@@ -201,7 +223,7 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
     status = "WAITING_FOR_LIMIT" if actionable else "DEVELOPING" if confidence >= 55 and levels["entry_valid"] else "SCANNING"
     now = datetime.now(timezone.utc)
     return TradeSetup(
-        setup_id=f"preview-{uuid4()}", timestamp=now,
+        setup_id=f"preview-{uuid4()}", symbol=profile.symbol, timestamp=now,
         valid_until=now + timedelta(minutes=settings.setup_expiry_minutes), direction=direction,
         confidence=confidence, confidence_components=components,
         confidence_maximums={k: float(v) for k, v in DEFAULT_WEIGHTS.items()}, signals=signals,

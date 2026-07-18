@@ -1,20 +1,36 @@
-# TradeIQ GEX Engine v0.5
+# TradeIQ Multi-Market GEX Engine v1.2
 
-TradeIQ is a local/Railway NQ decision-support dashboard combining native NQ market data, estimated dealer GEX, EMA trend, liquidity, displacement/FVG, Fib/OTE, supply/demand, risk targets, lifecycle tracking, persistence, alerts, and research backtesting.
+TradeIQ is a FastAPI and browser-based futures decision-support dashboard for:
 
-## v0.5 highlights
+- NQ — E-mini Nasdaq-100
+- MNQ — Micro E-mini Nasdaq-100
+- ES — E-mini S&P 500
+- MES — Micro E-mini S&P 500
+- GC — COMEX Gold
+- MGC — Micro Gold
 
-- Every sidebar item opens a working page: Dashboard, Chart, GEX Analysis, Confluence, Trade Setups, Alerts, Positions, Backtest, and Settings.
-- One central trade-engine loop processes candles; dashboard reads no longer mutate trade state.
-- Prevents retroactive fills by recording `armed_candle_time` and processing each closed candle once.
-- Directional sequence validation: sweep → displacement → FVG within a configurable number of bars.
-- True New York RTH filtering for VWAP, session high/low, standard deviation, and daily change.
-- Databento historical range requests are clamped to available data.
-- NQ option definitions are grouped by `underlying_id` to reduce mixing different futures books.
-- PostgreSQL/Supabase support through `DATABASE_URL` and `psycopg`.
-- Persistent setup history, lifecycle transitions, alerts, and performance statistics.
-- Admin endpoints are protected with `ADMIN_TOKEN` by default.
-- 2R fallback remains active when no valid market target is available.
+The active market selector updates candles, EMA structure, supply/demand, Fib/OTE, trade levels, Claude analysis, Finnhub relevance filtering, session rules, tick size, and GEX metadata. During the current single-user development stage, the selected symbol is global for the running server.
+
+## GEX mapping
+
+| Chart | Futures feed | Options book used for GEX |
+|---|---|---|
+| NQ | `NQ.v.0` | `NQ.OPT` |
+| MNQ | `MNQ.v.0` | parent `NQ.OPT` |
+| ES | `ES.v.0` | `ES.OPT` |
+| MES | `MES.v.0` | parent `ES.OPT` |
+| GC | `GC.v.0` | `OG.OPT` |
+| MGC | `MGC.v.0` | parent `OG.OPT` |
+
+For micro charts, the interface explicitly labels the GEX as parent-market exposure. Native GEX still depends on eligible Databento option definitions, open interest, and account entitlement. If native data is unavailable, TradeIQ clearly displays the fallback estimate.
+
+## Safety boundaries
+
+- Session status never changes the confidence score.
+- The session gate only controls whether a new setup is actionable or can be armed.
+- Claude is read-only and cannot modify confidence, entries, stops, targets, GEX, or lifecycle state.
+- Finnhub news is informational and does not change engine scoring.
+- Broker execution is not enabled.
 
 ## Start locally
 
@@ -27,24 +43,31 @@ python -m uvicorn backend.main:app --reload
 
 Open `http://127.0.0.1:8000`.
 
-## Databento live mode
+## Environment
 
-Create `.env` from `.env.example` and set:
+Copy `.env.example` to `.env`. Never commit `.env`.
+
+For live Databento candles and native GEX attempts:
 
 ```env
 DATA_PROVIDER=databento
 SIMULATED_MODE=false
-DATABENTO_API_KEY=db-your-key
+DEFAULT_SYMBOL=NQ
+DATABENTO_API_KEY=your_private_key
 ```
 
-Never commit `.env`.
-
-## Supabase / PostgreSQL
-
-Use the Supabase session-pooler connection string in Railway:
+For Finnhub news:
 
 ```env
-DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/postgres?sslmode=require
+FINNHUB_API_KEY=your_private_key
+```
+
+For Claude analysis:
+
+```env
+ANTHROPIC_API_KEY=your_private_key
+ANTHROPIC_MODEL=claude-sonnet-5
+CLAUDE_ANALYSIS_ENABLED=true
 ```
 
 ## Railway
@@ -55,7 +78,16 @@ Start command:
 sh -c 'python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}'
 ```
 
-Set an `ADMIN_TOKEN` Railway variable. The Settings page uses that token only for refresh/reset actions.
+Existing Railway secrets remain unchanged. Add `DEFAULT_SYMBOL=NQ` only when a specific startup market is desired; NQ is already the default.
+
+## API additions
+
+```text
+GET  /api/instruments
+POST /api/market/symbol   body: {"symbol":"ES"}
+```
+
+The selector endpoint is intentionally global while TradeIQ is a single-user development deployment. Per-user symbol state should be moved to user sessions or Supabase when authentication is introduced.
 
 ## Tests
 
@@ -63,30 +95,8 @@ Set an `ADMIN_TOKEN` Railway variable. The Settings page uses that token only fo
 python -m pytest -q
 ```
 
-The test environment forces simulated data and does not call the paid Databento service.
+The test environment forces simulated data and disables paid external services.
 
 ## Important
 
-GEX is estimated from options open interest, volatility/gamma assumptions, and dealer-side sign conventions. TradeIQ is decision support and research software, not a guarantee of profitability and not a live broker execution system.
-
-
-## v0.9 chart-side setup
-The full Chart page displays the active Trade Setup beside the chart. Fullscreen hides the setup panel automatically; exiting fullscreen restores it.
-
-## Claude Market Analyst (optional)
-
-The Chart page can stream a read-only explanation of the current TradeIQ setup. Claude receives a compact server-side snapshot and cannot change the deterministic engine's confidence score, trade plan, lifecycle state, GEX values, or session gate.
-
-Add these values to your private `.env` and to Railway Variables:
-
-```env
-ANTHROPIC_API_KEY=your_private_key
-ANTHROPIC_MODEL=claude-sonnet-5
-CLAUDE_ANALYSIS_ENABLED=true
-CLAUDE_ANALYSIS_INTERVAL_SECONDS=300
-CLAUDE_FORCE_MIN_INTERVAL_SECONDS=60
-CLAUDE_MAX_OUTPUT_TOKENS=700
-CLAUDE_REQUEST_TIMEOUT_SECONDS=60
-```
-
-Never put `ANTHROPIC_API_KEY` in `frontend/app.js`, `frontend/trading_chart.js`, GitHub, or screenshots.
+GEX is estimated from option open interest, gamma/volatility assumptions, contract multipliers, and an assumed dealer-side sign. It is decision-support information, not a guarantee of profitability.

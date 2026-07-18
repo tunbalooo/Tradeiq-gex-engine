@@ -91,7 +91,7 @@ def calculate_gamma_flip(
     range_points: float | None = None,
     step: float = 5.0,
 ) -> float:
-    """Reprice the whole book across hypothetical NQ prices and estimate zero gamma.
+    """Reprice the whole option book across hypothetical futures prices and estimate zero gamma.
 
     This is materially better than using cumulative exposure by strike because the
     option gamma itself changes as the underlying price changes.
@@ -130,6 +130,7 @@ def derive_gex_summary_from_positions(
     futures_price: float,
     positions: list[OptionPosition],
     flip_range_points: float | None = None,
+    flip_step: float = 5.0,
 ) -> dict:
     if not positions:
         return {
@@ -155,6 +156,7 @@ def derive_gex_summary_from_positions(
         futures_price,
         positions,
         range_points=flip_range_points,
+        step=max(float(flip_step), 0.01),
     )
 
     total_abs = sum(abs(values["net"]) for values in components.values()) or 1.0

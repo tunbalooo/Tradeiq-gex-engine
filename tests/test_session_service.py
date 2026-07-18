@@ -28,3 +28,16 @@ def test_weekend_is_closed_until_sunday():
     assert status["is_open"] is False
     assert status["reason"] == "Weekend close"
     assert "2026-07-19T18:00:00" in status["next_open_at"]
+
+
+def test_gold_does_not_use_equity_index_afternoon_halt():
+    from backend.services.instruments import instrument_registry
+
+    instrument_registry.select("GC")
+    try:
+        status = get_session_status(at(2026, 7, 15, 16, 20))
+        assert status["is_open"] is True
+        assert status["exchange_status"] == "OPEN"
+        assert status["symbol"] == "GC"
+    finally:
+        instrument_registry.select("NQ")

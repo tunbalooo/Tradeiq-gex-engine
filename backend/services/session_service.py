@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from backend.services.instruments import InstrumentProfile, instrument_registry
+
 ET = ZoneInfo("America/New_York")
 
 
@@ -18,24 +20,27 @@ def _next_sunday_1800(now_et: datetime) -> datetime:
     return target
 
 
-def _session_name(now_et: datetime) -> tuple[str, str, datetime]:
+def _session_name(now_et: datetime, profile: InstrumentProfile) -> tuple[str, str, datetime]:
     minutes = now_et.hour * 60 + now_et.minute
+    rth_start = profile.rth_start_hour * 60 + profile.rth_start_minute
+    rth_end = profile.rth_end_hour * 60 + profile.rth_end_minute
     if minutes >= 18 * 60 or minutes < 3 * 60:
         end = _at(now_et, 3) if minutes < 3 * 60 else _at(now_et + timedelta(days=1), 3)
         return "ASIA", "ASIA SESSION", end
-    if minutes < 9 * 60 + 30:
-        return "LONDON", "LONDON SESSION", _at(now_et, 9, 30)
-    if minutes < 16 * 60:
-        return "NEW_YORK", "NEW YORK SESSION", _at(now_et, 16)
+    if minutes < rth_start:
+        return "LONDON", "LONDON SESSION", _at(now_et, profile.rth_start_hour, profile.rth_start_minute)
+    if minutes < rth_end:
+        return "NEW_YORK", "NEW YORK SESSION", _at(now_et, profile.rth_end_hour, profile.rth_end_minute)
     return "GLOBEX", "GLOBEX SESSION", _at(now_et, 17)
 
 
 def get_session_status(now: datetime | None = None) -> dict:
-    """Return CME Globex availability and the strategy session label.
+    """Return CME Globex availability and the active instrument's strategy session.
 
-    This gate is deliberately separate from the confidence score. It controls whether
-    a new setup may be armed, but never changes confluence weights or confidence.
+    The gate is deliberately separate from confidence. It only controls whether a
+    new setup may be armed and never changes confluence weights or confidence.
     """
+    profile = instrument_registry.active
     now_utc = now.astimezone(timezone.utc) if now else datetime.now(timezone.utc)
     now_et = now_utc.astimezone(ET)
     weekday = now_et.weekday()  # Mon=0 ... Sun=6
@@ -67,15 +72,15 @@ def get_session_status(now: datetime | None = None) -> dict:
         is_open = False
         reason = "Daily maintenance"
         next_open = _at(now_et, 18)
-    # Equity-index trading halt on normal weekdays.
-    elif weekday in {0, 1, 2, 3, 4} and 16 * 60 + 15 <= minutes < 16 * 60 + 30:
+    # Equity-index futures have a normal weekday 16:15-16:30 ET halt.
+    elif profile.has_equity_halt and weekday in {0, 1, 2, 3, 4} and 16 * 60 + 15 <= minutes < 16 * 60 + 30:
         is_open = False
         exchange_status = "HALT"
         reason = "Scheduled trading halt"
         next_open = _at(now_et, 16, 30)
 
     if is_open:
-        session_name, display_name, session_end = _session_name(now_et)
+        session_name, display_name, session_end = _session_name(now_et, profile)
         next_transition = session_end
         countdown_target = session_end
         countdown_label = "SESSION CHANGES IN"
@@ -91,6 +96,9 @@ def get_session_status(now: datetime | None = None) -> dict:
         "is_open": is_open,
         "can_trade_now": is_open,
         "reason": reason,
+        "symbol": profile.symbol,
+        "instrument_name": profile.name,
+        "rth_hours": f"{profile.rth_start_hour:02d}:{profile.rth_start_minute:02d}-{profile.rth_end_hour:02d}:{profile.rth_end_minute:02d} ET",
         "time_zone": "America/New_York",
         "now": now_et.isoformat(),
         "next_open_at": next_open.isoformat() if next_open else None,

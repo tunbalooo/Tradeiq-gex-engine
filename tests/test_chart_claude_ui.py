@@ -9,7 +9,7 @@ APP = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 def test_chart_page_uses_requested_tradeiq_toolbar():
     for marker in [
         'class="tradeiq-chart-bar"',
-        'class="chart-brand-title">Trade<span>IQ</span> · NQ',
+        'id="chartBrandTitle">Trade<span>IQ</span> · FUTURES',
         'data-tf="1"',
         'data-tf="3"',
         'data-tf="5"',

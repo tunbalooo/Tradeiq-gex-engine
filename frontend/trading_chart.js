@@ -64,11 +64,11 @@
     return candles.map((candle) => ({ time: candle.time, value: candle.close }));
   }
 
-  function formatPrice(value) {
+  function formatPrice(value, precision = 2) {
     if (!Number.isFinite(Number(value))) return "—";
     return Number(value).toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+      minimumFractionDigits: precision,
+      maximumFractionDigits: precision,
     });
   }
 
@@ -192,6 +192,11 @@
       drawMode: "cursor",
       autoScale: true,
       overlayFrame: null,
+      symbol: "NQ",
+      displaySymbol: "NQ1!",
+      instrumentName: "E-mini Nasdaq-100",
+      tickSize: 0.25,
+      pricePrecision: 2,
     };
 
     chart.subscribeCrosshairMove((param) => updateLegend(instance, param));
@@ -214,11 +219,12 @@
     if (param?.seriesData?.get) candle = param.seriesData.get(instance.candleSeries);
     if (!candle) candle = instance.data.at(-1);
     if (!candle) {
-      legend.textContent = "NQ1! · waiting for data";
+      legend.textContent = `${instance.displaySymbol} · waiting for data`;
       return;
     }
     const positive = candle.close >= candle.open;
-    legend.innerHTML = `<b>NQ1!</b><span>${etTime(candle.time)} ET</span><span>O ${formatPrice(candle.open)}</span><span>H ${formatPrice(candle.high)}</span><span>L ${formatPrice(candle.low)}</span><span class="${positive ? "g" : "r"}">C ${formatPrice(candle.close)}</span>`;
+    const digits = instance.pricePrecision;
+    legend.innerHTML = `<b>${instance.displaySymbol}</b><span>${etTime(candle.time)} ET</span><span>O ${formatPrice(candle.open, digits)}</span><span>H ${formatPrice(candle.high, digits)}</span><span>L ${formatPrice(candle.low, digits)}</span><span class="${positive ? "g" : "r"}">C ${formatPrice(candle.close, digits)}</span>`;
   }
 
   function handleChartClick(instance, param) {
@@ -443,10 +449,11 @@
   function applyData(instance, data) {
     const previous = instance.data;
     const sameTimeframe = instance.timeframe === data.timeframe;
+    const sameSymbol = instance.symbol === data.symbol;
     const candles = normaliseCandles(data.candles);
     const last = candles.at(-1);
     const oldLast = previous.at(-1);
-    const canIncrement = sameTimeframe && oldLast && last && candles.length >= previous.length && candles.length <= previous.length + 1;
+    const canIncrement = sameTimeframe && sameSymbol && oldLast && last && candles.length >= previous.length && candles.length <= previous.length + 1;
 
     if (canIncrement) {
       instance.candleSeries.update(last);
@@ -467,11 +474,12 @@
 
     instance.data = candles;
     instance.timeframe = data.timeframe;
+    instance.symbol = data.symbol;
     instance.ema9.applyOptions({ visible: Boolean(data.overlays?.emas) });
     instance.ema21.applyOptions({ visible: Boolean(data.overlays?.emas) });
     instance.ema55.applyOptions({ visible: Boolean(data.overlays?.emas) });
 
-    if (instance.firstRender || !sameTimeframe) {
+    if (instance.firstRender || !sameTimeframe || !sameSymbol) {
       instance.firstRender = false;
       requestAnimationFrame(() => {
         const count = candles.length;
@@ -487,8 +495,22 @@
   function render(id, data) {
     const instance = instances.get(id) || createInstance(id);
     if (!instance) return;
+    const changedSymbol = instance.symbol !== data.symbol;
     instance.setup = data.setup || null;
     instance.overlays = { ...(data.overlays || {}) };
+    instance.displaySymbol = data.displaySymbol || `${data.symbol || "NQ"}1!`;
+    instance.instrumentName = data.instrumentName || "Futures market";
+    instance.tickSize = Number(data.tickSize || 0.25);
+    instance.pricePrecision = Number.isInteger(data.pricePrecision) ? data.pricePrecision : 2;
+    instance.candleSeries.applyOptions({ priceFormat: { type: "price", precision: instance.pricePrecision, minMove: instance.tickSize } });
+    instance.chart.applyOptions({ localization: { priceFormatter: (price) => formatPrice(price, instance.pricePrecision), timeFormatter: (time) => etTime(time) } });
+    if (changedSymbol) {
+      instance.firstRender = true;
+      instance.data = [];
+      clearSystemPriceLines(instance);
+      instance.userPriceLines.forEach((line) => { try { instance.candleSeries.removePriceLine(line); } catch (_) { /* stale */ } });
+      instance.userPriceLines = [];
+    }
     applyData(instance, data);
     rebuildPriceLines(instance);
     scheduleOverlay(instance);
@@ -497,8 +519,19 @@
     const caption = document.getElementById(`${id}Status`);
     if (caption) {
       const tf = Number(data.timeframe) >= 60 ? `${Number(data.timeframe) / 60}h` : `${data.timeframe}m`;
-      caption.textContent = `NASDAQ 100 E-mini · ${tf} · ${data.dataSource || "CONNECTING"}`;
+      caption.textContent = `${instance.instrumentName} · ${tf} · ${data.dataSource || "CONNECTING"}`;
     }
+  }
+
+  function marketChanged(id) {
+    const instance = instances.get(id);
+    if (!instance) return;
+    instance.firstRender = true;
+    instance.data = [];
+    instance.timeframe = null;
+    clearSystemPriceLines(instance);
+    instance.userPriceLines.forEach((line) => { try { instance.candleSeries.removePriceLine(line); } catch (_) { /* stale */ } });
+    instance.userPriceLines = [];
   }
 
   function reset(id) {
@@ -510,5 +543,5 @@
     scheduleOverlay(instance);
   }
 
-  window.TradeIQChartManager = { render, reset, instances };
+  window.TradeIQChartManager = { render, reset, marketChanged, instances };
 })();

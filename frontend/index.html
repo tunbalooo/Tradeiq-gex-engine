@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>TradeIQ — NQ Trade Engine</title>
+<title>TradeIQ — Multi-Market Futures Engine</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=10" />
+<link rel="stylesheet" href="/static/styles.css?v=12" />
 </head>
 <body>
 <div class="app">
@@ -43,8 +43,14 @@
 
   <div class="main">
     <div class="topbar">
-      <div class="title" id="pageTitle">NQ TRADE ENGINE</div>
-      <div class="symbol-pill">NQ1! <span class="m">▾</span></div>
+      <div class="title" id="pageTitle">TRADEIQ FUTURES ENGINE</div>
+      <label class="symbol-pill symbol-selector" aria-label="Active futures market">
+        <select id="symbolSelect">
+          <option value="NQ">NQ</option><option value="MNQ">MNQ</option>
+          <option value="ES">ES</option><option value="MES">MES</option>
+          <option value="GC">GC</option><option value="MGC">MGC</option>
+        </select><span class="m">▾</span>
+      </label>
       <div class="price-lg" id="hdrPrice">—</div>
       <div class="mono g" id="hdrChg">—</div>
       <div class="live">
@@ -65,7 +71,7 @@
             <button class="tool-btn" id="indicatorToggle">Indicators</button>
             <button class="tool-btn" id="templateReset">Reset View</button>
             <span class="spacer"></span>
-            <span class="m mono chart-caption" id="chartCaption">NASDAQ 100 E-mini · 5m · CONNECTING</span>
+            <span class="m mono chart-caption" id="chartCaption">Futures market · 5m · CONNECTING</span>
           </div>
           <div class="indicator-strip" id="indicatorStrip">
             <button class="overlay-btn active" data-overlay="emas">EMAs</button>
@@ -77,8 +83,8 @@
           </div>
           <div id="chartWrap">
             <div class="tv-chart-surface compact" data-chart-id="chart">
-              <div id="chart" class="tv-chart-host" aria-label="Interactive NQ chart"></div>
-              <div class="tv-ohlc" id="chartOhlc">NQ1! · waiting for data</div>
+              <div id="chart" class="tv-chart-host" aria-label="Interactive futures chart"></div>
+              <div class="tv-ohlc" id="chartOhlc">FUTURES · waiting for data</div>
               <div class="tv-nav-controls" data-chart-id="chart" aria-label="Chart navigation controls">
                 <button type="button" data-chart-action="zoom-out" title="Zoom out">−</button>
                 <button type="button" data-chart-action="zoom-in" title="Zoom in">+</button>
@@ -115,7 +121,7 @@
             <div class="panel-b table-pad"><table><tbody id="alerts"></tbody></table></div>
           </div>
           <div class="panel">
-            <div class="panel-h"><h3>Market News · Finnhub</h3></div>
+            <div class="panel-h"><h3 id="newsPanelTitle">Market News · Finnhub</h3></div>
             <div class="panel-b table-pad"><table><tbody id="news"></tbody></table></div>
           </div>
           <div class="panel">
@@ -202,7 +208,7 @@
       <div class="page-shell chart-page-shell">
         <div class="panel page-panel tv-full-panel">
           <div class="tradeiq-chart-bar" data-chart-id="chartLarge">
-            <div class="chart-brand-title">Trade<span>IQ</span> · NQ</div>
+            <div class="chart-brand-title" id="chartBrandTitle">Trade<span>IQ</span> · FUTURES</div>
             <div class="tv-timeframes chart-tfs">
               <span class="tf" data-tf="1">1m</span>
               <span class="tf" data-tf="3">3m</span>
@@ -220,7 +226,7 @@
             </div>
           </div>
           <div class="chart-command-bar" data-chart-id="chartLarge">
-            <div class="chart-feed-status" id="chartLargeStatus">NASDAQ 100 E-mini · 5m · CONNECTING</div>
+            <div class="chart-feed-status" id="chartLargeStatus">Futures market · 5m · CONNECTING</div>
             <div class="tv-terminal-actions chart-mode-actions">
               <button type="button" class="active" data-chart-style="candles" data-chart-action="candles">Candles</button>
               <button type="button" data-chart-style="line" data-chart-action="line">Line</button>
@@ -241,8 +247,8 @@
                 <button type="button" data-chart-action="clear-drawing" title="Remove last drawing">⌫</button>
               </div>
               <div class="tv-chart-surface full" data-chart-id="chartLarge">
-                <div id="chartLarge" class="tv-chart-host" aria-label="Full interactive NQ chart"></div>
-                <div class="tv-ohlc large" id="chartLargeOhlc">NQ1! · waiting for data</div>
+                <div id="chartLarge" class="tv-chart-host" aria-label="Full interactive futures chart"></div>
+                <div class="tv-ohlc large" id="chartLargeOhlc">FUTURES · waiting for data</div>
                 <div class="tv-nav-controls large-nav" data-chart-id="chartLarge">
                   <button type="button" data-chart-action="zoom-out" title="Zoom out">−</button>
                   <button type="button" data-chart-action="zoom-in" title="Zoom in">+</button>
@@ -354,7 +360,7 @@
 </div>
 <div id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js" onerror="this.onerror=null;this.src='https://unpkg.com/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js'"></script>
-<script src="/static/trading_chart.js?v=10"></script>
-<script src="/static/app.js?v=10"></script>
+<script src="/static/trading_chart.js?v=12"></script>
+<script src="/static/app.js?v=12"></script>
 </body>
 </html>

@@ -37,6 +37,12 @@ button{font:inherit;border:0;background:none}
 .topbar{height:56px;display:flex;align-items:center;gap:22px;padding:0 20px;background:var(--bg2);border-bottom:1px solid var(--line)}
 .topbar .title{font-weight:700;font-size:15px;letter-spacing:.6px;color:var(--green)}
 .symbol-pill{display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--line2);border-radius:8px;padding:6px 12px;font-family:var(--mono);font-weight:600;cursor:pointer}
+.symbol-selector{position:relative;transition:border-color .18s,opacity .18s}
+.symbol-selector:hover{border-color:#35506f}
+.symbol-selector.busy{opacity:.62;cursor:wait}
+.symbol-selector select{appearance:none;-webkit-appearance:none;border:0;outline:0;background:transparent;color:var(--text);font:600 12px var(--mono);letter-spacing:.4px;cursor:pointer;padding:0 2px;min-width:42px}
+.symbol-selector select:disabled{cursor:wait}
+.symbol-selector option{background:var(--bg3);color:var(--text)}
 .price-lg{font-family:var(--mono);font-size:24px;font-weight:700;letter-spacing:.5px}
 #hdrChg{font-size:13px}.live{display:flex;align-items:center;gap:7px;margin-left:auto;font-weight:600;font-size:12px}#clock{color:var(--text)}
 .mode-badge{font-family:var(--mono);font-size:9px;letter-spacing:.8px;padding:3px 6px;border:1px solid var(--amber);color:var(--amber);border-radius:4px}

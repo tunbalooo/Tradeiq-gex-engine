@@ -8,7 +8,8 @@ class Settings(BaseSettings):
 
     data_provider: str = "simulated"
     simulated_mode: bool = True
-    simulation_symbol: str = "NQ"
+    default_symbol: str = "NQ"
+    simulation_symbol: str = "NQ"  # backwards-compatible alias
     simulation_start_price: float = 24892.25
     update_interval_seconds: int = 2
     engine_cycle_seconds: int = 2
@@ -27,13 +28,13 @@ class Settings(BaseSettings):
     gex_expiry_count: int = 6
     gex_default_iv: float = 0.20
     gex_risk_free_rate: float = 0.045
-    nq_contract_multiplier: int = 20
+    nq_contract_multiplier: int = 20  # deprecated: instrument registry supplies multipliers
 
     setup_actionable_score: float = 75.0
     setup_expiry_minutes: int = 30
     cluster_min_score: float = 0.65
     cluster_tolerance_atr: float = 0.25
-    nq_tick_size: float = 0.25
+    nq_tick_size: float = 0.25  # deprecated: instrument registry supplies tick sizes
     event_sequence_max_bars: int = 4
     event_max_age_bars: int = 12
 

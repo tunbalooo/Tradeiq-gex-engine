@@ -9,46 +9,46 @@ import httpx
 
 from backend.core.config import settings
 from backend.models.schemas import NewsItem
+from backend.services.instruments import get_instrument, instrument_registry
 
 
 class FinnhubNewsService:
-    """Small cached Finnhub connector for the TradeIQ news panel.
+    """Cached Finnhub connector with instrument-aware relevance scoring.
 
     The connector is informational only. It does not alter confidence,
     actionable state, order arming, stops, or targets.
     """
 
     BASE_URL = "https://finnhub.io/api/v1"
-    NQ_TERMS = (
-        "nasdaq", "nasdaq 100", "nq", "technology", "tech stocks",
-        "federal reserve", "fed", "fomc", "inflation", "cpi", "ppi",
-        "payroll", "jobs report", "treasury", "yield", "interest rate",
-        "nvidia", "nvda", "microsoft", "msft", "apple", "aapl",
-        "amazon", "amzn", "meta", "tesla", "tsla", "alphabet", "google",
-    )
 
     def __init__(self) -> None:
         self._lock = Lock()
-        self._cached: list[NewsItem] = []
-        self._cached_at = 0.0
-        self._last_error: str | None = None
-        self._last_success_at: datetime | None = None
+        self._cached: dict[str, list[NewsItem]] = {}
+        self._cached_at: dict[str, float] = {}
+        self._last_error: dict[str, str | None] = {}
+        self._last_success_at: dict[str, datetime | None] = {}
 
     @property
     def enabled(self) -> bool:
         return bool(settings.finnhub_api_key)
 
-    def status(self) -> dict[str, Any]:
+    def status(self, symbol: str | None = None) -> dict[str, Any]:
+        profile = get_instrument(symbol) if symbol else instrument_registry.active
+        key = profile.symbol
         return {
             "enabled": self.enabled,
             "source": "finnhub" if self.enabled else "not-configured",
-            "cached_items": len(self._cached),
-            "last_success_at": self._last_success_at.isoformat() if self._last_success_at else None,
-            "last_error": self._last_error,
+            "symbol": key,
+            "market_family": profile.family,
+            "cached_items": len(self._cached.get(key, [])),
+            "last_success_at": self._last_success_at.get(key).isoformat() if self._last_success_at.get(key) else None,
+            "last_error": self._last_error.get(key),
             "refresh_seconds": settings.finnhub_news_refresh_seconds,
         }
 
-    def latest(self, limit: int = 8) -> list[NewsItem]:
+    def latest(self, limit: int = 8, symbol: str | None = None) -> list[NewsItem]:
+        profile = get_instrument(symbol) if symbol else instrument_registry.active
+        key = profile.symbol
         if not self.enabled:
             return [NewsItem(
                 time="—",
@@ -58,32 +58,34 @@ class FinnhubNewsService:
             )]
 
         now = monotonic()
-        if self._cached and now - self._cached_at < settings.finnhub_news_refresh_seconds:
-            return self._cached[:limit]
+        cached = self._cached.get(key, [])
+        if cached and now - self._cached_at.get(key, 0.0) < settings.finnhub_news_refresh_seconds:
+            return cached[:limit]
 
         with self._lock:
             now = monotonic()
-            if self._cached and now - self._cached_at < settings.finnhub_news_refresh_seconds:
-                return self._cached[:limit]
+            cached = self._cached.get(key, [])
+            if cached and now - self._cached_at.get(key, 0.0) < settings.finnhub_news_refresh_seconds:
+                return cached[:limit]
             try:
-                items = self._fetch_general_news()
-                self._cached = items
-                self._cached_at = monotonic()
-                self._last_error = None
-                self._last_success_at = datetime.now(timezone.utc)
+                items = self._fetch_general_news(profile.news_terms)
+                self._cached[key] = items
+                self._cached_at[key] = monotonic()
+                self._last_error[key] = None
+                self._last_success_at[key] = datetime.now(timezone.utc)
             except Exception as exc:  # keep dashboard usable during provider failure
-                self._last_error = str(exc)[:300]
-                if not self._cached:
-                    self._cached = [NewsItem(
+                self._last_error[key] = str(exc)[:300]
+                if not cached:
+                    self._cached[key] = [NewsItem(
                         time="—",
-                        event="Finnhub news is temporarily unavailable",
+                        event=f"Finnhub {profile.symbol} news is temporarily unavailable",
                         impact="Low",
                         source="Finnhub",
                     )]
-                    self._cached_at = monotonic()
-            return self._cached[:limit]
+                    self._cached_at[key] = monotonic()
+            return self._cached.get(key, [])[:limit]
 
-    def _fetch_general_news(self) -> list[NewsItem]:
+    def _fetch_general_news(self, terms: tuple[str, ...]) -> list[NewsItem]:
         headers = {"X-Finnhub-Token": settings.finnhub_api_key or ""}
         with httpx.Client(timeout=settings.finnhub_request_timeout_seconds, headers=headers) as client:
             response = client.get(f"{self.BASE_URL}/news", params={"category": "general", "minId": 0})
@@ -102,7 +104,7 @@ class FinnhubNewsService:
             if not headline:
                 continue
             text = f"{headline} {summary}".lower()
-            relevance = sum(1 for term in self.NQ_TERMS if term in text)
+            relevance = sum(1 for term in terms if term in text)
             timestamp = int(raw.get("datetime") or 0)
             impact = "High" if relevance >= 2 else "Med" if relevance == 1 else "Low"
             published = datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone() if timestamp else None
