@@ -7,6 +7,7 @@ from uuid import uuid4
 from backend.core.config import settings
 from backend.models.schemas import EngineSnapshot, TradeSetup
 from backend.services.market_data import market_data_service
+from backend.services.session_service import get_session_status
 from backend.services.setup_service import build_candidate_setup
 from backend.services.storage_service import storage_service
 
@@ -74,6 +75,15 @@ class TradeEngineService:
             return self.current_setup()
 
     def _maybe_arm(self, candidate: TradeSetup, candle) -> TradeSetup:
+        session = get_session_status()
+        if not session["can_trade_now"]:
+            # Preserve the calculated confidence and every confluence component.
+            # Session status is only a separate permission gate for new orders.
+            return candidate.model_copy(update={
+                "order_state": "PREVIEW_ONLY",
+                "actionable": False,
+                "status": "MARKET_CLOSED",
+            })
         if not candidate.actionable:
             return candidate.model_copy(update={"order_state": "PREVIEW_ONLY", "actionable": False})
         now = datetime.now(timezone.utc)

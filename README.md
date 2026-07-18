@@ -52,7 +52,7 @@ DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/postgres?sslmode=requi
 Start command:
 
 ```bash
-uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+sh -c 'python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}'
 ```
 
 Set an `ADMIN_TOKEN` Railway variable. The Settings page uses that token only for refresh/reset actions.
@@ -68,3 +68,25 @@ The test environment forces simulated data and does not call the paid Databento 
 ## Important
 
 GEX is estimated from options open interest, volatility/gamma assumptions, and dealer-side sign conventions. TradeIQ is decision support and research software, not a guarantee of profitability and not a live broker execution system.
+
+
+## v0.9 chart-side setup
+The full Chart page displays the active Trade Setup beside the chart. Fullscreen hides the setup panel automatically; exiting fullscreen restores it.
+
+## Claude Market Analyst (optional)
+
+The Chart page can stream a read-only explanation of the current TradeIQ setup. Claude receives a compact server-side snapshot and cannot change the deterministic engine's confidence score, trade plan, lifecycle state, GEX values, or session gate.
+
+Add these values to your private `.env` and to Railway Variables:
+
+```env
+ANTHROPIC_API_KEY=your_private_key
+ANTHROPIC_MODEL=claude-sonnet-5
+CLAUDE_ANALYSIS_ENABLED=true
+CLAUDE_ANALYSIS_INTERVAL_SECONDS=300
+CLAUDE_FORCE_MIN_INTERVAL_SECONDS=60
+CLAUDE_MAX_OUTPUT_TOKENS=700
+CLAUDE_REQUEST_TIMEOUT_SECONDS=60
+```
+
+Never put `ANTHROPIC_API_KEY` in `frontend/app.js`, `frontend/trading_chart.js`, GitHub, or screenshots.

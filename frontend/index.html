@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css" />
+<link rel="stylesheet" href="/static/styles.css?v=10" />
 </head>
 <body>
 <div class="app">
@@ -34,8 +34,8 @@
       <div id="overview"><div class="loading">Connecting…</div></div>
     </div>
     <div class="side-card session">
-      <div class="eyebrow">Session · New York (RTH)</div>
-      <div class="m mono session-hours">Open 09:30–16:00 ET</div>
+      <div class="eyebrow" id="sessionCardTitle">Market Session</div>
+      <div class="m mono session-hours" id="sessionHours">Checking CME Globex…</div>
       <div class="clock g" id="sessionTimer">00:00:00</div>
       <div class="m session-state" id="sessionState">Checking session…</div>
     </div>
@@ -76,8 +76,18 @@
             <button class="overlay-btn active" data-overlay="vwap">VWAP / σ</button>
           </div>
           <div id="chartWrap">
-            <canvas id="chart"></canvas>
-            <div class="chart-tooltip" id="chartTooltip"></div>
+            <div class="tv-chart-surface compact" data-chart-id="chart">
+              <div id="chart" class="tv-chart-host" aria-label="Interactive NQ chart"></div>
+              <div class="tv-ohlc" id="chartOhlc">NQ1! · waiting for data</div>
+              <div class="tv-nav-controls" data-chart-id="chart" aria-label="Chart navigation controls">
+                <button type="button" data-chart-action="zoom-out" title="Zoom out">−</button>
+                <button type="button" data-chart-action="zoom-in" title="Zoom in">+</button>
+                <button type="button" data-chart-action="pan-left" title="Move left">‹</button>
+                <button type="button" data-chart-action="pan-right" title="Move right">›</button>
+                <button type="button" data-chart-action="recenter" title="Recenter on latest price">↻</button>
+              </div>
+              <a class="tv-attribution compact-credit" href="https://www.tradingview.com/" target="_blank" rel="noopener">Charts by TradingView</a>
+            </div>
           </div>
         </div>
 
@@ -151,7 +161,8 @@
             <div class="setup-row"><span class="k">Risk / Reward</span><span class="v" id="setupRr">—</span></div>
             <div class="setup-row"><span class="k">Setup Status</span><span class="v a" id="setupStatus">—</span></div>
             <div class="setup-row"><span class="k">Cluster</span><span class="v" id="setupCluster">—</span></div>
-            <div class="setup-row"><span class="k">Valid Until</span><span class="v" id="setupValid">—</span></div>
+            <div class="setup-row"><span class="k">Session</span><span class="v" id="setupSession">—</span></div>
+            <div class="setup-row"><span class="k" id="validLabel">Valid Until</span><span class="v" id="setupValid">—</span></div>
           </div>
         </div>
 
@@ -188,22 +199,113 @@
     </section>
 
     <section class="page" id="page-chart">
-      <div class="page-shell">
-        <div class="panel page-panel">
-          <div class="panel-h"><h3>Advanced NQ Chart</h3><span class="m mono">Same live engine · expanded view</span></div>
-          <div class="chart-toolbar page-toolbar">
-            <span class="tf" data-tf="1">1m</span><span class="tf" data-tf="2">2m</span><span class="tf" data-tf="3">3m</span>
-            <span class="tf active" data-tf="5">5m</span><span class="tf" data-tf="15">15m</span><span class="tf" data-tf="60">1h</span><span class="tf" data-tf="240">4h</span>
+      <div class="page-shell chart-page-shell">
+        <div class="panel page-panel tv-full-panel">
+          <div class="tradeiq-chart-bar" data-chart-id="chartLarge">
+            <div class="chart-brand-title">Trade<span>IQ</span> · NQ</div>
+            <div class="tv-timeframes chart-tfs">
+              <span class="tf" data-tf="1">1m</span>
+              <span class="tf" data-tf="3">3m</span>
+              <span class="tf active" data-tf="5">5m</span>
+              <span class="tf" data-tf="15">15m</span>
+              <span class="tf" data-tf="60">1h</span>
+            </div>
+            <div class="chart-overlay-toggles" aria-label="Chart overlays">
+              <button class="overlay-btn active" data-overlay="emas">EMAs</button>
+              <button class="overlay-btn active" data-overlay="gex">GEX</button>
+              <button class="overlay-btn active" data-overlay="fib">Fib/OTE</button>
+              <button class="overlay-btn active" data-overlay="zones">S&amp;D</button>
+              <button class="overlay-btn active" data-overlay="trade">Entry/SL/TP</button>
+              <button class="overlay-btn active" data-overlay="vwap">VWAP/σ</button>
+            </div>
           </div>
-          <div class="indicator-strip page-indicators">
-            <button class="overlay-btn active" data-overlay="emas">EMAs</button>
-            <button class="overlay-btn active" data-overlay="gex">GEX</button>
-            <button class="overlay-btn active" data-overlay="fib">Fib / OTE</button>
-            <button class="overlay-btn active" data-overlay="zones">S&amp;D</button>
-            <button class="overlay-btn active" data-overlay="trade">Entry / SL / TP</button>
-            <button class="overlay-btn active" data-overlay="vwap">VWAP / σ</button>
+          <div class="chart-command-bar" data-chart-id="chartLarge">
+            <div class="chart-feed-status" id="chartLargeStatus">NASDAQ 100 E-mini · 5m · CONNECTING</div>
+            <div class="tv-terminal-actions chart-mode-actions">
+              <button type="button" class="active" data-chart-style="candles" data-chart-action="candles">Candles</button>
+              <button type="button" data-chart-style="line" data-chart-action="line">Line</button>
+              <button type="button" data-chart-action="autoscale" class="active">Auto</button>
+              <button type="button" data-chart-action="fit">Fit</button>
+              <button type="button" data-chart-action="recenter">Real time</button>
+              <button type="button" data-chart-action="fullscreen" title="Fullscreen">⛶</button>
+            </div>
           </div>
-          <canvas id="chartLarge"></canvas>
+
+          <div class="tv-chart-layout">
+            <div class="tv-workstation" data-chart-id="chartLarge">
+              <div class="tv-left-tools" aria-label="Chart tools">
+                <button type="button" class="active" data-draw-mode="cursor" title="Cursor">↖</button>
+                <button type="button" data-draw-mode="crosshair" data-chart-action="crosshair" title="Crosshair">╳</button>
+                <button type="button" data-draw-mode="magnet" data-chart-action="magnet" title="Magnet crosshair">🧲</button>
+                <button type="button" data-draw-mode="hline" title="Add horizontal line">─</button>
+                <button type="button" data-chart-action="clear-drawing" title="Remove last drawing">⌫</button>
+              </div>
+              <div class="tv-chart-surface full" data-chart-id="chartLarge">
+                <div id="chartLarge" class="tv-chart-host" aria-label="Full interactive NQ chart"></div>
+                <div class="tv-ohlc large" id="chartLargeOhlc">NQ1! · waiting for data</div>
+                <div class="tv-nav-controls large-nav" data-chart-id="chartLarge">
+                  <button type="button" data-chart-action="zoom-out" title="Zoom out">−</button>
+                  <button type="button" data-chart-action="zoom-in" title="Zoom in">+</button>
+                  <button type="button" data-chart-action="pan-left" title="Move left">‹</button>
+                  <button type="button" data-chart-action="pan-right" title="Move right">›</button>
+                  <button type="button" data-chart-action="recenter" title="Recenter">↻</button>
+                </div>
+                <div class="chart-interaction-note">Scroll to zoom · drag to pan · double-click price scale to reset</div>
+                <a class="tv-attribution" href="https://www.tradingview.com/" target="_blank" rel="noopener">Powered by TradingView Lightweight Charts™</a>
+              </div>
+            </div>
+
+            <div class="tv-chart-rail" id="chartSideRail">
+              <aside class="tv-chart-setup" id="chartSetupPanel" aria-label="Live trade setup">
+                <div class="tv-chart-setup-head">
+                  <h3>Trade Setup</h3>
+                  <span class="mono m" id="chartSetupLabel">SCANNING</span>
+                </div>
+                <div class="tv-chart-setup-body">
+                  <div class="chart-setup-confidence">
+                    <div class="chart-confidence-ring" id="chartConfidenceRing"><b id="chartConfidencePct">—</b></div>
+                    <div class="chart-confidence-copy">
+                      <b id="chartProbabilityLabel">Scanning</b>
+                      <small id="chartCoreAlignment">Waiting for engine data</small>
+                    </div>
+                  </div>
+                  <div class="chart-setup-row"><span>Direction</span><b id="chartSetupDirection">—</b></div>
+                  <div class="chart-setup-row"><span id="chartEntryLabel">Limit Entry</span><b class="a" id="chartSetupEntry">—</b></div>
+                  <div class="chart-setup-row"><span>Stop Loss</span><b class="r" id="chartSetupStop">—</b></div>
+                  <div class="chart-setup-row"><span>Take Profit 1</span><b class="g" id="chartSetupTp1">—</b></div>
+                  <div class="chart-setup-row"><span>TP1 Source</span><b id="chartSetupTp1Source">—</b></div>
+                  <div class="chart-setup-row"><span>Take Profit 2</span><b class="g" id="chartSetupTp2">—</b></div>
+                  <div class="chart-setup-row"><span>TP2 Source</span><b id="chartSetupTp2Source">—</b></div>
+                  <div class="chart-setup-row"><span>Risk / Reward</span><b id="chartSetupRr">—</b></div>
+                  <div class="chart-setup-row"><span>Setup Status</span><b class="a" id="chartSetupStatus">Scanning</b></div>
+                  <div class="chart-setup-row"><span>Cluster</span><b id="chartSetupCluster">—</b></div>
+                  <div class="chart-setup-session">
+                    <div><span>Session</span><b id="chartSetupSession">—</b></div>
+                    <div><span id="chartValidLabel">Valid Until</span><b id="chartSetupValid">—</b></div>
+                  </div>
+                </div>
+              </aside>
+
+              <aside class="claude-panel" id="claudePanel" aria-label="Claude market analyst">
+                <div class="claude-panel-head">
+                  <div>
+                    <h3>Claude Market Analyst</h3>
+                    <small>Read-only explanation of TradeIQ engine data</small>
+                  </div>
+                  <span class="claude-status" id="claudeStatus">CHECKING</span>
+                </div>
+                <div class="claude-actions">
+                  <button type="button" id="claudeAnalyze">Analyze now</button>
+                  <label><input type="checkbox" id="claudeAuto" checked> Auto</label>
+                  <span id="claudeModel" class="mono m">—</span>
+                </div>
+                <div class="claude-analysis" id="claudeAnalysis">
+                  <div class="claude-empty">Claude will explain the current bias, evidence, missing conditions, risk and next action. It cannot change the score or place a trade.</div>
+                </div>
+                <div class="claude-foot" id="claudeFoot">API key stays in the Python backend and Railway variables.</div>
+              </aside>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -251,6 +353,8 @@
   </div>
 </div>
 <div id="toast"></div>
-<script src="/static/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js" onerror="this.onerror=null;this.src='https://unpkg.com/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js'"></script>
+<script src="/static/trading_chart.js?v=10"></script>
+<script src="/static/app.js?v=10"></script>
 </body>
 </html>

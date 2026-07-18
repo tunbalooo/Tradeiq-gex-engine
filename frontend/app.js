@@ -39,9 +39,12 @@ const state = {
   timeframe: 5,
   connected: false,
   dataSource: "SIMULATED",
+  session: null,
+  currentPage: "dashboard",
   hoverIndex: null,
   chartMeta: null,
   overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
+  claude: { enabled: false, auto: true, busy: false, source: null, text: "", model: "—", lastStartedAt: 0 },
 };
 
 function fmt(value, digits = 2) {
@@ -72,6 +75,155 @@ function classForDirection(direction) {
 function stars(strength) {
   const n = Math.max(0, Math.min(5, Number(strength || 0)));
   return "★".repeat(n) + "☆".repeat(5 - n);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function setClaudeStatus(label, kind = "") {
+  const el = $("claudeStatus");
+  if (!el) return;
+  el.textContent = label;
+  el.className = `claude-status ${kind}`.trim();
+}
+
+function renderClaudeAnalysis(text, streaming = false) {
+  const target = $("claudeAnalysis");
+  if (!target) return;
+  if (!text.trim()) {
+    target.innerHTML = '<div class="claude-empty">Waiting for Claude analysis…</div>';
+    return;
+  }
+
+  const sections = [];
+  let current = null;
+  const headingPattern = /^(BIAS|STATUS|WHAT I SEE|WHAT IS MISSING|RISK|ACTION):\s*(.*)$/i;
+  text.split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    const match = line.match(headingPattern);
+    if (match) {
+      current = { heading: match[1].toUpperCase(), lines: [] };
+      if (match[2]) current.lines.push(match[2]);
+      sections.push(current);
+      return;
+    }
+    if (!current) {
+      current = { heading: "ANALYSIS", lines: [] };
+      sections.push(current);
+    }
+    current.lines.push(line);
+  });
+
+  target.innerHTML = sections.map((section) => {
+    const bullets = section.lines.filter((line) => line.startsWith("- ")).map((line) => `<li>${escapeHtml(line.slice(2))}</li>`);
+    const prose = section.lines.filter((line) => !line.startsWith("- ")).map((line) => escapeHtml(line)).join(" ");
+    return `<section class="claude-analysis-section"><h4>${escapeHtml(section.heading)}</h4>${prose ? `<p>${prose}</p>` : ""}${bullets.length ? `<ul>${bullets.join("")}</ul>` : ""}</section>`;
+  }).join("") || `<div class="claude-analysis-raw">${escapeHtml(text)}</div>`;
+  target.classList.toggle("claude-cursor", streaming);
+  target.scrollTop = target.scrollHeight;
+}
+
+async function loadClaudeStatus() {
+  if (!$("claudePanel")) return;
+  try {
+    const status = await fetch("/api/ai/status").then((response) => response.json());
+    state.claude.enabled = Boolean(status.enabled);
+    state.claude.model = status.model || "—";
+    $("claudeModel").textContent = state.claude.model;
+    $("claudeAnalyze").disabled = !state.claude.enabled;
+    if (state.claude.enabled) {
+      setClaudeStatus(status.cached ? "CACHED" : "READY", status.cached ? "cached" : "ready");
+      $("claudeFoot").textContent = status.cached_at ? `Last generated ${new Date(status.cached_at).toLocaleTimeString()}` : "Ready. Analysis is cached to control API cost.";
+    } else {
+      setClaudeStatus("DISABLED", "disabled");
+      $("claudeAnalysis").innerHTML = '<div class="claude-empty">Add ANTHROPIC_API_KEY and set CLAUDE_ANALYSIS_ENABLED=true in the server environment.</div>';
+      $("claudeFoot").textContent = status.last_error || "The API key must remain in .env and Railway Variables, never in frontend code.";
+    }
+  } catch (error) {
+    setClaudeStatus("ERROR", "error");
+    $("claudeAnalysis").innerHTML = '<div class="claude-empty">Could not reach the Claude status endpoint.</div>';
+  }
+}
+
+function stopClaudeStream() {
+  if (state.claude.source) {
+    state.claude.source.close();
+    state.claude.source = null;
+  }
+  state.claude.busy = false;
+  $("claudeAnalyze")?.removeAttribute("disabled");
+}
+
+function startClaudeAnalysis(force = false) {
+  if (!state.claude.enabled || state.claude.busy || !$("claudeAnalysis")) return;
+  state.claude.busy = true;
+  state.claude.text = "";
+  state.claude.lastStartedAt = Date.now();
+  $("claudeAnalyze").disabled = true;
+  renderClaudeAnalysis("", true);
+  setClaudeStatus("ANALYZING", "analyzing");
+  $("claudeFoot").textContent = "Claude is reading the current TradeIQ snapshot…";
+
+  const source = new EventSource(`/api/ai/analysis/stream?force=${force ? "true" : "false"}`);
+  state.claude.source = source;
+
+  source.addEventListener("meta", (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.model) {
+      state.claude.model = payload.model;
+      $("claudeModel").textContent = payload.model;
+    }
+    if (payload.cached) setClaudeStatus("CACHED", "cached");
+  });
+
+  source.addEventListener("delta", (event) => {
+    const payload = JSON.parse(event.data);
+    state.claude.text += payload.text || "";
+    renderClaudeAnalysis(state.claude.text, true);
+  });
+
+  source.addEventListener("done", (event) => {
+    const payload = JSON.parse(event.data);
+    renderClaudeAnalysis(state.claude.text, false);
+    setClaudeStatus(payload.cached ? "CACHED" : "READY", payload.cached ? "cached" : "ready");
+    $("claudeFoot").textContent = payload.generated_at
+      ? `Generated ${new Date(payload.generated_at).toLocaleTimeString()} · read-only analysis`
+      : "Read-only analysis · engine values were not changed";
+    stopClaudeStream();
+  });
+
+  source.addEventListener("analysis_error", (event) => {
+    let message = "Claude analysis failed. Check Railway logs and API configuration.";
+    try { message = JSON.parse(event.data).message || message; } catch (_) { /* network error */ }
+    renderClaudeAnalysis(`STATUS: Unavailable\nRISK:\n- ${message}\nACTION: Keep using the deterministic TradeIQ engine.`, false);
+    setClaudeStatus("ERROR", "error");
+    $("claudeFoot").textContent = message;
+    stopClaudeStream();
+  });
+
+  source.onerror = () => {
+    if (!state.claude.busy) return;
+    const message = "Claude stream disconnected. Check the server connection and Railway logs.";
+    renderClaudeAnalysis(`STATUS: Unavailable\nRISK:\n- ${message}\nACTION: Keep using the deterministic TradeIQ engine.`, false);
+    setClaudeStatus("ERROR", "error");
+    $("claudeFoot").textContent = message;
+    stopClaudeStream();
+  };
+}
+
+function maybeRunClaudeOnStateChange(previousSetup, nextSetup) {
+  if (state.currentPage !== "chart" || !state.claude.enabled || !state.claude.auto || !previousSetup || !nextSetup) return;
+  const importantChange = previousSetup.order_state !== nextSetup.order_state
+    || previousSetup.direction !== nextSetup.direction
+    || Boolean(previousSetup.actionable) !== Boolean(nextSetup.actionable);
+  if (importantChange && Date.now() - state.claude.lastStartedAt > 30000) startClaudeAnalysis(false);
 }
 
 function setConnection(connected) {
@@ -145,6 +297,27 @@ function renderKeyConfluences(setup) {
   ).join("");
 }
 
+function remainingText(target) {
+  if (!target) return "00:00:00";
+  const seconds = Math.max(0, Math.floor((new Date(target).getTime() - Date.now()) / 1000));
+  const hours = String(Math.floor(seconds / 3600)).padStart(2, "0");
+  const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+  const secs = String(seconds % 60).padStart(2, "0");
+  return `${hours}:${minutes}:${secs}`;
+}
+
+function renderSession(session) {
+  if (!session) return;
+  state.session = session;
+  const open = Boolean(session.is_open);
+  $("sessionCardTitle").textContent = open ? session.display_name : "MARKET CLOSED";
+  $("sessionHours").textContent = open ? session.reason : `${session.reason} · Next open`;
+  $("sessionTimer").textContent = remainingText(session.countdown_target);
+  $("sessionTimer").className = `clock ${open ? "g" : "r"}`;
+  $("sessionState").textContent = session.countdown_label;
+  if (state.currentPage === "dashboard") $("pageTitle").textContent = open ? session.display_name : "MARKET CLOSED";
+}
+
 function renderTradeSetup(setup) {
   const confidence = Math.max(0, Math.min(100, Number(setup.confidence)));
   const circumference = 307.9;
@@ -155,21 +328,24 @@ function renderTradeSetup(setup) {
   $("confidencePct").style.color = gaugeColor;
 
   const activeStates = ["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"];
+  const marketClosed = state.session && !state.session.is_open;
   const quality = setup.order_state === "PREVIEW_ONLY" ? "Preview Only" :
     setup.order_state === "WAITING_FOR_LIMIT" ? "Limit Armed" :
     setup.order_state === "FILLED" ? "Position Filled" :
     setup.order_state === "TP1_HIT" ? "TP1 Hit — Running" :
     setup.order_state.replaceAll("_", " ");
-  $("probabilityLabel").textContent = quality;
+  $("probabilityLabel").textContent = marketClosed ? "Market Closed" : quality;
   $("probabilityLabel").style.color = gaugeColor;
   const coreKeys = ["trend_alignment", "gex_alignment", "ote_overlap", "supply_demand", "gex_ote_zone_cluster"];
   const aligned = coreKeys.filter((key) => setup.signals[key]).length;
-  $("coreAlignment").textContent = setup.actionable
-    ? `${aligned} / ${coreKeys.length} core confluences aligned — actionable`
-    : `${aligned} / ${coreKeys.length} core confluences aligned — do not place yet`;
+  $("coreAlignment").textContent = marketClosed
+    ? `${aligned} / ${coreKeys.length} core confluences aligned — score preserved, no new order`
+    : setup.actionable
+      ? `${aligned} / ${coreKeys.length} core confluences aligned — actionable`
+      : `${aligned} / ${coreKeys.length} core confluences aligned — do not place yet`;
 
   const label = setup.order_state === "PREVIEW_ONLY" ? `${setup.direction} PREVIEW` : `${setup.direction} ${setup.order_state.replaceAll("_", " ")}`;
-  $("setupLabel").textContent = label;
+  $("setupLabel").textContent = marketClosed ? "MARKET CLOSED" : label;
   $("setupLabel").className = `${classForDirection(setup.direction)} mono setup-side-label`;
   $("setupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("setupDirection").className = `v ${classForDirection(setup.direction)}`;
@@ -181,12 +357,64 @@ function renderTradeSetup(setup) {
   $("setupTp1Source").textContent = setup.target_sources?.tp1 || "—";
   $("setupTp2Source").textContent = setup.target_sources?.tp2 || "—";
   $("setupRr").textContent = setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  const statusText = setup.order_state === "PREVIEW_ONLY" ? "Not Ready To Place" : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
+  const statusText = marketClosed ? "Market Closed" : setup.order_state === "PREVIEW_ONLY" ? "Not Ready To Place" : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
   $("setupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
   $("setupCluster").className = `v ${setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
-  $("setupValid").textContent = new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("setupSession").textContent = state.session?.display_name || "—";
+  $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
+  $("validLabel").textContent = marketClosed ? "Opens In" : "Valid Until";
+  $("setupValid").textContent = marketClosed ? remainingText(state.session?.next_open_at) : new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  renderChartTradeSetup(setup, {
+    confidence,
+    gaugeColor,
+    marketClosed,
+    quality,
+    aligned,
+    coreCount: coreKeys.length,
+    label,
+    statusText,
+    activeStates,
+  });
+}
+
+function renderChartTradeSetup(setup, context) {
+  if (!$("chartSetupPanel")) return;
+  const { confidence, gaugeColor, marketClosed, quality, aligned, coreCount, label, statusText, activeStates } = context;
+  const ring = $("chartConfidenceRing");
+  ring.style.setProperty("--chart-confidence", `${confidence * 3.6}deg`);
+  ring.style.setProperty("--chart-confidence-color", gaugeColor);
+  $("chartConfidencePct").textContent = `${Math.round(confidence)}%`;
+  $("chartConfidencePct").style.color = gaugeColor;
+  $("chartProbabilityLabel").textContent = marketClosed ? "Market Closed" : quality;
+  $("chartProbabilityLabel").style.color = gaugeColor;
+  $("chartCoreAlignment").textContent = marketClosed
+    ? `${aligned} / ${coreCount} core confluences aligned — score preserved`
+    : setup.actionable
+      ? `${aligned} / ${coreCount} aligned — actionable`
+      : `${aligned} / ${coreCount} aligned — wait for confirmation`;
+
+  $("chartSetupLabel").textContent = marketClosed ? "MARKET CLOSED" : label;
+  $("chartSetupLabel").className = `${marketClosed ? "r" : classForDirection(setup.direction)} mono`;
+  $("chartSetupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
+  $("chartSetupDirection").className = classForDirection(setup.direction);
+  $("chartEntryLabel").textContent = setup.order_state === "PREVIEW_ONLY" ? "Preview Limit" : setup.order_state === "WAITING_FOR_LIMIT" ? "Armed Limit" : "Filled Entry";
+  $("chartSetupEntry").textContent = fmt(setup.entry);
+  $("chartSetupStop").textContent = fmt(setup.stop_loss);
+  $("chartSetupTp1").textContent = fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "");
+  $("chartSetupTp2").textContent = fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "");
+  $("chartSetupTp1Source").textContent = setup.target_sources?.tp1 || "—";
+  $("chartSetupTp2Source").textContent = setup.target_sources?.tp2 || "—";
+  $("chartSetupRr").textContent = setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
+  $("chartSetupStatus").textContent = statusText;
+  $("chartSetupStatus").className = setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a";
+  $("chartSetupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
+  $("chartSetupCluster").className = setup.signals.gex_ote_zone_cluster ? "g" : "a";
+  $("chartSetupSession").textContent = state.session?.display_name || "—";
+  $("chartSetupSession").className = marketClosed ? "r" : "g";
+  $("chartValidLabel").textContent = marketClosed ? "Opens In" : "Valid Until";
+  $("chartSetupValid").textContent = marketClosed ? remainingText(state.session?.next_open_at) : new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
 }
 function renderGexSummary(setup) {
   const gex = setup.gex;
@@ -237,9 +465,11 @@ function renderPerformance(performance) {
   drawEquity(performance.equity_curve);
 }
 
-function renderAll(setup, meta) {
+function renderAll(setup, meta, session = state.session) {
+  const previousSetup = state.setup;
   state.setup = setup;
   state.meta = meta;
+  if (session) renderSession(session);
   renderOverview(meta.overview);
   renderHeader();
   renderGexTable(setup);
@@ -256,6 +486,7 @@ function renderAll(setup, meta) {
   if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
   renderGexPage(setup);
   renderConfluencePage(setup);
+  maybeRunClaudeOnStateChange(previousSetup, setup);
 }
 
 function aggregateCandles(candles, minutes) {
@@ -306,127 +537,20 @@ function drawEquity(points = []) {
   ctx.lineTo(width, height); ctx.lineTo(0, height); ctx.closePath(); ctx.fillStyle = gradient; ctx.fill();
 }
 
-function drawChart(canvasId = "chart") {
-  const canvas = $(canvasId);
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth; const height = canvas.clientHeight;
-  if (!width || !height) return;
-  canvas.width = width * dpr; canvas.height = height * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-
-  const aggregated = aggregateCandles(state.baseCandles, state.timeframe);
-  const visible = aggregated.slice(-120);
-  if (visible.length < 2) return;
-  const setup = state.setup;
-  const pad = { left: 8, right: 84, top: 10, bottom: 24 };
-  const chartWidth = width - pad.left - pad.right; const chartHeight = height - pad.top - pad.bottom;
-  const values = visible.flatMap((c) => [c.high, c.low]);
-  if (setup) {
-    if (state.overlays.gex) values.push(setup.gex.call_wall, setup.gex.put_wall, setup.gex.gamma_flip);
-    if (state.overlays.fib) values.push(...setup.fib_levels.map((level) => level.price));
-    if (state.overlays.zones) setup.zones.forEach((zone) => values.push(zone.low, zone.high));
-    if (state.overlays.trade) values.push(setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2);
-    if (state.overlays.vwap) values.push(setup.vwap, setup.standard_deviation_low, setup.standard_deviation_high);
+function drawChart(chartId = "chart") {
+  const manager = window.TradeIQChartManager;
+  if (!manager) return;
+  if (chartId === "chartLarge" && $("chartLargeStatus")) {
+    const label = state.timeframe >= 60 ? `${state.timeframe / 60}h` : `${state.timeframe}m`;
+    $("chartLargeStatus").textContent = `NASDAQ 100 E-mini · ${label} · ${state.dataSource}`;
   }
-  const validValues = values.filter((value) => Number.isFinite(Number(value))).map(Number);
-  let min = Math.min(...validValues); let max = Math.max(...validValues);
-  const margin = Math.max((max - min) * 0.06, 4); min -= margin; max += margin;
-  const yOf = (price) => pad.top + (max - price) / (max - min || 1) * chartHeight;
-  const step = chartWidth / visible.length;
-  const xOf = (index) => pad.left + index * step + step / 2;
-
-  ctx.font = `10px ${getComputedStyle(document.body).getPropertyValue("--mono")}`;
-  ctx.textBaseline = "middle";
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 6; i += 1) {
-    const value = min + (max - min) * i / 6; const y = yOf(value);
-    ctx.strokeStyle = "rgba(255,255,255,.035)"; ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + chartWidth, y); ctx.stroke();
-    ctx.fillStyle = COLORS.muted; ctx.textAlign = "left"; ctx.fillText(fmt(value, 0), pad.left + chartWidth + 8, y);
-  }
-  const labelCount = Math.min(8, visible.length);
-  for (let i = 0; i < labelCount; i += 1) {
-    const index = Math.round(i * (visible.length - 1) / Math.max(1, labelCount - 1));
-    ctx.fillStyle = COLORS.muted; ctx.textAlign = "center"; ctx.fillText(timeLabel(visible[index].time), xOf(index), height - 10);
-  }
-
-  if (setup && state.overlays.zones) {
-    setup.zones.slice(0, 8).forEach((zone) => {
-      ctx.fillStyle = zone.kind === "DEMAND" ? "rgba(38,208,124,.085)" : "rgba(255,77,94,.085)";
-      const top = yOf(zone.high); const bottom = yOf(zone.low);
-      ctx.fillRect(pad.left, top, chartWidth, bottom - top);
-      ctx.fillStyle = zone.kind === "DEMAND" ? COLORS.green : COLORS.red; ctx.textAlign = "left";
-      ctx.fillText(`${zone.timeframe} ${zone.kind}`, pad.left + 5, top + 8);
-    });
-  }
-
-  function horizontal(price, label, color, dash = [5, 4], alpha = 0.75, align = "left") {
-    if (!Number.isFinite(Number(price))) return;
-    const y = yOf(Number(price)); ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.setLineDash(dash); ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + chartWidth, y); ctx.stroke();
-    ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.fillStyle = color; ctx.textAlign = align;
-    ctx.fillText(label, align === "left" ? pad.left + 6 : pad.left + chartWidth - 5, y - 7);
-  }
-
-  if (setup && state.overlays.fib) {
-    const ote = setup.fib_levels.filter((level) => level.ratio >= 0.618 && level.ratio <= 0.786).map((level) => level.price);
-    if (ote.length) {
-      const top = yOf(Math.max(...ote)); const bottom = yOf(Math.min(...ote));
-      ctx.fillStyle = "rgba(169,139,255,.08)"; ctx.fillRect(pad.left, top, chartWidth, bottom - top);
-    }
-    setup.fib_levels.forEach((level) => horizontal(level.price, level.ratio.toFixed(3), Math.abs(level.ratio - 0.705) < .002 ? COLORS.amber : "#3A4658", [3, 4], .55, "right"));
-  }
-  if (setup && state.overlays.gex) {
-    horizontal(setup.gex.call_wall, "CALL WALL", COLORS.blue, [7, 4], .9);
-    horizontal(setup.gex.gamma_flip, "γ FLIP", COLORS.amber, [7, 4], .9);
-    horizontal(setup.gex.put_wall, "PUT WALL", COLORS.red, [7, 4], .9);
-  }
-  if (setup && state.overlays.vwap) {
-    horizontal(setup.vwap, "VWAP", "#E4D06F", [2, 3], .65, "right");
-    horizontal(setup.standard_deviation_high, "+1σ", "#5B718C", [2, 4], .5, "right");
-    horizontal(setup.standard_deviation_low, "-1σ", "#5B718C", [2, 4], .5, "right");
-  }
-
-  if (setup && state.overlays.trade && setup.entry != null) {
-    const startX = pad.left + chartWidth * .66; const endX = pad.left + chartWidth;
-    const entryY = yOf(setup.entry); const stopY = yOf(setup.stop_loss); const tp2Y = yOf(setup.take_profit_2);
-    const preview = setup.order_state === "PREVIEW_ONLY";
-    ctx.fillStyle = preview ? "rgba(245,185,59,.025)" : "rgba(38,208,124,.07)";
-    ctx.fillRect(startX, Math.min(entryY, tp2Y), endX - startX, Math.abs(tp2Y - entryY));
-    ctx.fillStyle = preview ? "rgba(255,77,94,.025)" : "rgba(255,77,94,.08)";
-    ctx.fillRect(startX, Math.min(entryY, stopY), endX - startX, Math.abs(stopY - entryY));
-    horizontal(setup.entry, preview ? "PREVIEW" : setup.order_state === "FILLED" || setup.order_state === "TP1_HIT" ? "ENTRY" : "LIMIT", COLORS.amber, preview ? [2, 5] : [6, 3], preview ? .55 : .95);
-    horizontal(setup.stop_loss, "SL", COLORS.red, preview ? [2, 5] : [6, 3], preview ? .45 : .95);
-    horizontal(setup.take_profit_1, `TP1 ${setup.target_sources?.tp1 || ""}`, COLORS.green, preview ? [2, 5] : [6, 3], preview ? .45 : .8);
-    horizontal(setup.take_profit_2, `TP2 ${setup.target_sources?.tp2 || ""}`, COLORS.green, preview ? [2, 5] : [6, 3], preview ? .45 : .95);
-  }
-
-  if (state.overlays.emas) {
-    const drawSeries = (series, color) => {
-      ctx.strokeStyle = color; ctx.lineWidth = 1.25; ctx.beginPath();
-      series.forEach((value, index) => index ? ctx.lineTo(xOf(index), yOf(value)) : ctx.moveTo(xOf(index), yOf(value)));
-      ctx.stroke();
-    };
-    drawSeries(ema(visible, 55), COLORS.purple); drawSeries(ema(visible, 21), COLORS.blue); drawSeries(ema(visible, 9), COLORS.amber);
-  }
-
-  visible.forEach((candle, index) => {
-    const x = xOf(index); const up = candle.close >= candle.open; const color = up ? COLORS.green : COLORS.red;
-    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, yOf(candle.high)); ctx.lineTo(x, yOf(candle.low)); ctx.stroke();
-    const bodyWidth = Math.max(2, step * .62); const openY = yOf(candle.open); const closeY = yOf(candle.close);
-    ctx.fillStyle = color; ctx.fillRect(x - bodyWidth / 2, Math.min(openY, closeY), bodyWidth, Math.max(1, Math.abs(closeY - openY)));
+  manager.render(chartId, {
+    candles: aggregateCandles(state.baseCandles, state.timeframe),
+    setup: state.setup,
+    overlays: state.overlays,
+    timeframe: state.timeframe,
+    dataSource: state.dataSource,
   });
-
-  const last = visible.at(-1); const lastY = yOf(last.close);
-  ctx.strokeStyle = last.close >= last.open ? COLORS.green : COLORS.red; ctx.globalAlpha = .55; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(pad.left, lastY); ctx.lineTo(pad.left + chartWidth, lastY); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-  ctx.fillStyle = last.close >= last.open ? COLORS.green : COLORS.red; ctx.fillRect(pad.left + chartWidth, lastY - 9, pad.right, 18);
-  ctx.fillStyle = "#04140c"; ctx.textAlign = "left"; ctx.font = `600 10px ${getComputedStyle(document.body).getPropertyValue("--mono")}`; ctx.fillText(fmt(last.close), pad.left + chartWidth + 6, lastY);
-
-  if (state.hoverIndex != null && state.hoverIndex >= 0 && state.hoverIndex < visible.length) {
-    const x = xOf(state.hoverIndex); const candle = visible[state.hoverIndex]; const y = yOf(candle.close);
-    ctx.strokeStyle = "rgba(216,226,240,.28)"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + chartHeight); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + chartWidth, y); ctx.stroke(); ctx.setLineDash([]);
-  }
-  if (canvasId === "chart") state.chartMeta = { visible, pad, chartWidth, chartHeight, step, xOf, yOf };
 }
 
 async function initialLoad() {
@@ -439,10 +563,11 @@ async function initialLoad() {
     state.baseCandles = snapshot.candles;
     state.dataSource = health.data_source === "databento" ? "DATABENTO LIVE" : health.mode.toUpperCase();
     $("modeLabel").textContent = state.dataSource;
-    renderAll(dashboard.setup, dashboard.meta);
+    renderAll(dashboard.setup, dashboard.meta, dashboard.session || health.session);
     $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataSource}`;
     renderHeader(snapshot);
     setConnection(true);
+    await loadClaudeStatus();
     connectWebSocket();
   } catch (error) {
     console.error(error); setConnection(false); $("modeLabel").textContent = "ERROR";
@@ -460,7 +585,7 @@ function connectWebSocket() {
     if (last && new Date(last.time).getTime() === new Date(candle.time).getTime()) state.baseCandles[state.baseCandles.length - 1] = candle;
     else state.baseCandles.push(candle);
     if (state.baseCandles.length > 2400) state.baseCandles.shift();
-    renderAll(data.setup, data.meta);
+    renderAll(data.setup, data.meta, data.session);
   };
   socket.onerror = () => socket.close();
   socket.onclose = () => { setConnection(false); setTimeout(connectWebSocket, 2000); };
@@ -475,18 +600,11 @@ function getNewYorkParts(date = new Date()) {
 function tick() {
   const parts = getNewYorkParts();
   $("clock").textContent = `${parts.hour}:${parts.minute}:${parts.second} ET`;
-  const seconds = Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  const open = 9 * 3600 + 30 * 60; const close = 16 * 3600;
-  let remaining; let label;
-  if (["Sat", "Sun"].includes(parts.weekday)) { remaining = 0; label = "WEEKEND CLOSED"; }
-  else if (seconds < open) { remaining = open - seconds; label = "UNTIL RTH OPEN"; }
-  else if (seconds < close) { remaining = close - seconds; label = "UNTIL RTH CLOSE"; }
-  else { remaining = 0; label = "RTH CLOSED"; }
-  const hours = String(Math.floor(remaining / 3600)).padStart(2, "0");
-  const minutes = String(Math.floor((remaining % 3600) / 60)).padStart(2, "0");
-  const secs = String(remaining % 60).padStart(2, "0");
-  $("sessionTimer").textContent = `${hours}:${minutes}:${secs}`;
-  $("sessionState").textContent = label;
+  if (state.session) {
+    $("sessionTimer").textContent = remainingText(state.session.countdown_target);
+    if (!state.session.is_open && $("setupValid")) $("setupValid").textContent = remainingText(state.session.next_open_at);
+    if (!state.session.is_open && $("chartSetupValid")) $("chartSetupValid").textContent = remainingText(state.session.next_open_at);
+  }
 }
 
 
@@ -502,9 +620,11 @@ function pageRow(label, value, cls = "") {
 function setPage(name) {
   document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === `page-${name}`));
   document.querySelectorAll("#nav button[data-page]").forEach((button) => button.classList.toggle("active", button.dataset.page === name));
-  const titles = { dashboard:"NQ TRADE ENGINE", chart:"ADVANCED NQ CHART", gex:"GEX ANALYSIS", confluence:"CONFLUENCE ENGINE", setups:"TRADE SETUPS", alerts:"ALERT CENTER", positions:"POSITIONS", backtest:"BACKTEST LAB", settings:"SETTINGS" };
-  $("pageTitle").textContent = titles[name] || "NQ TRADE ENGINE";
-  if (name === "chart") setTimeout(() => drawChart("chartLarge"), 30);
+  state.currentPage = name;
+  const dashboardTitle = state.session ? (state.session.is_open ? state.session.display_name : "MARKET CLOSED") : "NQ TRADE ENGINE";
+  const titles = { dashboard:dashboardTitle, chart:"ADVANCED NQ CHART", gex:"GEX ANALYSIS", confluence:"CONFLUENCE ENGINE", setups:"TRADE SETUPS", alerts:"ALERT CENTER", positions:"POSITIONS", backtest:"BACKTEST LAB", settings:"SETTINGS" };
+  $("pageTitle").textContent = titles[name] || dashboardTitle;
+  if (name === "chart") setTimeout(() => { drawChart("chartLarge"); if (state.claude.enabled && state.claude.auto && !state.claude.text) startClaudeAnalysis(false); }, 30);
   if (name === "setups") loadSetups();
   if (name === "alerts") loadAlertsPage();
   if (name === "positions") loadPositions();
@@ -575,6 +695,9 @@ $("templateReset").addEventListener("click", () => {
   document.querySelectorAll(".tf").forEach((button) => button.classList.toggle("active", Number(button.dataset.tf) === 5));
   $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataSource}`;
   drawChart();
+  if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
+  window.TradeIQChartManager?.reset("chart");
+  window.TradeIQChartManager?.reset("chartLarge");
 });
 document.querySelectorAll(".overlay-btn").forEach((button) => button.addEventListener("click", () => {
   const name = button.dataset.overlay; state.overlays[name] = !state.overlays[name];
@@ -586,26 +709,11 @@ document.querySelectorAll(".tf").forEach((button) => button.addEventListener("cl
   document.querySelectorAll(".tf").forEach((item) => item.classList.toggle("active", Number(item.dataset.tf) === state.timeframe));
   const label = state.timeframe >= 60 ? `${state.timeframe / 60}h` : `${state.timeframe}m`;
   $("chartCaption").textContent = `NASDAQ 100 E-mini · ${label} · ${state.dataSource}`;
-  state.hoverIndex = null; $("chartTooltip").style.display = "none"; drawChart();
+  state.hoverIndex = null; drawChart();
   if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
 }));
 document.querySelectorAll("#nav button[data-page]").forEach((item) => item.addEventListener("click", () => setPage(item.dataset.page)));
 
-$("chart").addEventListener("mousemove", (event) => {
-  if (!state.chartMeta) return;
-  const rect = $("chart").getBoundingClientRect(); const x = event.clientX - rect.left;
-  const { visible, pad, chartWidth, step } = state.chartMeta;
-  if (x < pad.left || x > pad.left + chartWidth) { state.hoverIndex = null; $("chartTooltip").style.display = "none"; drawChart(); return; }
-  state.hoverIndex = Math.max(0, Math.min(visible.length - 1, Math.floor((x - pad.left) / step)));
-  const candle = visible[state.hoverIndex];
-  const tooltip = $("chartTooltip");
-  tooltip.innerHTML = `${new Date(candle.time).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}<br>O ${fmt(candle.open)} &nbsp; H ${fmt(candle.high)}<br>L ${fmt(candle.low)} &nbsp; C ${fmt(candle.close)}<br>V ${fmt(candle.volume, 0)}`;
-  tooltip.style.display = "block";
-  tooltip.style.left = `${Math.min(rect.width - 165, x + 12)}px`;
-  tooltip.style.top = `${Math.max(8, Math.min(rect.height - 75, event.clientY - rect.top + 12))}px`;
-  drawChart();
-});
-$("chart").addEventListener("mouseleave", () => { state.hoverIndex = null; $("chartTooltip").style.display = "none"; drawChart(); });
 window.addEventListener("resize", () => { drawChart(); if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge"); if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve); });
 
 if ($("refreshGex")) $("refreshGex").addEventListener("click", refreshGexCache);
@@ -633,4 +741,13 @@ function drawSimpleLine(canvas, points) {
   const min=Math.min(...points),max=Math.max(...points),range=max-min||1;ctx.strokeStyle=COLORS.green;ctx.lineWidth=1.6;ctx.beginPath();
   points.forEach((value,index)=>{const x=index/(points.length-1||1)*width,y=height-6-(value-min)/range*(height-12);index?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();
 }
+if ($("claudeAnalyze")) $("claudeAnalyze").addEventListener("click", () => startClaudeAnalysis(true));
+if ($("claudeAuto")) $("claudeAuto").addEventListener("change", (event) => {
+  state.claude.auto = Boolean(event.target.checked);
+  if (state.claude.auto && state.currentPage === "chart" && state.claude.enabled) startClaudeAnalysis(false);
+});
+setInterval(() => {
+  if (state.currentPage === "chart" && state.claude.enabled && state.claude.auto && !state.claude.busy) startClaudeAnalysis(false);
+}, 300000);
+
 setInterval(tick, 1000); tick(); initialLoad();

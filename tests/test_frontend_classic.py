@@ -27,3 +27,10 @@ def test_all_sidebar_pages_are_functional_targets():
         assert f'data-page="{page}"' in HTML
         assert f'id="page-{page}"' in HTML
     assert 'querySelectorAll("#nav button[data-page]")' in JS
+
+
+def test_session_ui_and_confidence_separation_are_present():
+    for marker in ['id="sessionCardTitle"', 'id="sessionHours"', 'id="setupSession"', 'id="validLabel"']:
+        assert marker in HTML
+    assert 'score preserved, no new order' in JS
+    assert 'state.session && !state.session.is_open' in JS

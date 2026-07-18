@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from backend.core.config import settings
 from backend.models.schemas import BacktestRequest
 from backend.services.backtest_service import run_backtest
+from backend.services.claude_analysis import claude_analysis_service
 from backend.services.dashboard_service import build_dashboard_meta
 from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
+from backend.services.session_service import get_session_status
 from backend.services.storage_service import storage_service
 from backend.services.timeframes import aggregate_candles
 from backend.services.trade_engine import trade_engine_service
@@ -24,7 +27,12 @@ def require_admin(x_admin_token: str | None = Header(default=None)):
 def health():
     market = market_data_service.health()
     engine = trade_engine_service.snapshot()
-    return {"status": "ok" if market.get("candle_count",0) else "degraded", "mode": market["mode"], "data_source": market["data_source"], "market": market, "gex": gex_service.health(), "engine": engine.model_dump(mode="json")}
+    return {"status": "ok" if market.get("candle_count",0) else "degraded", "mode": market["mode"], "data_source": market["data_source"], "market": market, "gex": gex_service.health(), "session": get_session_status(), "engine": engine.model_dump(mode="json")}
+
+
+@router.get("/session")
+def session_status():
+    return get_session_status()
 
 
 @router.get("/market/snapshot")
@@ -39,7 +47,7 @@ def dashboard_data():
     setup = trade_engine_service.current_setup()
     if setup is None:
         raise HTTPException(503, "Trade engine is starting")
-    return {"setup": setup, "meta": build_dashboard_meta(setup), "engine": trade_engine_service.snapshot()}
+    return {"setup": setup, "meta": build_dashboard_meta(setup), "session": get_session_status(), "engine": trade_engine_service.snapshot()}
 
 
 @router.get("/setup/current")
@@ -88,7 +96,25 @@ def backtest(request: BacktestRequest):
 
 @router.get("/settings")
 def read_settings():
-    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "dataset": settings.databento_dataset, "futures_symbol": settings.databento_futures_symbol, "options_parent": settings.databento_options_parent, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin}
+    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "dataset": settings.databento_dataset, "futures_symbol": settings.databento_futures_symbol, "options_parent": settings.databento_options_parent, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model}
+
+
+@router.get("/ai/status")
+def ai_status():
+    return claude_analysis_service.status()
+
+
+@router.get("/ai/analysis/stream")
+async def ai_analysis_stream(force: bool = Query(False)):
+    return StreamingResponse(
+        claude_analysis_service.stream(force=force),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/gex/refresh")

@@ -12,6 +12,7 @@ from backend.core.database import Base, engine
 from backend.services.dashboard_service import build_dashboard_meta
 from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
+from backend.services.session_service import get_session_status
 from backend.services.trade_engine import trade_engine_service
 
 
@@ -24,7 +25,7 @@ async def lifespan(app: FastAPI):
         await trade_engine_service.stop(); await gex_service.stop(); await market_data_service.stop()
 
 
-app = FastAPI(title=settings.app_name, version="0.5.0-pages-safe-engine", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="1.0.0-chart-claude", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
@@ -41,7 +42,7 @@ async def market_websocket(websocket: WebSocket):
         while True:
             setup = trade_engine_service.current_setup()
             if setup:
-                await websocket.send_json({"type":"market_update", "candle":market_data_service.latest_candle().model_dump(mode="json"), "setup":setup.model_dump(mode="json"), "meta":build_dashboard_meta(setup).model_dump(mode="json"), "market":market_data_service.health(), "gex_health":gex_service.health(), "engine":trade_engine_service.snapshot().model_dump(mode="json")})
+                await websocket.send_json({"type":"market_update", "candle":market_data_service.latest_candle().model_dump(mode="json"), "setup":setup.model_dump(mode="json"), "meta":build_dashboard_meta(setup).model_dump(mode="json"), "market":market_data_service.health(), "gex_health":gex_service.health(), "session":get_session_status(), "engine":trade_engine_service.snapshot().model_dump(mode="json")})
             await asyncio.sleep(settings.update_interval_seconds)
     except WebSocketDisconnect:
         return

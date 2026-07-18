@@ -39,6 +39,15 @@ class Settings(BaseSettings):
 
     admin_token: str | None = None
     allow_public_admin: bool = False
+
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-sonnet-5"
+    claude_analysis_enabled: bool = False
+    claude_analysis_interval_seconds: int = 300
+    claude_force_min_interval_seconds: int = 60
+    claude_max_output_tokens: int = 700
+    claude_request_timeout_seconds: float = 60.0
+
     rth_timezone: str = "America/New_York"
     rth_start_hour: int = 9
     rth_start_minute: int = 30
