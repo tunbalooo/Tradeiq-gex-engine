@@ -323,8 +323,29 @@ def build_current_setup() -> TradeSetup:
             hit_stop = hi >= stop_px
             invalidated = hit_stop and not reached_entry
 
-    if invalidated:
+    # ── Setup Status lifecycle ──────────────────────────────────────
+    # Priority: live position (from the paper-trade tracker) > invalidation >
+    # pre-trade waiting/developing/scanning. A "no real plan" case shows
+    # 'Waiting for Setup' rather than a misleading direction.
+    has_plan = entry_px is not None and stop_px is not None and direction in ("LONG", "SHORT")
+
+    live = None
+    try:
+        from backend.services.trade_tracker import live_status
+        live = live_status()
+    except Exception:
+        live = None
+
+    if live and live["state"] == "ACTIVE":
+        status = "IN_SHORT" if live["direction"] == "SHORT" else "IN_LONG"
+    elif live and live["state"] == "WIN":
+        status = "TARGET_HIT"
+    elif live and live["state"] == "LOSS":
+        status = "STOPPED_OUT"
+    elif invalidated:
         status = "INVALIDATED"
+    elif not has_plan or confidence < 45:
+        status = "WAITING_FOR_SETUP"
     elif confidence >= 75:
         status = "WAITING_FOR_SELL_LIMIT" if direction == "SHORT" else "WAITING_FOR_BUY_LIMIT"
     elif confidence >= 55:

@@ -124,6 +124,39 @@ def process_tick(setup: TradeSetup, last_high: float, last_low: float, last_clos
         db.close()
 
 
+def live_status() -> dict | None:
+    """Return the most relevant live trade state for the Setup Status label.
+
+    Priority: an ACTIVE (filled) position first, else the most recent trade
+    that just closed this cycle, else None. Shape:
+      {"state": "ACTIVE"|"WIN"|"LOSS", "direction": "LONG"|"SHORT"}
+    """
+    db = SessionLocal()
+    try:
+        active = (
+            db.query(TrackedTrade)
+            .filter(TrackedTrade.status == "ACTIVE")
+            .order_by(TrackedTrade.created_at.desc())
+            .first()
+        )
+        if active:
+            return {"state": "ACTIVE", "direction": active.direction}
+        # Most recent close in the last 90s so we can briefly show the result.
+        from datetime import timedelta
+        recent = (
+            db.query(TrackedTrade)
+            .filter(TrackedTrade.status.in_(["WIN", "LOSS"]))
+            .filter(TrackedTrade.closed_at.isnot(None))
+            .order_by(TrackedTrade.closed_at.desc())
+            .first()
+        )
+        if recent and recent.closed_at and (datetime.utcnow() - recent.closed_at) < timedelta(seconds=90):
+            return {"state": recent.status, "direction": recent.direction}
+        return None
+    finally:
+        db.close()
+
+
 def _close(trade: TrackedTrade, won: bool, now: datetime) -> None:
     reward = abs(trade.take_profit - trade.entry)
     risk = trade.risk_points or 1.0

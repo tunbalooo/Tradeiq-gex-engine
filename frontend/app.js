@@ -203,10 +203,16 @@ function renderTradeSetup(setup) {
   $("setupRr").textContent = setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
   const statusText = setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
-  // Color the status: invalidated = red, waiting = green, developing = amber.
+  // Lifecycle colors: in-position = blue, target = green, stopped/invalid = red,
+  // waiting-limit = green, developing = amber, scanning/waiting-setup = muted.
   const st = setup.status;
-  $("setupStatus").className = "v " + (st === "INVALIDATED" ? "r" : st.startsWith("WAITING") ? "g" : st === "DEVELOPING" ? "a" : "m");
-  // Dim the whole setup card when the plan is void so it can't be mistaken for actionable.
+  const cls =
+    (st === "IN_SHORT" || st === "IN_LONG") ? "b" :
+    st === "TARGET_HIT" ? "g" :
+    (st === "STOPPED_OUT" || st === "INVALIDATED") ? "r" :
+    st.startsWith("WAITING_FOR_SELL") || st.startsWith("WAITING_FOR_BUY") ? "g" :
+    st === "DEVELOPING" ? "a" : "m";
+  $("setupStatus").className = "v " + cls;
   const card = $("setupStatus").closest(".panel");
   if (card) card.style.opacity = st === "INVALIDATED" ? "0.55" : "1";
   $("setupValid").textContent = new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
