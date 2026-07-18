@@ -402,25 +402,45 @@ document.querySelectorAll("#nav a").forEach((item) => item.addEventListener("cli
   }, 60);
 }));
 
-// ── live trading-session name (London / New York / Asia / Sydney) ──
+// ── CME Globex market hours + live session name ──────────────────
+// NQ trades Sun 18:00 ET → Fri 17:00 ET, with a daily maintenance halt
+// 17:00–18:00 ET. Outside those windows the market is CLOSED.
+function marketStatus() {
+  const parts = getNewYorkParts(); // {weekday, hour, minute} in ET
+  const day = parts.weekday;       // "Sun".."Sat"
+  const etHour = Number(parts.hour) + Number(parts.minute) / 60;
+  const closedWeekend =
+    (day === "Fri" && etHour >= 17) ||
+    day === "Sat" ||
+    (day === "Sun" && etHour < 18);
+  const dailyHalt = day !== "Sat" && day !== "Sun" && etHour >= 17 && etHour < 18;
+  const open = !closedWeekend && !dailyHalt;
+  return { open, day, etHour };
+}
+
 function currentSession() {
+  const status = marketStatus();
+  if (!status.open) return { name: "Market Closed", color: "#6E7F97", open: false };
   const nowUtc = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
   const inRange = (start, end) => start < end ? (nowUtc >= start && nowUtc < end) : (nowUtc >= start || nowUtc < end);
-  // Approx session windows in UTC; overlaps favour the more active desk.
-  if (inRange(13.5, 20)) return { name: "New York", color: "#26D07C" };
-  if (inRange(7, 13.5)) return { name: "London", color: "#48A3FF" };
-  if (inRange(0, 7)) return { name: "Asia", color: "#A98BFF" };
-  if (inRange(21, 24) || inRange(0, 0)) return { name: "Sydney", color: "#F5B93B" };
-  return { name: "After Hours", color: "#6E7F97" };
+  if (inRange(13.5, 20)) return { name: "New York", color: "#26D07C", open: true };
+  if (inRange(7, 13.5)) return { name: "London", color: "#48A3FF", open: true };
+  if (inRange(0, 7)) return { name: "Asia", color: "#A98BFF", open: true };
+  return { name: "Sydney", color: "#F5B93B", open: true };
 }
+
 function updateSessionBadge() {
   const s = currentSession();
   const badge = $("sessionBadge");
-  if (!badge) return;
-  badge.textContent = s.name.toUpperCase();
-  badge.style.color = s.color;
-  badge.style.borderColor = s.color + "59";
-  badge.style.background = s.color + "1f";
+  const title = $("sessionTitle");
+  if (badge) {
+    badge.textContent = s.name.toUpperCase();
+    badge.style.color = s.color;
+    badge.style.borderColor = s.color + "59";
+    badge.style.background = s.color + "1f";
+  }
+  // Header now shows the session itself (title text) instead of "NQ TRADE ENGINE".
+  if (title) { title.textContent = s.open ? `${s.name} Session`.toUpperCase() : "MARKET CLOSED"; title.style.color = s.color; }
 }
 updateSessionBadge();
 setInterval(updateSessionBadge, 30000);
