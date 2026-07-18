@@ -150,20 +150,24 @@
   }
 
   // Shaded horizontal band between two prices, spanning the visible range.
-  function band(low, high, color) {
+  // Draw a true horizontal band bounded between `low` and `high`.
+  // A baseline series fills between the plotted line and its baseValue,
+  // so plotting `high` with baseValue `low` fills ONLY that band —
+  // unlike an area series, which floods down to the axis floor.
+  function band(low, high, topColor, bottomColor) {
     if (!Number.isFinite(low) || !Number.isFinite(high) || !lastCandles.length) return;
+    if (high < low) [low, high] = [high, low];
     const t0 = Math.floor(new Date(lastCandles[0].time).getTime() / 1000);
     const t1 = Math.floor(new Date(lastCandles[lastCandles.length - 1].time).getTime() / 1000) + 6 * 3600;
-    const top = chart.addAreaSeries({
-      topColor: color, bottomColor: color, lineColor: "rgba(0,0,0,0)",
+    const series = chart.addBaselineSeries({
+      baseValue: { type: "price", price: low },
+      topFillColor1: topColor, topFillColor2: topColor,
+      bottomFillColor1: "rgba(0,0,0,0)", bottomFillColor2: "rgba(0,0,0,0)",
+      topLineColor: "rgba(0,0,0,0)", bottomLineColor: "rgba(0,0,0,0)",
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
-    // Area fills from the line down to `high` baseline; emulate a band by
-    // drawing the high edge and baselining at low.
-    top.setData([{ time: t0, value: high }, { time: t1, value: high }]);
-    top.applyOptions({ baseLineVisible: false, priceScaleId: candleSeries.priceScale().id });
-    // Second area for the lower edge keeps the fill bounded visually.
-    zoneSeries.push(top);
+    series.setData([{ time: t0, value: high }, { time: t1, value: high }]);
+    zoneSeries.push(series);
   }
 
   const STYLE = { solid: 0, dotted: 1, dashed: 2, largeDashed: 3, sparseDotted: 4 };
@@ -176,10 +180,10 @@
     const vis = on.emas;
     Object.values(emaSeries).forEach((s) => s.applyOptions({ visible: vis }));
 
-    // S&D zones as shaded bands
+    // S&D zones as shaded bands (limit to keep the chart readable)
     if (on.zones && setup.zones) {
-      setup.zones.slice(0, 8).forEach((z) => {
-        const col = z.kind === "DEMAND" ? "rgba(38,208,124,.10)" : "rgba(255,77,94,.10)";
+      setup.zones.slice(0, 6).forEach((z) => {
+        const col = z.kind === "DEMAND" ? "rgba(38,208,124,.16)" : "rgba(255,77,94,.16)";
         band(z.low, z.high, col);
       });
     }
@@ -187,7 +191,7 @@
     // Fib / OTE
     if (on.fib && setup.fib_levels) {
       const ote = setup.fib_levels.filter((l) => l.ratio >= 0.618 && l.ratio <= 0.786).map((l) => l.price);
-      if (ote.length) band(Math.min(...ote), Math.max(...ote), "rgba(169,139,255,.10)");
+      if (ote.length) band(Math.min(...ote), Math.max(...ote), "rgba(169,139,255,.16)");
       setup.fib_levels.forEach((l) =>
         hline(l.price, l.ratio.toFixed(3), Math.abs(l.ratio - 0.705) < 0.002 ? C.amber : "#3A4658", STYLE.dotted));
     }
