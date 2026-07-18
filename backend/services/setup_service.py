@@ -125,14 +125,21 @@ def build_current_setup() -> TradeSetup:
     if settings.simulated_mode:
         positions = mock_option_chain(current_price)
     else:
+        positions = []
+        provider = (settings.data_provider or "yfinance").lower()
         try:
-            from backend.services.live_options import live_option_chain
+            if provider == "databento":
+                from backend.services.databento_options import databento_option_chain
 
-            positions = live_option_chain(current_price)
+                positions = databento_option_chain(current_price)
+            else:
+                from backend.services.live_options import live_option_chain
+
+                positions = live_option_chain(current_price)
         except Exception:
             positions = []
         if not positions:
-            # Live fetch hasn't warmed up yet or failed — fall back to the
+            # Native/live fetch not ready or failed — fall back to the
             # synthetic chain for this cycle so the dashboard stays populated.
             positions = mock_option_chain(current_price)
     strike_gex = aggregate_gex_by_strike(current_price, positions)

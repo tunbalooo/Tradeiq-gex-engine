@@ -375,8 +375,13 @@ async function initialLoad() {
     renderAll(dashboard.setup, dashboard.meta);
     renderHeader(snapshot);
     evaluateHealth();
+    state.gexSource = health.gex_source;
     const gexSrc = $("gexSource");
-    if (gexSrc) gexSrc.textContent = state.dataMode === "LIVE" ? "QQQ PROXY · ~15m DELAYED" : "SIMULATED";
+    if (gexSrc) {
+      gexSrc.textContent = health.gex_source === "native_nq" ? "NATIVE NQ · CME"
+        : health.gex_source === "qqq_proxy" ? "QQQ PROXY · ~15m DELAYED" : "SIMULATED";
+      gexSrc.className = health.gex_source === "native_nq" ? "mono g" : "mono a";
+    }
     $("chartCaption").textContent = `NASDAQ 100 E-mini · 5m · ${state.dataMode}`;
     connectWebSocket();
   } catch (error) {

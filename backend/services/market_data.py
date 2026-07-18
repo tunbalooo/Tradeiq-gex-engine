@@ -115,17 +115,28 @@ class SimulatedMarketDataService:
 def _build_market_data_service():
     if settings.simulated_mode:
         return SimulatedMarketDataService()
+
+    provider = (settings.data_provider or "yfinance").lower()
+    if provider == "databento":
+        try:
+            from backend.services.databento_market_data import DatabentoMarketDataService
+
+            return DatabentoMarketDataService()
+        except Exception as exc:  # pragma: no cover
+            import logging
+            logging.getLogger("tradeiq.market_data").error(
+                "Databento market data failed to start (%s). Falling back to yfinance. "
+                "Check DATABENTO_API_KEY, live CME entitlement, and that databento is installed.",
+                exc,
+            )
     try:
         from backend.services.live_market_data import LiveMarketDataService
 
         return LiveMarketDataService()
     except Exception as exc:  # pragma: no cover
         import logging
-
         logging.getLogger("tradeiq.market_data").error(
-            "Failed to start live market data (%s). Falling back to simulated mode. "
-            "Check LIVE_PRICE_SYMBOL, network access, and that yfinance is installed.",
-            exc,
+            "Live market data failed (%s); using simulated.", exc,
         )
         return SimulatedMarketDataService()
 

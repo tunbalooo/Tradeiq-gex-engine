@@ -15,11 +15,15 @@ router = APIRouter(prefix="/api")
 
 @router.get("/health")
 def health():
-    live = not settings.simulated_mode and type(market_data_service).__name__ == "LiveMarketDataService"
+    live = not settings.simulated_mode and type(market_data_service).__name__ != "SimulatedMarketDataService"
+    provider = (settings.data_provider or "yfinance").lower() if live else "simulated"
+    native = provider == "databento" and type(market_data_service).__name__ == "DatabentoMarketDataService"
     return {
         "status": "ok",
         "mode": "live" if live else "simulated",
-        "data_source": settings.live_price_symbol if live else "local-generator",
+        "provider": provider,
+        "gex_source": "native_nq" if native else ("qqq_proxy" if live else "simulated"),
+        "data_source": settings.databento_price_symbol if native else (settings.live_price_symbol if live else "local-generator"),
     }
 
 
