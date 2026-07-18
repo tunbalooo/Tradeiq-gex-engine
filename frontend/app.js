@@ -214,7 +214,7 @@ function renderPerformance(performance) {
   drawEquity(performance.equity_curve);
 }
 
-function renderAll(setup, meta) {
+function renderAll(setup, meta, liveTick = false) {
   state.setup = setup;
   state.meta = meta;
   renderOverview(meta.overview);
@@ -229,7 +229,9 @@ function renderAll(setup, meta) {
   renderAlerts(meta.alerts);
   renderNews(meta.news);
   renderPerformance(meta.performance);
-  drawChart();
+  // On live websocket ticks, update just the last bar + overlays so the
+  // user's zoom/pan is preserved. Full redraw only on initial load / TF change.
+  if (liveTick) updateChartLive(); else drawChart();
 }
 
 function aggregateCandles(candles, minutes) {
@@ -280,123 +282,34 @@ function drawEquity(points = []) {
   ctx.lineTo(width, height); ctx.lineTo(0, height); ctx.closePath(); ctx.fillStyle = gradient; ctx.fill();
 }
 
+let chartReady = false;
+function ensureChart() {
+  if (chartReady || typeof window.TradeIQChart === "undefined" || typeof LightweightCharts === "undefined") return chartReady;
+  window.TradeIQChart.init($("chart"));
+  chartReady = true;
+  return true;
+}
+
 function drawChart() {
-  const canvas = $("chart");
-  const ctx = canvas.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth; const height = canvas.clientHeight;
-  if (!width || !height) return;
-  canvas.width = width * dpr; canvas.height = height * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-
+  if (!ensureChart()) return;
   const aggregated = aggregateCandles(state.baseCandles, state.timeframe);
-  const visible = aggregated.slice(-120);
-  if (visible.length < 2) return;
-  const setup = state.setup;
-  const pad = { left: 8, right: 84, top: 10, bottom: 24 };
-  const chartWidth = width - pad.left - pad.right; const chartHeight = height - pad.top - pad.bottom;
-  const values = visible.flatMap((c) => [c.high, c.low]);
-  if (setup) {
-    if (state.overlays.gex) values.push(setup.gex.call_wall, setup.gex.put_wall, setup.gex.gamma_flip);
-    if (state.overlays.fib) values.push(...setup.fib_levels.map((level) => level.price));
-    if (state.overlays.zones) setup.zones.forEach((zone) => values.push(zone.low, zone.high));
-    if (state.overlays.trade) values.push(setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2);
-    if (state.overlays.vwap) values.push(setup.vwap, setup.standard_deviation_low, setup.standard_deviation_high);
-  }
-  const validValues = values.filter((value) => Number.isFinite(Number(value))).map(Number);
-  let min = Math.min(...validValues); let max = Math.max(...validValues);
-  const margin = Math.max((max - min) * 0.06, 4); min -= margin; max += margin;
-  const yOf = (price) => pad.top + (max - price) / (max - min || 1) * chartHeight;
-  const step = chartWidth / visible.length;
-  const xOf = (index) => pad.left + index * step + step / 2;
+  if (aggregated.length < 2) return;
+  window.TradeIQChart.setCandles(aggregated);
+  if (state.setup) window.TradeIQChart.renderOverlays(state.setup, state.overlays);
+}
 
-  ctx.font = `10px ${getComputedStyle(document.body).getPropertyValue("--mono")}`;
-  ctx.textBaseline = "middle";
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 6; i += 1) {
-    const value = min + (max - min) * i / 6; const y = yOf(value);
-    ctx.strokeStyle = "rgba(255,255,255,.035)"; ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + chartWidth, y); ctx.stroke();
-    ctx.fillStyle = COLORS.muted; ctx.textAlign = "left"; ctx.fillText(fmt(value, 0), pad.left + chartWidth + 8, y);
-  }
-  const labelCount = Math.min(8, visible.length);
-  for (let i = 0; i < labelCount; i += 1) {
-    const index = Math.round(i * (visible.length - 1) / Math.max(1, labelCount - 1));
-    ctx.fillStyle = COLORS.muted; ctx.textAlign = "center"; ctx.fillText(timeLabel(visible[index].time), xOf(index), height - 10);
-  }
+// Called on every websocket tick: update just the last bar + overlays,
+// without resetting the user's zoom/pan.
+function updateChartLive() {
+  if (!ensureChart()) return;
+  const aggregated = aggregateCandles(state.baseCandles, state.timeframe);
+  if (!aggregated.length) return;
+  window.TradeIQChart.updateLast(aggregated[aggregated.length - 1]);
+  if (state.setup) window.TradeIQChart.renderOverlays(state.setup, state.overlays);
+}
 
-  if (setup && state.overlays.zones) {
-    setup.zones.slice(0, 8).forEach((zone) => {
-      ctx.fillStyle = zone.kind === "DEMAND" ? "rgba(38,208,124,.085)" : "rgba(255,77,94,.085)";
-      const top = yOf(zone.high); const bottom = yOf(zone.low);
-      ctx.fillRect(pad.left, top, chartWidth, bottom - top);
-      ctx.fillStyle = zone.kind === "DEMAND" ? COLORS.green : COLORS.red; ctx.textAlign = "left";
-      ctx.fillText(`${zone.timeframe} ${zone.kind}`, pad.left + 5, top + 8);
-    });
-  }
-
-  function horizontal(price, label, color, dash = [5, 4], alpha = 0.75, align = "left") {
-    if (!Number.isFinite(Number(price))) return;
-    const y = yOf(Number(price)); ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.setLineDash(dash); ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + chartWidth, y); ctx.stroke();
-    ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.fillStyle = color; ctx.textAlign = align;
-    ctx.fillText(label, align === "left" ? pad.left + 6 : pad.left + chartWidth - 5, y - 7);
-  }
-
-  if (setup && state.overlays.fib) {
-    const ote = setup.fib_levels.filter((level) => level.ratio >= 0.618 && level.ratio <= 0.786).map((level) => level.price);
-    if (ote.length) {
-      const top = yOf(Math.max(...ote)); const bottom = yOf(Math.min(...ote));
-      ctx.fillStyle = "rgba(169,139,255,.08)"; ctx.fillRect(pad.left, top, chartWidth, bottom - top);
-    }
-    setup.fib_levels.forEach((level) => horizontal(level.price, level.ratio.toFixed(3), Math.abs(level.ratio - 0.705) < .002 ? COLORS.amber : "#3A4658", [3, 4], .55, "right"));
-  }
-  if (setup && state.overlays.gex) {
-    horizontal(setup.gex.call_wall, "CALL WALL", COLORS.blue, [7, 4], .9);
-    horizontal(setup.gex.gamma_flip, "γ FLIP", COLORS.amber, [7, 4], .9);
-    horizontal(setup.gex.put_wall, "PUT WALL", COLORS.red, [7, 4], .9);
-  }
-  if (setup && state.overlays.vwap) {
-    horizontal(setup.vwap, "VWAP", "#E4D06F", [2, 3], .65, "right");
-    horizontal(setup.standard_deviation_high, "+1σ", "#5B718C", [2, 4], .5, "right");
-    horizontal(setup.standard_deviation_low, "-1σ", "#5B718C", [2, 4], .5, "right");
-  }
-
-  if (setup && state.overlays.trade && setup.entry != null) {
-    const startX = pad.left + chartWidth * .66; const endX = pad.left + chartWidth;
-    const entryY = yOf(setup.entry); const stopY = yOf(setup.stop_loss); const tp2Y = yOf(setup.take_profit_2);
-    ctx.fillStyle = "rgba(38,208,124,.07)"; ctx.fillRect(startX, Math.min(entryY, tp2Y), endX - startX, Math.abs(tp2Y - entryY));
-    ctx.fillStyle = "rgba(255,77,94,.08)"; ctx.fillRect(startX, Math.min(entryY, stopY), endX - startX, Math.abs(stopY - entryY));
-    horizontal(setup.entry, "LIMIT", COLORS.amber, [6, 3], .95);
-    horizontal(setup.stop_loss, "SL", COLORS.red, [6, 3], .95);
-    horizontal(setup.take_profit_1, "TP1", COLORS.green, [6, 3], .8);
-    horizontal(setup.take_profit_2, "TP2", COLORS.green, [6, 3], .95);
-  }
-
-  if (state.overlays.emas) {
-    const drawSeries = (series, color) => {
-      ctx.strokeStyle = color; ctx.lineWidth = 1.25; ctx.beginPath();
-      series.forEach((value, index) => index ? ctx.lineTo(xOf(index), yOf(value)) : ctx.moveTo(xOf(index), yOf(value)));
-      ctx.stroke();
-    };
-    drawSeries(ema(visible, 55), COLORS.purple); drawSeries(ema(visible, 21), COLORS.blue); drawSeries(ema(visible, 9), COLORS.amber);
-  }
-
-  visible.forEach((candle, index) => {
-    const x = xOf(index); const up = candle.close >= candle.open; const color = up ? COLORS.green : COLORS.red;
-    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, yOf(candle.high)); ctx.lineTo(x, yOf(candle.low)); ctx.stroke();
-    const bodyWidth = Math.max(2, step * .62); const openY = yOf(candle.open); const closeY = yOf(candle.close);
-    ctx.fillStyle = color; ctx.fillRect(x - bodyWidth / 2, Math.min(openY, closeY), bodyWidth, Math.max(1, Math.abs(closeY - openY)));
-  });
-
-  const last = visible.at(-1); const lastY = yOf(last.close);
-  ctx.strokeStyle = last.close >= last.open ? COLORS.green : COLORS.red; ctx.globalAlpha = .55; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(pad.left, lastY); ctx.lineTo(pad.left + chartWidth, lastY); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-  ctx.fillStyle = last.close >= last.open ? COLORS.green : COLORS.red; ctx.fillRect(pad.left + chartWidth, lastY - 9, pad.right, 18);
-  ctx.fillStyle = "#04140c"; ctx.textAlign = "left"; ctx.font = `600 10px ${getComputedStyle(document.body).getPropertyValue("--mono")}`; ctx.fillText(fmt(last.close), pad.left + chartWidth + 6, lastY);
-
-  if (state.hoverIndex != null && state.hoverIndex >= 0 && state.hoverIndex < visible.length) {
-    const x = xOf(state.hoverIndex); const candle = visible[state.hoverIndex]; const y = yOf(candle.close);
-    ctx.strokeStyle = "rgba(216,226,240,.28)"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + chartHeight); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + chartWidth, y); ctx.stroke(); ctx.setLineDash([]);
-  }
-  state.chartMeta = { visible, pad, chartWidth, chartHeight, step, xOf, yOf };
+function refreshOverlays() {
+  if (chartReady && state.setup) window.TradeIQChart.renderOverlays(state.setup, state.overlays);
 }
 
 async function initialLoad() {
@@ -430,7 +343,7 @@ function connectWebSocket() {
     if (last && new Date(last.time).getTime() === new Date(candle.time).getTime()) state.baseCandles[state.baseCandles.length - 1] = candle;
     else state.baseCandles.push(candle);
     if (state.baseCandles.length > 2400) state.baseCandles.shift();
-    renderAll(data.setup, data.meta);
+    renderAll(data.setup, data.meta, true);
   };
   socket.onerror = () => socket.close();
   socket.onclose = () => { setConnection(false); setTimeout(connectWebSocket, 2000); };
@@ -480,22 +393,42 @@ document.querySelectorAll(".tf").forEach((button) => button.addEventListener("cl
 }));
 document.querySelectorAll("#nav a").forEach((item) => item.addEventListener("click", () => {
   document.querySelectorAll("#nav a").forEach((other) => other.classList.remove("active")); item.classList.add("active");
+  const label = item.textContent.trim().toLowerCase();
+  const chartMode = label === "chart";
+  document.body.classList.toggle("chart-mode", chartMode);
+  // Let the layout settle, then tell Lightweight Charts to resize + fit.
+  setTimeout(() => {
+    if (window.TradeIQChart) { window.TradeIQChart.resize(); if (chartMode) window.TradeIQChart.fit(); }
+  }, 60);
 }));
 
-$("chart").addEventListener("mousemove", (event) => {
-  if (!state.chartMeta) return;
-  const rect = $("chart").getBoundingClientRect(); const x = event.clientX - rect.left;
-  const { visible, pad, chartWidth, step } = state.chartMeta;
-  if (x < pad.left || x > pad.left + chartWidth) { state.hoverIndex = null; $("chartTooltip").style.display = "none"; drawChart(); return; }
-  state.hoverIndex = Math.max(0, Math.min(visible.length - 1, Math.floor((x - pad.left) / step)));
-  const candle = visible[state.hoverIndex];
-  const tooltip = $("chartTooltip");
-  tooltip.innerHTML = `${new Date(candle.time).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}<br>O ${fmt(candle.open)} &nbsp; H ${fmt(candle.high)}<br>L ${fmt(candle.low)} &nbsp; C ${fmt(candle.close)}<br>V ${fmt(candle.volume, 0)}`;
-  tooltip.style.display = "block";
-  tooltip.style.left = `${Math.min(rect.width - 165, x + 12)}px`;
-  tooltip.style.top = `${Math.max(8, Math.min(rect.height - 75, event.clientY - rect.top + 12))}px`;
-  drawChart();
+// ── live trading-session name (London / New York / Asia / Sydney) ──
+function currentSession() {
+  const nowUtc = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
+  const inRange = (start, end) => start < end ? (nowUtc >= start && nowUtc < end) : (nowUtc >= start || nowUtc < end);
+  // Approx session windows in UTC; overlaps favour the more active desk.
+  if (inRange(13.5, 20)) return { name: "New York", color: "#26D07C" };
+  if (inRange(7, 13.5)) return { name: "London", color: "#48A3FF" };
+  if (inRange(0, 7)) return { name: "Asia", color: "#A98BFF" };
+  if (inRange(21, 24) || inRange(0, 0)) return { name: "Sydney", color: "#F5B93B" };
+  return { name: "After Hours", color: "#6E7F97" };
+}
+function updateSessionBadge() {
+  const s = currentSession();
+  const badge = $("sessionBadge");
+  if (!badge) return;
+  badge.textContent = s.name.toUpperCase();
+  badge.style.color = s.color;
+  badge.style.borderColor = s.color + "59";
+  badge.style.background = s.color + "1f";
+}
+updateSessionBadge();
+setInterval(updateSessionBadge, 30000);
+
+// Lightweight Charts handles crosshair/tooltip natively — no manual canvas
+// mouse tracking needed. Just keep panels responsive on window resize.
+window.addEventListener("resize", () => {
+  if (window.TradeIQChart) window.TradeIQChart.resize();
+  if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve);
 });
-$("chart").addEventListener("mouseleave", () => { state.hoverIndex = null; $("chartTooltip").style.display = "none"; drawChart(); });
-window.addEventListener("resize", () => { drawChart(); if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve); });
 setInterval(tick, 1000); tick(); initialLoad();

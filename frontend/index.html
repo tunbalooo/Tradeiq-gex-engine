@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/styles.css" />
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <div class="app">
@@ -44,6 +45,7 @@
   <div class="main">
     <div class="topbar">
       <div class="title">NQ TRADE ENGINE</div>
+      <span class="session-badge" id="sessionBadge">—</span>
       <div class="symbol-pill">NQ1! <span class="m">▾</span></div>
       <div class="price-lg" id="hdrPrice">—</div>
       <div class="mono g" id="hdrChg">—</div>
@@ -63,6 +65,7 @@
             <span class="tool-div"></span>
             <button class="tool-btn" id="indicatorToggle">Indicators</button>
             <button class="tool-btn" id="templateReset">Reset View</button>
+            <button class="tool-btn" id="fullscreenBtn">⛶ Fullscreen</button>
             <span class="spacer"></span>
             <span class="m mono chart-caption" id="chartCaption">NASDAQ 100 E-mini · 5m · SIMULATED</span>
           </div>
@@ -75,7 +78,7 @@
             <button class="overlay-btn active" data-overlay="vwap">VWAP / σ</button>
           </div>
           <div id="chartWrap">
-            <canvas id="chart"></canvas>
+            <div id="chart"></div>
             <div class="chart-tooltip" id="chartTooltip"></div>
           </div>
         </div>
@@ -181,6 +184,7 @@
     </div>
   </div>
 </div>
+<script src="/static/chart.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
