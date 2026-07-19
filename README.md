@@ -147,3 +147,7 @@ Mobile and iPad charts wait until the chart pane has a real width and height bef
 - The API GEX object now exposes `by_strike` rows containing `strike`, `call_gex`, `put_gex`, and `net_gex`.
 
 Desktop charts continue to use TradingView Lightweight Charts 5.2. Mobile and tablet charts intentionally use the built-in Canvas renderer for reliability in Safari and installed PWAs.
+
+## v1.9 mobile price navigation and chart stability
+
+The mobile chart now supports full two-dimensional navigation: drag horizontally through time, drag vertically through price, and drag the right price scale to zoom. Double-tap, Auto, Fit or Real time restores automatic price scaling. TradeIQ also retains validated candle history by symbol and timeframe so a sparse live tick cannot collapse a full chart into one candle.

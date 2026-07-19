@@ -41,7 +41,7 @@ def test_pwa_assets_and_root_scope_service_worker_are_configured():
     assert 'rel="manifest"' in INDEX
     assert 'navigator.serviceWorker.register("/service-worker.js", { scope: "/" })' in INDEX
     assert '"display": "standalone"' in MANIFEST
-    assert "tradeiq-v1.8-shell" in SW
+    assert "tradeiq-v1.9-shell" in SW
     assert (ROOT / "frontend" / "app-icon-192.png").exists()
     assert (ROOT / "frontend" / "app-icon-512.png").exists()
 

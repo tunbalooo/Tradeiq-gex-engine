@@ -3,10 +3,13 @@
 
   const LC = window.LightweightCharts;
   const USE_MOBILE_CANVAS = window.matchMedia?.("(max-width: 900px)")?.matches === true;
+  const MIN_SAFE_HISTORY_BARS = 20;
+  const MAX_CACHED_HISTORY_BARS = 5000;
 
   function installCanvasFallback() {
     console.warn("Lightweight Charts was unavailable; TradeIQ is using its built-in Canvas chart fallback.");
     const fallbackInstances = new Map();
+    const fallbackHistoryCache = new Map();
     const lineColors = {
       entry: "#F5B93B", stop: "#FF4D5E", target: "#26D07C",
       gex: "#48A3FF", vwap: "#E4D06F", fib: "#A98BFF",
@@ -33,9 +36,17 @@
       host.innerHTML = "";
       const canvas = document.createElement("canvas");
       canvas.className = "tradeiq-canvas-fallback";
-      canvas.setAttribute("aria-label", "TradeIQ fallback candlestick chart");
+      canvas.setAttribute("aria-label", "Interactive TradeIQ candlestick chart. Drag left or right through time, drag up or down through price, and drag the right price scale to zoom.");
       host.appendChild(canvas);
-      instance = { id, host, canvas, payload: null, visibleCount: id === "chartLarge" ? 88 : 72, offset: 0, chartStyle: "candles", dragging: false, dragX: 0, dragOffset: 0 };
+      instance = {
+        id, host, canvas, payload: null,
+        visibleCount: id === "chartLarge" ? 88 : 72,
+        offset: 0, chartStyle: "candles",
+        dragging: false, dragMode: null, dragX: 0, dragY: 0, dragOffset: 0,
+        dragPricePan: 0, dragPriceZoom: 1,
+        pricePan: 0, priceZoom: 1, autoScale: true,
+        scaleMeta: null,
+      };
       fallbackInstances.set(id, instance);
       const observer = new ResizeObserver(() => drawFallback(instance));
       observer.observe(host);
@@ -47,6 +58,63 @@
 
     function clamp(value, minimum, maximum) { return Math.max(minimum, Math.min(maximum, value)); }
 
+    function fallbackHistoryKey(data) {
+      return `${data?.symbol || "NQ"}:${data?.timeframe || 1}`;
+    }
+
+    function normaliseFallbackCandles(candles = []) {
+      const byTime = new Map();
+      candles.forEach((item) => {
+        const timestamp = fallbackTime(item?.time);
+        const open = Number(item?.open), high = Number(item?.high), low = Number(item?.low), close = Number(item?.close);
+        if (timestamp == null || ![open, high, low, close].every(Number.isFinite)) return;
+        if (high < low || high < Math.max(open, close) || low > Math.min(open, close)) return;
+        byTime.set(timestamp, {
+          time: new Date(timestamp).toISOString(), open, high, low, close,
+          volume: Number.isFinite(Number(item?.volume)) ? Number(item.volume) : 0,
+        });
+      });
+      return [...byTime.values()].sort((a, b) => fallbackTime(a.time) - fallbackTime(b.time));
+    }
+
+    function mergeFallbackCandles(base = [], incoming = []) {
+      const byTime = new Map();
+      [...base, ...incoming].forEach((item) => {
+        const timestamp = fallbackTime(item?.time);
+        if (timestamp != null) byTime.set(timestamp, item);
+      });
+      return [...byTime.values()]
+        .sort((a, b) => fallbackTime(a.time) - fallbackTime(b.time))
+        .slice(-MAX_CACHED_HISTORY_BARS);
+    }
+
+    function resolveFallbackCandles(instance, data) {
+      const key = fallbackHistoryKey(data);
+      const incoming = normaliseFallbackCandles(data?.candles || []);
+      const cached = fallbackHistoryCache.get(key) || [];
+      const current = instance.payload && fallbackHistoryKey(instance.payload) === key
+        ? normaliseFallbackCandles(instance.payload.candles || []) : [];
+      const seed = cached.length >= current.length ? cached : current;
+      const resolved = mergeFallbackCandles(seed, incoming);
+      instance.historyRecovered = incoming.length > 0 && incoming.length < MIN_SAFE_HISTORY_BARS && seed.length >= MIN_SAFE_HISTORY_BARS;
+      if (resolved.length) fallbackHistoryCache.set(key, resolved);
+      return resolved;
+    }
+
+    function syncFallbackAutoButton(instance) {
+      document.querySelectorAll(`[data-chart-id="${instance.id}"] [data-chart-action="autoscale"]`).forEach((button) => {
+        button.classList.toggle("active", instance.autoScale);
+        button.setAttribute("aria-pressed", instance.autoScale ? "true" : "false");
+      });
+    }
+
+    function resetFallbackPriceScale(instance) {
+      instance.autoScale = true;
+      instance.pricePan = 0;
+      instance.priceZoom = 1;
+      syncFallbackAutoButton(instance);
+    }
+
     function bindFallbackControls(instance) {
       document.querySelectorAll(`[data-chart-id="${instance.id}"] [data-chart-action]`).forEach((button) => {
         if (button.dataset.mobileCanvasBound === "true") return;
@@ -57,8 +125,16 @@
           if (action === "zoom-out") instance.visibleCount = clamp(Math.round(instance.visibleCount * 1.28), 24, 180);
           if (action === "pan-left") instance.offset = clamp(instance.offset + Math.max(3, Math.round(instance.visibleCount * .2)), 0, Math.max(0, (instance.payload?.candles?.length || 0) - 10));
           if (action === "pan-right") instance.offset = clamp(instance.offset - Math.max(3, Math.round(instance.visibleCount * .2)), 0, Math.max(0, (instance.payload?.candles?.length || 0) - 10));
-          if (["recenter", "fit"].includes(action)) instance.offset = 0;
+          if (["recenter", "fit"].includes(action)) {
+            instance.offset = 0;
+            resetFallbackPriceScale(instance);
+          }
           if (action === "fit") instance.visibleCount = instance.id === "chartLarge" ? 88 : 72;
+          if (action === "autoscale") {
+            if (instance.autoScale) instance.autoScale = false;
+            else resetFallbackPriceScale(instance);
+            syncFallbackAutoButton(instance);
+          }
           if (action === "candles") instance.chartStyle = "candles";
           if (action === "line") instance.chartStyle = "line";
           if (action === "fullscreen") {
@@ -72,23 +148,75 @@
 
     function bindFallbackGestures(instance) {
       const canvas = instance.canvas;
+      const point = (event) => {
+        const rect = canvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      };
+
       canvas.addEventListener("pointerdown", (event) => {
-        instance.dragging = true; instance.dragX = event.clientX; instance.dragOffset = instance.offset;
+        const p = point(event);
+        instance.dragging = true;
+        instance.dragMode = p.x >= canvas.clientWidth - 64 ? "price-scale" : "pan";
+        instance.dragX = p.x;
+        instance.dragY = p.y;
+        instance.dragOffset = instance.offset;
+        instance.dragPricePan = instance.pricePan;
+        instance.dragPriceZoom = instance.priceZoom;
         canvas.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
       });
+
       canvas.addEventListener("pointermove", (event) => {
         if (!instance.dragging) return;
+        const p = point(event);
+        const dx = p.x - instance.dragX;
+        const dy = p.y - instance.dragY;
         const candles = instance.payload?.candles?.length || 0;
-        const pixelsPerBar = Math.max(3, canvas.clientWidth / Math.max(instance.visibleCount, 1));
-        const shift = Math.round((event.clientX - instance.dragX) / pixelsPerBar);
-        instance.offset = clamp(instance.dragOffset + shift, 0, Math.max(0, candles - 10));
+
+        if (instance.dragMode === "price-scale") {
+          instance.autoScale = false;
+          instance.priceZoom = clamp(instance.dragPriceZoom * Math.exp(-dy / 145), 0.3, 12);
+          syncFallbackAutoButton(instance);
+        } else {
+          const pixelsPerBar = Math.max(3, canvas.clientWidth / Math.max(instance.visibleCount, 1));
+          const shift = Math.round(dx / pixelsPerBar);
+          instance.offset = clamp(instance.dragOffset + shift, 0, Math.max(0, candles - 10));
+          if (Math.abs(dy) > 1) {
+            const meta = instance.scaleMeta;
+            const pricePerPixel = meta ? (meta.high - meta.low) / Math.max(1, meta.plotHeight) : 0;
+            instance.autoScale = false;
+            instance.pricePan = instance.dragPricePan + dy * pricePerPixel;
+            syncFallbackAutoButton(instance);
+          }
+        }
         drawFallback(instance);
+        event.preventDefault();
       });
-      const stop = () => { instance.dragging = false; };
-      canvas.addEventListener("pointerup", stop); canvas.addEventListener("pointercancel", stop);
+
+      const stop = (event) => {
+        instance.dragging = false;
+        instance.dragMode = null;
+        if (event?.pointerId != null) canvas.releasePointerCapture?.(event.pointerId);
+      };
+      canvas.addEventListener("pointerup", stop);
+      canvas.addEventListener("pointercancel", stop);
+
+      canvas.addEventListener("dblclick", (event) => {
+        resetFallbackPriceScale(instance);
+        drawFallback(instance);
+        event.preventDefault();
+      });
+
       canvas.addEventListener("wheel", (event) => {
         event.preventDefault();
-        instance.visibleCount = clamp(Math.round(instance.visibleCount * (event.deltaY < 0 ? .88 : 1.12)), 24, 180);
+        const p = point(event);
+        if (p.x >= canvas.clientWidth - 64 || event.shiftKey) {
+          instance.autoScale = false;
+          instance.priceZoom = clamp(instance.priceZoom * (event.deltaY < 0 ? 1.12 : 0.88), 0.3, 12);
+          syncFallbackAutoButton(instance);
+        } else {
+          instance.visibleCount = clamp(Math.round(instance.visibleCount * (event.deltaY < 0 ? .88 : 1.12)), 24, 180);
+        }
         drawFallback(instance);
       }, { passive: false });
     }
@@ -142,10 +270,10 @@
       ctx.fillRect(0, 0, width, height);
 
       const raw = Array.isArray(payload?.candles) ? payload.candles : [];
-      const candles = raw.map((item) => ({
-        time: fallbackTime(item.time), open: Number(item.open), high: Number(item.high),
-        low: Number(item.low), close: Number(item.close), volume: Number(item.volume || 0),
-      })).filter((item) => item.time != null && [item.open, item.high, item.low, item.close].every(Number.isFinite));
+      const candles = normaliseFallbackCandles(raw).map((item) => ({
+        time: fallbackTime(item.time), open: item.open, high: item.high,
+        low: item.low, close: item.close, volume: item.volume,
+      }));
       if (!candles.length) {
         ctx.fillStyle = "#7788A3";
         ctx.font = "500 12px ui-monospace, monospace";
@@ -167,11 +295,20 @@
       let high = Math.max(...values.map((item) => item.high), ...extra);
       const pad = Math.max((high - low) * 0.08, Number(payload?.tickSize || 0.25) * 8);
       low -= pad; high += pad;
+      const automaticCenter = (high + low) / 2;
+      const automaticRange = Math.max(high - low, Number(payload?.tickSize || 0.25) * 16);
+      if (!instance.autoScale) {
+        const manualRange = automaticRange / clamp(instance.priceZoom || 1, 0.3, 12);
+        const manualCenter = automaticCenter + Number(instance.pricePan || 0);
+        low = manualCenter - manualRange / 2;
+        high = manualCenter + manualRange / 2;
+      }
       const plotRight = width - 58;
       const plotTop = 16;
       const volumeHeight = Math.max(34, Math.min(60, height * .14));
       const plotBottom = height - volumeHeight - 28;
       const plotHeight = Math.max(1, plotBottom - plotTop);
+      instance.scaleMeta = { low, high, plotHeight, plotTop, plotBottom, plotRight, automaticRange };
       const toY = (price) => plotTop + (high - Number(price)) / (high - low || 1) * plotHeight;
 
       ctx.strokeStyle = "rgba(135,151,173,.10)";
@@ -256,15 +393,32 @@
       const instance = ensureFallback(id);
       if (!instance) return;
       const marketChanged = instance.payload && (instance.payload.symbol !== data.symbol || instance.payload.timeframe !== data.timeframe);
-      instance.payload = data;
-      if (marketChanged) instance.offset = 0;
+      const candles = resolveFallbackCandles(instance, data);
+      instance.payload = { ...data, candles };
+      if (marketChanged) {
+        instance.offset = 0;
+        resetFallbackPriceScale(instance);
+      }
       requestAnimationFrame(() => drawFallback(instance));
     }
     function reset(id) {
       const instance = fallbackInstances.get(id);
-      if (instance) { instance.offset = 0; instance.visibleCount = id === "chartLarge" ? 88 : 72; drawFallback(instance); }
+      if (instance) {
+        instance.offset = 0;
+        instance.visibleCount = id === "chartLarge" ? 88 : 72;
+        resetFallbackPriceScale(instance);
+        drawFallback(instance);
+      }
     }
-    function marketChanged(id) { const instance = fallbackInstances.get(id); if (instance) { instance.payload = null; drawFallback(instance); } }
+    function marketChanged(id) {
+      const instance = fallbackInstances.get(id);
+      if (instance) {
+        instance.payload = null;
+        instance.offset = 0;
+        resetFallbackPriceScale(instance);
+        drawFallback(instance);
+      }
+    }
     function resize(id) { const instance = fallbackInstances.get(id); if (instance) drawFallback(instance); }
     function refresh(id) { const instance = fallbackInstances.get(id); if (instance) drawFallback(instance); }
     window.TradeIQChartManager = { render, reset, marketChanged, resize, refresh, instances: fallbackInstances, fallback: true, mobileCanvas: USE_MOBILE_CANVAS };
@@ -290,6 +444,7 @@
   };
 
   const instances = new Map();
+  const desktopHistoryCache = new Map();
   const pendingRenders = new Map();
   const renderTimers = new Map();
   const dashed = LC.LineStyle?.Dashed ?? 2;
@@ -312,9 +467,35 @@
         low: Number(candle.low),
         close: Number(candle.close),
       };
-      if (Object.values(item).slice(1).every(Number.isFinite)) byTime.set(time, item);
+      if (!Object.values(item).slice(1).every(Number.isFinite)) return;
+      if (item.high < item.low || item.high < Math.max(item.open, item.close) || item.low > Math.min(item.open, item.close)) return;
+      byTime.set(time, item);
     });
     return [...byTime.values()].sort((a, b) => a.time - b.time);
+  }
+
+  function desktopHistoryKey(data) {
+    return `${data?.symbol || "NQ"}:${data?.timeframe || 1}`;
+  }
+
+  function mergeDesktopCandles(base = [], incoming = []) {
+    const byTime = new Map();
+    [...base, ...incoming].forEach((item) => {
+      if (item && Number.isFinite(Number(item.time))) byTime.set(Number(item.time), item);
+    });
+    return [...byTime.values()].sort((a, b) => a.time - b.time).slice(-MAX_CACHED_HISTORY_BARS);
+  }
+
+  function resolveDesktopCandles(instance, data) {
+    const key = desktopHistoryKey(data);
+    const incoming = normaliseCandles(data?.candles || []);
+    const cached = desktopHistoryCache.get(key) || [];
+    const current = instance.symbol === data.symbol && instance.timeframe === data.timeframe ? instance.data : [];
+    const seed = cached.length >= current.length ? cached : current;
+    const resolved = mergeDesktopCandles(seed, incoming);
+    instance.historyRecovered = incoming.length > 0 && incoming.length < MIN_SAFE_HISTORY_BARS && seed.length >= MIN_SAFE_HISTORY_BARS;
+    if (resolved.length) desktopHistoryCache.set(key, resolved);
+    return { incoming, resolved };
   }
 
   function emaData(candles, period) {
@@ -609,8 +790,16 @@
       case "zoom-out": logicalZoom(instance, 1.28); break;
       case "pan-left": logicalPan(instance, -1); break;
       case "pan-right": logicalPan(instance, 1); break;
-      case "recenter": instance.chart.timeScale().scrollToRealTime(); instance.candleSeries.priceScale().applyOptions({ autoScale: true }); break;
-      case "fit": instance.chart.timeScale().fitContent(); instance.candleSeries.priceScale().applyOptions({ autoScale: true }); break;
+      case "recenter":
+        instance.chart.timeScale().scrollToRealTime();
+        instance.candleSeries.priceScale().applyOptions({ autoScale: true });
+        instance.autoScale = true;
+        break;
+      case "fit":
+        instance.chart.timeScale().fitContent();
+        instance.candleSeries.priceScale().applyOptions({ autoScale: true });
+        instance.autoScale = true;
+        break;
       case "autoscale":
         instance.autoScale = !instance.autoScale;
         instance.candleSeries.priceScale().applyOptions({ autoScale: instance.autoScale });
@@ -776,10 +965,10 @@
     const previous = instance.data;
     const sameTimeframe = instance.timeframe === data.timeframe;
     const sameSymbol = instance.symbol === data.symbol;
-    const candles = normaliseCandles(data.candles);
+    const { incoming, resolved: candles } = resolveDesktopCandles(instance, data);
     const last = candles.at(-1);
     const oldLast = previous.at(-1);
-    const canIncrement = sameTimeframe && sameSymbol && oldLast && last && candles.length >= previous.length && candles.length <= previous.length + 1;
+    const canIncrement = sameTimeframe && sameSymbol && oldLast && last && incoming.length > 0 && candles.length >= previous.length && candles.length <= previous.length + 1;
 
     if (canIncrement) {
       instance.candleSeries.update(last);
@@ -854,7 +1043,7 @@
     const caption = document.getElementById(`${id}Status`);
     if (caption) {
       const tf = Number(data.timeframe) >= 60 ? `${Number(data.timeframe) / 60}h` : `${data.timeframe}m`;
-      caption.textContent = `${instance.instrumentName} · ${tf} · ${data.dataSource || "CONNECTING"}`;
+      caption.textContent = `${instance.instrumentName} · ${tf} · ${data.dataSource || "CONNECTING"}${instance.historyRecovered ? " · HISTORY RESTORED" : ""}`;
     }
   }
 

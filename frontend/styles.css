@@ -296,7 +296,7 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 .mobile-calendar-list{padding:4px 14px 10px}.mobile-calendar-card{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:10px;padding:14px 0;border-bottom:1px solid var(--line);align-items:start}.mobile-calendar-card time{display:flex;flex-direction:column;gap:2px;color:var(--muted);font:500 9px/1.2 var(--mono)}.mobile-calendar-card time b{color:var(--text);font-size:10px}.mobile-calendar-card time span{color:#91a0b4}.mobile-calendar-card time em{color:var(--green);font-style:normal;white-space:nowrap}.mobile-calendar-card strong{display:block;color:var(--text);font:650 12px/1.4 var(--sans)}.mobile-calendar-card small{display:block;margin-top:5px;color:var(--muted);font:500 9px/1.4 var(--sans)}
 @media (max-width:560px){.mobile-calendar-card{grid-template-columns:68px minmax(0,1fr)}.mobile-calendar-card .impact-pill{grid-column:2;justify-self:start}.mobile-section-label{top:67px}}
 
-/* v1.8: standard mobile terminal UI, native mobile canvas chart, and desktop GEX-by-strike. */
+/* v1.9: draggable mobile price navigation, history retention, clean terminal UI, and desktop GEX-by-strike. */
 .gex-page-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
 .gex-strike-panel{grid-column:1 / -1;min-height:430px}
 .gex-strike-panel .panel-h>div small{display:block;margin-top:3px;color:var(--muted);font:500 9px var(--sans)}
@@ -384,3 +384,7 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 }
 
 @media(max-width:760px){.gex-page-grid{grid-template-columns:1fr}.gex-strike-panel{grid-column:auto}#gexStrikeChart{height:290px}}
+
+/* v1.9 interactive canvas: horizontal/vertical pan and right-axis price zoom. */
+.tradeiq-canvas-fallback{cursor:grab;user-select:none;-webkit-user-select:none}
+.tradeiq-canvas-fallback:active{cursor:grabbing}

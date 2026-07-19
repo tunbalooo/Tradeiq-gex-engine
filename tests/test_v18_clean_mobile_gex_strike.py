@@ -64,6 +64,6 @@ def test_mobile_news_is_split_into_standard_calendar_and_headline_tabs():
 
 
 def test_v18_shell_cache_busts_old_installed_mobile_ui():
-    assert "tradeiq-v1.8-shell" in SW
-    assert "?v=18" in SW
-    assert '/static/boot.js?v=18' in INDEX
+    assert "tradeiq-v1.9-shell" in SW
+    assert "?v=19" in SW
+    assert '/static/boot.js?v=19' in INDEX
