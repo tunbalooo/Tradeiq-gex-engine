@@ -10,13 +10,14 @@ CHART = (ROOT / "frontend" / "trading_chart.js").read_text(encoding="utf-8")
 
 def test_preview_is_explained_as_watch_only_candidate():
     assert "chartPreviewNotice" in HTML
-    assert "WATCH-ONLY PREVIEW" in HTML
+    assert "SCANNING — NO ACTIVE SETUP" in HTML
     assert "previewExplanation" in APP
     assert "not an armed order" in APP
 
 
-def test_chart_preview_line_uses_watch_label():
-    assert 'preview ? "WATCH" : "ENTRY"' in CHART
+def test_chart_preview_does_not_draw_trade_lines_before_arming():
+    assert "hasLockedTradePlan(setup)" in CHART
+    assert '"WATCH"' not in CHART
 
 
 def test_claude_prompt_is_compact_and_honest_about_previews():

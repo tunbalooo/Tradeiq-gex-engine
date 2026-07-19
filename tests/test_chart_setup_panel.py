@@ -22,6 +22,6 @@ def test_fullscreen_hides_only_chart_setup_panel():
 def test_chart_setup_is_mirrored_by_frontend_engine():
     js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     assert "function renderChartTradeSetup" in js
-    assert '$("chartSetupEntry").textContent = fmt(setup.entry);' in js
+    assert '$("chartSetupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";' in js
     assert '$("chartSetupStatus").textContent = statusText;' in js
     assert '$("chartSetupValid").textContent' in js

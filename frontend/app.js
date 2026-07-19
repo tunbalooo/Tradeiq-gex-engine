@@ -32,6 +32,13 @@ const COLORS = {
   green: "#26D07C", red: "#FF4D5E", amber: "#F5B93B", blue: "#48A3FF",
   purple: "#A98BFF", muted: "#455468", text: "#D8E2F0", line: "#1A2636",
 };
+const ACTIVE_TRADE_STATES = new Set(["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"]);
+
+function hasLockedTradePlan(setup) {
+  if (!setup || !ACTIVE_TRADE_STATES.has(setup.order_state) || !setup.armed_at) return false;
+  return [setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2]
+    .every((value) => Number.isFinite(Number(value)));
+}
 const state = {
   baseCandles: [],
   setup: null,
@@ -512,7 +519,8 @@ function renderTradeSetup(setup) {
   $("confidencePct").textContent = `${Math.round(confidence)}%`;
   $("confidencePct").style.color = gaugeColor;
 
-  const activeStates = ["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"];
+  const activeStates = [...ACTIVE_TRADE_STATES];
+  const lockedPlan = hasLockedTradePlan(setup);
   const syncing = state.marketWarming || setup.status === "DATA_SYNCING";
   const marketClosed = state.session && !state.session.is_open;
   const quality = setup.order_state === "PREVIEW_ONLY" ? "Watch-only Preview" :
@@ -537,14 +545,14 @@ function renderTradeSetup(setup) {
   $("setupLabel").className = `${syncing || marketClosed ? "a" : classForDirection(setup.direction)} mono setup-side-label`;
   $("setupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("setupDirection").className = `v ${classForDirection(setup.direction)}`;
-  $("entryLabel").textContent = setup.order_state === "PREVIEW_ONLY" ? "Watch-only Level" : setup.order_state === "WAITING_FOR_LIMIT" ? "Armed Limit" : "Filled Entry";
-  $("setupEntry").textContent = fmt(setup.entry);
-  $("setupStop").textContent = fmt(setup.stop_loss);
-  $("setupTp1").textContent = fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "");
-  $("setupTp2").textContent = fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "");
-  $("setupTp1Source").textContent = setup.target_sources?.tp1 || "—";
-  $("setupTp2Source").textContent = setup.target_sources?.tp2 || "—";
-  $("setupRr").textContent = setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
+  $("entryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry (locks when armed)";
+  $("setupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";
+  $("setupStop").textContent = lockedPlan ? fmt(setup.stop_loss) : "—";
+  $("setupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
+  $("setupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
+  $("setupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
+  $("setupTp2Source").textContent = lockedPlan ? (setup.target_sources?.tp2 || "—") : "—";
+  $("setupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
   const statusText = syncing ? "Temporary Preview — Data Syncing" : marketClosed ? "Watch Only — Market Closed" : setup.order_state === "PREVIEW_ONLY" ? "Candidate — Confirmation Missing" : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
@@ -565,12 +573,13 @@ function renderTradeSetup(setup) {
     label,
     statusText,
     activeStates,
+    lockedPlan,
   });
 }
 
 function renderChartTradeSetup(setup, context) {
   if (!$("chartSetupPanel")) return;
-  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, coreCount, label, statusText, activeStates } = context;
+  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, coreCount, label, statusText, activeStates, lockedPlan } = context;
   const ring = $("chartConfidenceRing");
   ring.style.setProperty("--chart-confidence", `${confidence * 3.6}deg`);
   ring.style.setProperty("--chart-confidence-color", gaugeColor);
@@ -590,14 +599,14 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupLabel").className = `${syncing ? "a" : marketClosed ? "r" : classForDirection(setup.direction)} mono`;
   $("chartSetupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("chartSetupDirection").className = classForDirection(setup.direction);
-  $("chartEntryLabel").textContent = setup.order_state === "PREVIEW_ONLY" ? "Watch-only Level" : setup.order_state === "WAITING_FOR_LIMIT" ? "Armed Limit" : "Filled Entry";
-  $("chartSetupEntry").textContent = fmt(setup.entry);
-  $("chartSetupStop").textContent = fmt(setup.stop_loss);
-  $("chartSetupTp1").textContent = fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "");
-  $("chartSetupTp2").textContent = fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "");
-  $("chartSetupTp1Source").textContent = setup.target_sources?.tp1 || "—";
-  $("chartSetupTp2Source").textContent = setup.target_sources?.tp2 || "—";
-  $("chartSetupRr").textContent = setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
+  $("chartEntryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry (locks when armed)";
+  $("chartSetupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";
+  $("chartSetupStop").textContent = lockedPlan ? fmt(setup.stop_loss) : "—";
+  $("chartSetupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
+  $("chartSetupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
+  $("chartSetupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
+  $("chartSetupTp2Source").textContent = lockedPlan ? (setup.target_sources?.tp2 || "—") : "—";
+  $("chartSetupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
   $("chartSetupStatus").textContent = statusText;
   $("chartSetupStatus").className = setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a";
   $("chartSetupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";

@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
         await trade_engine_service.stop(); await gex_service.stop(); await market_data_service.stop()
 
 
-app = FastAPI(title=settings.app_name, version="1.5.0-mobile-ipad", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="2.0.0-locked-trade-plans", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 

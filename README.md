@@ -151,3 +151,7 @@ Desktop charts continue to use TradingView Lightweight Charts 5.2. Mobile and ta
 ## v1.9 mobile price navigation and chart stability
 
 The mobile chart now supports full two-dimensional navigation: drag horizontally through time, drag vertically through price, and drag the right price scale to zoom. Double-tap, Auto, Fit or Real time restores automatic price scaling. TradeIQ also retains validated candle history by symbol and timeframe so a sparse live tick cannot collapse a full chart into one candle.
+
+## v2.0 locked trade plans
+
+TradeIQ separates a continuously recalculated **candidate** from an **armed setup**. Candidate entry, stop and target calculations are kept off the chart. The risk box and Entry/SL/TP lines appear only when the engine transitions to `WAITING_FOR_LIMIT`. Those trade levels are then frozen for the life of the setup and cannot follow the current price.

@@ -14,9 +14,9 @@ SW = (ROOT / "frontend" / "service-worker.js").read_text(encoding="utf-8")
 
 
 def test_mobile_chart_boot_is_sequential_and_has_canvas_fallback():
-    assert '/static/boot.js?v=19' in INDEX
-    assert 'await loadScript("/static/trading_chart.js?v=19")' in BOOT_JS
-    assert 'await loadScript("/static/app.js?v=19")' in BOOT_JS
+    assert '/static/boot.js?v=20' in INDEX
+    assert 'await loadScript("/static/trading_chart.js?v=20")' in BOOT_JS
+    assert 'await loadScript("/static/app.js?v=20")' in BOOT_JS
     assert "installCanvasFallback" in CHART_JS
     assert "tradeiq-canvas-fallback" in CHART_JS
     assert "window.TradeIQChartManager" in CHART_JS
@@ -60,6 +60,6 @@ def test_finnhub_items_keep_utc_published_at_for_client_formatting():
 
 
 def test_v16_service_worker_updates_installed_mobile_apps():
-    assert 'tradeiq-v1.9-shell' in SW
-    assert '/static/boot.js?v=19' in SW
+    assert 'tradeiq-v2.0-shell' in SW
+    assert '/static/boot.js?v=20' in SW
     assert "fetch(request).then" in SW

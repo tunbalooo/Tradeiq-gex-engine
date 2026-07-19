@@ -5,6 +5,14 @@
   const USE_MOBILE_CANVAS = window.matchMedia?.("(max-width: 900px)")?.matches === true;
   const MIN_SAFE_HISTORY_BARS = 20;
   const MAX_CACHED_HISTORY_BARS = 5000;
+  const ACTIVE_TRADE_STATES = new Set(["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"]);
+
+  function hasLockedTradePlan(setup) {
+    if (!setup || !ACTIVE_TRADE_STATES.has(setup.order_state)) return false;
+    if (!setup.armed_at) return false;
+    return [setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2]
+      .every((value) => Number.isFinite(Number(value)));
+  }
 
   function installCanvasFallback() {
     console.warn("Lightweight Charts was unavailable; TradeIQ is using its built-in Canvas chart fallback.");
@@ -287,10 +295,12 @@
       const start = Math.max(0, end - visibleCount);
       const values = candles.slice(start, end);
       const setupForScale = payload?.setup || {};
-      const extra = [setupForScale.entry, setupForScale.stop_loss, setupForScale.take_profit_1, setupForScale.take_profit_2,
-        setupForScale.vwap, setupForScale.standard_deviation_high, setupForScale.standard_deviation_low,
-        setupForScale.gex?.call_wall, setupForScale.gex?.gamma_flip, setupForScale.gex?.put_wall]
-        .map(Number).filter(Number.isFinite);
+      const marketContextLevels = [setupForScale.vwap, setupForScale.standard_deviation_high, setupForScale.standard_deviation_low,
+        setupForScale.gex?.call_wall, setupForScale.gex?.gamma_flip, setupForScale.gex?.put_wall];
+      const lockedTradeLevels = hasLockedTradePlan(setupForScale)
+        ? [setupForScale.entry, setupForScale.stop_loss, setupForScale.take_profit_1, setupForScale.take_profit_2]
+        : [];
+      const extra = [...marketContextLevels, ...lockedTradeLevels].map(Number).filter(Number.isFinite);
       let low = Math.min(...values.map((item) => item.low), ...extra);
       let high = Math.max(...values.map((item) => item.high), ...extra);
       const pad = Math.max((high - low) * 0.08, Number(payload?.tickSize || 0.25) * 8);
@@ -372,8 +382,8 @@
         horizontal(ctx, toY(setup.gex.put_wall), plotRight, "PUT", lineColors.stop);
       }
       if (overlays.vwap) horizontal(ctx, toY(setup.vwap), plotRight, "VWAP", lineColors.vwap, false);
-      if (overlays.trade && setup.entry != null) {
-        horizontal(ctx, toY(setup.entry), plotRight, setup.order_state === "PREVIEW_ONLY" ? "WATCH" : "ENTRY", lineColors.entry, false);
+      if (overlays.trade && hasLockedTradePlan(setup)) {
+        horizontal(ctx, toY(setup.entry), plotRight, "ENTRY", lineColors.entry, false);
         horizontal(ctx, toY(setup.stop_loss), plotRight, "SL", lineColors.stop, false);
         horizontal(ctx, toY(setup.take_profit_1), plotRight, "TP1", lineColors.target);
         horizontal(ctx, toY(setup.take_profit_2), plotRight, "TP2", lineColors.target, false);
@@ -884,9 +894,8 @@
       addPriceLine(instance, setup.standard_deviation_low, "-1σ", COLORS.muted, dotted, 1);
     }
 
-    if (overlays.trade && setup.entry != null) {
-      const preview = setup.order_state === "PREVIEW_ONLY";
-      addPriceLine(instance, setup.entry, preview ? "WATCH" : "ENTRY", COLORS.amber, preview ? dotted : dashed, 2);
+    if (overlays.trade && hasLockedTradePlan(setup)) {
+      addPriceLine(instance, setup.entry, "ENTRY", COLORS.amber, dashed, 2);
       addPriceLine(instance, setup.stop_loss, "SL", COLORS.red, dashed, 2);
       addPriceLine(instance, setup.take_profit_1, "TP1", COLORS.green, dashed, 2);
       addPriceLine(instance, setup.take_profit_2, "TP2", COLORS.green, dashed, 2);
@@ -947,7 +956,7 @@
       }
     }
 
-    if (overlays.trade && setup.entry != null) {
+    if (overlays.trade && hasLockedTradePlan(setup)) {
       const entry = coordinate(setup.entry);
       const stop = coordinate(setup.stop_loss);
       const target = coordinate(setup.take_profit_2);

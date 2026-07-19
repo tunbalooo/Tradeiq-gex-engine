@@ -31,6 +31,6 @@ def test_invalid_ohlc_bars_are_rejected_before_chart_rendering():
 
 
 def test_v19_cache_busts_the_installed_mobile_app():
-    assert "tradeiq-v1.9-shell" in SW
-    assert "?v=19" in SW
-    assert '/static/boot.js?v=19' in INDEX
+    assert "tradeiq-v2.0-shell" in SW
+    assert "?v=20" in SW
+    assert '/static/boot.js?v=20' in INDEX
