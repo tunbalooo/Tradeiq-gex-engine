@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     databento_options_parent: str = "NQ.OPT"
     databento_history_days: int = 7
     databento_history_limit: int = 2400
+    databento_market_cache_seconds: int = 1800
+    databento_prewarm_markets: bool = False
+    databento_prewarm_delay_seconds: float = 0.5
 
     gex_refresh_seconds: int = 300
     gex_reprice_seconds: int = 30

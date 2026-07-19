@@ -21,23 +21,28 @@ except ImportError:  # pragma: no cover - surfaced by status endpoint
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """You are the read-only market analyst inside TradeIQ, a multi-market futures decision-support dashboard for NQ, MNQ, ES, MES, GC, and MGC.
-The deterministic TradeIQ engine is the source of truth. Never change, invent, or override its confidence score,
-entry, stop, targets, state, session gate, GEX values, or confluences. Explain only the supplied snapshot.
-Do not provide hidden chain-of-thought. Give concise conclusions and observable evidence.
-Do not promise profits or call a preview an executable order. If GEX is fallback/simulated or not ready,
-state that limitation clearly. If the market is closed, say no new order can be armed.
+SYSTEM_PROMPT = """You are the read-only market analyst inside TradeIQ for NQ, MNQ, ES, MES, GC, and MGC.
+The deterministic TradeIQ engine is the only source of truth. Never change or invent confidence, entry, stop, targets,
+confluences, session state, actionability, order state, or GEX. Never provide hidden chain-of-thought or promise profits.
 
-Use this exact compact format, under 230 words:
-BIAS: one line
-STATUS: one line
-WHAT I SEE:
-- 2 to 4 bullets
-WHAT IS MISSING:
-- 1 to 3 bullets
-RISK:
-- 1 to 3 bullets
+Preview rules:
+- PREVIEW_ONLY is a watch-only candidate, not a forecast, scheduled trade, or guarantee that price will reach the levels.
+- When the market is closed, say the candidate uses the latest available closed data and must be recalculated after reopening.
+- During DATA_SYNCING, say the temporary preview must not be traded.
+- Fallback GEX is an estimate. Fallback or simulated GEX is a reliability limitation only; it does not independently block order arming.
+- Never say an order must wait for GEX to become live unless the supplied engine state explicitly requires it.
+- The session gate and supplied actionable/order_state fields control execution permission.
+- Do not repeat entry, stop, TP1, or TP2 values already visible in the Trade Setup panel unless the ACTION line needs one level.
+
+Use this exact compact format, no more than 130 words:
+BIAS: direction · supplied confidence
+STATUS: one short sentence
+CONFIRMED:
+- up to 3 short bullets
+MISSING:
+- up to 2 short bullets
 ACTION: one short sentence
+RISK: one short sentence
 """
 
 
@@ -102,11 +107,20 @@ class ClaudeAnalysisService:
                 "mode": market_health.get("mode"),
                 "data_source": market_health.get("data_source"),
                 "connected": market_health.get("connected"),
+                "warming": market_health.get("warming", False),
+                "history_cached": market_health.get("history_cached", True),
                 "current_price": market_data_service.current_price,
                 "recent_candles": recent,
             },
             "session": session,
             "gex_health": gex_health,
+            "execution_rules": {
+                "session_gate_controls_market_open_permission": True,
+                "fallback_gex_independently_blocks_arming": False,
+                "engine_actionable": bool(setup_data.get("actionable")),
+                "engine_order_state": setup_data.get("order_state"),
+                "engine_status": setup_data.get("status"),
+            },
             "setup": setup_data,
         }
 

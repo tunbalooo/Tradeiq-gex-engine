@@ -3,6 +3,7 @@ import logging
 import random
 import threading
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import sin
 from typing import Any
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from backend.core.config import settings
 from backend.models.schemas import Candle, MarketOverviewItem
-from backend.services.instruments import InstrumentProfile, get_instrument, instrument_registry
+from backend.services.instruments import INSTRUMENTS, InstrumentProfile, get_instrument, instrument_registry
 
 logger = logging.getLogger(__name__)
 NANO = 1_000_000_000
@@ -256,6 +257,14 @@ class SimulatedMarketDataService:
         }
 
 
+@dataclass(slots=True)
+class _MarketHistoryCache:
+    candles: list[Candle]
+    current_price: float
+    raw_symbol: str | None
+    loaded_at: datetime
+
+
 class DatabentoMarketDataService:
     mode = "live"
     data_source = "databento"
@@ -268,12 +277,18 @@ class DatabentoMarketDataService:
         self.connected = False
         self.last_error: str | None = None
         self.raw_symbol: str | None = None
+        self.warming = False
+        self.history_cached = False
         self._live_client = None
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._switch_lock = asyncio.Lock()
         self._started = False
         self._generation = 0
+        self._history_cache: dict[str, _MarketHistoryCache] = {}
+        self._history_tasks: dict[str, asyncio.Task] = {}
+        self._prewarm_task: asyncio.Task | None = None
+        self._live_overlay: dict[datetime, Candle] = {}
 
     @property
     def symbol(self) -> str:
@@ -283,12 +298,26 @@ class DatabentoMarketDataService:
         if self._started:
             return
         self._started = True
-        await self._activate_profile(self.instrument)
+        # The default market is fully loaded before the trade engine starts.
+        await self._activate_profile(self.instrument, wait_for_history=True)
+        if settings.databento_prewarm_markets:
+            self._prewarm_task = asyncio.create_task(
+                self._prewarm_remaining_markets(),
+                name="databento-market-prewarm",
+            )
 
     async def stop(self) -> None:
         self._generation += 1
         self._stop_live_client()
         self.connected = False
+        tasks = list(self._history_tasks.values())
+        if self._prewarm_task:
+            tasks.append(self._prewarm_task)
+        for task in tasks:
+            if task and not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def switch_symbol(self, symbol: str) -> dict:
         profile = get_instrument(symbol)
@@ -297,40 +326,150 @@ class DatabentoMarketDataService:
                 instrument_registry.select(profile.symbol)
                 return self.health()
             instrument_registry.select(profile.symbol)
-            await self._activate_profile(profile)
+            # Switching now returns immediately. Cached history or a local preview is
+            # displayed first while Databento backfills in the background.
+            await self._activate_profile(profile, wait_for_history=False)
         return self.health()
 
-    async def _activate_profile(self, profile: InstrumentProfile) -> None:
+    async def _activate_profile(self, profile: InstrumentProfile, wait_for_history: bool) -> None:
+        self._remember_active_cache()
         self._generation += 1
         generation = self._generation
         self._stop_live_client()
+
+        cache = self._history_cache.get(profile.symbol)
+        cache_age = (datetime.now(timezone.utc) - cache.loaded_at).total_seconds() if cache else None
+        cache_is_fresh = bool(cache and cache_age is not None and cache_age <= settings.databento_market_cache_seconds)
+
         with self._lock:
             self.instrument = profile
-            self.candles.clear()
-            self.current_price = profile.simulation_start_price
-            self.raw_symbol = None
+            self.raw_symbol = cache.raw_symbol if cache else None
             self.connected = False
             self.last_error = None
+            self._live_overlay = {}
+            self.candles.clear()
+            if cache:
+                self.candles.extend(candle.model_copy(deep=True) for candle in cache.candles[-self.max_candles:])
+                self.current_price = cache.current_price
+                self.history_cached = True
+            else:
+                # A deterministic preview makes the UI responsive on the first visit
+                # to a market. It is replaced by real history as soon as backfill ends.
+                preview = SimulatedMarketDataService(max_candles=self.max_candles, profile=profile)
+                self.candles.extend(preview.snapshot())
+                self.current_price = preview.current_price
+                self.history_cached = False
+            self.warming = not cache_is_fresh
 
-        try:
-            await asyncio.to_thread(self._seed_history, profile, generation)
-        except Exception as exc:
-            self.last_error = str(exc)
-            logger.exception("Unable to seed Databento history for %s", profile.symbol)
-            fallback = SimulatedMarketDataService(max_candles=self.max_candles, profile=profile)
-            with self._lock:
-                if generation == self._generation:
-                    self.candles.extend(fallback.snapshot())
-                    self.current_price = fallback.current_price
+        if wait_for_history:
+            try:
+                loaded = await asyncio.to_thread(self._load_history, profile)
+                self._store_history(profile, loaded)
+                self._merge_active_history(profile, loaded, generation)
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.warming = False
+                logger.exception("Unable to seed Databento history for %s", profile.symbol)
+            if self._started and generation == self._generation:
+                self._start_live(profile, generation)
+            return
 
         if self._started and generation == self._generation:
-            self._thread = threading.Thread(
-                target=self._run_live,
-                args=(profile, generation),
-                name=f"databento-{profile.symbol.lower()}-live",
-                daemon=True,
+            self._start_live(profile, generation)
+        if not cache_is_fresh:
+            self._schedule_history_refresh(profile, generation)
+
+    def _remember_active_cache(self) -> None:
+        with self._lock:
+            if not self.candles or not self.history_cached:
+                return
+            self._history_cache[self.instrument.symbol] = _MarketHistoryCache(
+                candles=[candle.model_copy(deep=True) for candle in self.candles],
+                current_price=self.current_price,
+                raw_symbol=self.raw_symbol,
+                loaded_at=datetime.now(timezone.utc),
             )
-            self._thread.start()
+
+    def _schedule_history_refresh(self, profile: InstrumentProfile, generation: int | None = None) -> None:
+        existing = self._history_tasks.get(profile.symbol)
+        if existing and not existing.done():
+            return
+        task = asyncio.create_task(
+            self._refresh_history(profile, generation),
+            name=f"databento-history-{profile.symbol.lower()}",
+        )
+        self._history_tasks[profile.symbol] = task
+        task.add_done_callback(lambda _task, symbol=profile.symbol: self._history_tasks.pop(symbol, None))
+
+    async def _refresh_history(self, profile: InstrumentProfile, generation: int | None = None) -> None:
+        try:
+            loaded = await asyncio.to_thread(self._load_history, profile)
+            self._store_history(profile, loaded)
+            if profile.symbol == self.instrument.symbol:
+                self._merge_active_history(profile, loaded, generation)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if profile.symbol == self.instrument.symbol:
+                self.last_error = str(exc)
+                self.warming = False
+            logger.exception("Databento history refresh failed for %s", profile.symbol)
+
+    async def _prewarm_remaining_markets(self) -> None:
+        # Load the other five instruments one at a time to avoid a burst of paid
+        # historical requests. Once warmed, switching is normally sub-second.
+        for profile in INSTRUMENTS.values():
+            if profile.symbol == self.instrument.symbol or profile.symbol in self._history_cache:
+                continue
+            try:
+                loaded = await asyncio.to_thread(self._load_history, profile)
+                self._store_history(profile, loaded)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Unable to prewarm %s history", profile.symbol)
+            await asyncio.sleep(max(0.0, settings.databento_prewarm_delay_seconds))
+
+    def _store_history(self, profile: InstrumentProfile, loaded: list[Candle]) -> None:
+        if not loaded:
+            return
+        self._history_cache[profile.symbol] = _MarketHistoryCache(
+            candles=[candle.model_copy(deep=True) for candle in loaded[-self.max_candles:]],
+            current_price=loaded[-1].close,
+            raw_symbol=None,
+            loaded_at=datetime.now(timezone.utc),
+        )
+
+    def _merge_active_history(
+        self,
+        profile: InstrumentProfile,
+        loaded: list[Candle],
+        generation: int | None,
+    ) -> None:
+        with self._lock:
+            if profile.symbol != self.instrument.symbol:
+                return
+            if generation is not None and generation != self._generation:
+                return
+            merged = {candle.time: candle.model_copy(deep=True) for candle in loaded}
+            # Preserve real live bars received while the historical request was running.
+            for candle_time, candle in self._live_overlay.items():
+                merged[candle_time] = candle.model_copy(deep=True)
+            values = sorted(merged.values(), key=lambda candle: candle.time)[-self.max_candles:]
+            if not values:
+                return
+            self.candles.clear()
+            self.candles.extend(values)
+            self.current_price = values[-1].close
+            self.history_cached = True
+            self.warming = False
+            self.last_error = None
+            self._history_cache[profile.symbol] = _MarketHistoryCache(
+                candles=[candle.model_copy(deep=True) for candle in values],
+                current_price=self.current_price,
+                raw_symbol=self.raw_symbol,
+                loaded_at=datetime.now(timezone.utc),
+            )
 
     def _stop_live_client(self) -> None:
         client = self._live_client
@@ -341,6 +480,15 @@ class DatabentoMarketDataService:
             except Exception:
                 logger.debug("Databento live stop failed", exc_info=True)
 
+    def _start_live(self, profile: InstrumentProfile, generation: int) -> None:
+        self._thread = threading.Thread(
+            target=self._run_live,
+            args=(profile, generation),
+            name=f"databento-{profile.symbol.lower()}-live",
+            daemon=True,
+        )
+        self._thread.start()
+
     def _import_db(self):
         try:
             import databento as db
@@ -348,7 +496,7 @@ class DatabentoMarketDataService:
             raise RuntimeError("Install Databento with: python -m pip install -U databento") from exc
         return db
 
-    def _seed_history(self, profile: InstrumentProfile, generation: int) -> None:
+    def _load_history(self, profile: InstrumentProfile) -> list[Candle]:
         db = self._import_db()
         client = db.Historical(key=settings.databento_api_key)
         requested_end = datetime.now(timezone.utc)
@@ -377,12 +525,7 @@ class DatabentoMarketDataService:
         loaded.sort(key=lambda candle: candle.time)
         if not loaded:
             raise RuntimeError(f"Databento returned no {profile.symbol} historical bars for {profile.futures_continuous}.")
-        with self._lock:
-            if generation != self._generation or profile.symbol != self.instrument.symbol:
-                return
-            self.candles.clear()
-            self.candles.extend(loaded[-settings.databento_history_limit:])
-            self.current_price = self.candles[-1].close
+        return loaded[-settings.databento_history_limit:]
 
     def _run_live(self, profile: InstrumentProfile, generation: int) -> None:
         try:
@@ -430,7 +573,7 @@ class DatabentoMarketDataService:
                 return
             if self.candles and self.candles[-1].time == minute:
                 last = self.candles[-1]
-                self.candles[-1] = Candle(
+                candle = Candle(
                     time=minute,
                     open=last.open,
                     high=round(max(last.high, high_px), profile.price_precision),
@@ -438,17 +581,18 @@ class DatabentoMarketDataService:
                     close=round(close_px, profile.price_precision),
                     volume=last.volume + volume,
                 )
+                self.candles[-1] = candle
             else:
-                self.candles.append(
-                    Candle(
-                        time=minute,
-                        open=round(open_px, profile.price_precision),
-                        high=round(high_px, profile.price_precision),
-                        low=round(low_px, profile.price_precision),
-                        close=round(close_px, profile.price_precision),
-                        volume=volume,
-                    )
+                candle = Candle(
+                    time=minute,
+                    open=round(open_px, profile.price_precision),
+                    high=round(high_px, profile.price_precision),
+                    low=round(low_px, profile.price_precision),
+                    close=round(close_px, profile.price_precision),
+                    volume=volume,
                 )
+                self.candles.append(candle)
+            self._live_overlay[minute] = candle.model_copy(deep=True)
             self.current_price = round(close_px, profile.price_precision)
             self.connected = True
             self.last_error = None
@@ -485,6 +629,8 @@ class DatabentoMarketDataService:
         ]
 
     def health(self) -> dict:
+        cache = self._history_cache.get(self.instrument.symbol)
+        cache_age = (datetime.now(timezone.utc) - cache.loaded_at).total_seconds() if cache else None
         return {
             "mode": self.mode,
             "data_source": self.data_source,
@@ -494,6 +640,10 @@ class DatabentoMarketDataService:
             "futures_symbol": self.instrument.futures_continuous,
             "raw_symbol": self.raw_symbol,
             "candle_count": len(self.candles),
+            "warming": self.warming,
+            "history_cached": self.history_cached,
+            "cache_age_seconds": round(cache_age, 1) if cache_age is not None else None,
+            "cached_symbols": sorted(self._history_cache),
             "instrument": self.instrument.public_dict(),
         }
 

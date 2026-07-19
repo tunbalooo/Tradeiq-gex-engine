@@ -1,4 +1,4 @@
-# TradeIQ Multi-Market GEX Engine v1.2
+# TradeIQ Multi-Market GEX Engine v1.4
 
 TradeIQ is a FastAPI and browser-based futures decision-support dashboard for:
 
@@ -10,6 +10,23 @@ TradeIQ is a FastAPI and browser-based futures decision-support dashboard for:
 - MGC — Micro Gold
 
 The active market selector updates candles, EMA structure, supply/demand, Fib/OTE, trade levels, Claude analysis, Finnhub relevance filtering, session rules, tick size, and GEX metadata. During the current single-user development stage, the selected symbol is global for the running server.
+
+
+## What a preview means
+
+A `PREVIEW_ONLY` setup is a watch-only candidate generated from the latest available engine data. It is not a prediction, scheduled trade, or guarantee that price will reach the displayed levels. A preview becomes an armed `WAITING_FOR_LIMIT` plan only when live/cached market data is ready, the session gate permits trading, and every mandatory engine condition passes.
+
+## Fast market switching
+
+TradeIQ no longer blocks the instrument selector while a full Databento history request finishes. On a first visit to a market, the interface switches immediately into **DATABENTO SYNC** mode, shows a clearly labelled local preview, and backfills real history in the background. Automatic Claude analysis and order arming remain disabled until the real/cached history is ready.
+
+After a market has loaded once, its candles are retained in an in-memory cache for 30 minutes, so switching back is normally sub-second. Finnhub's general-news feed is also downloaded once and filtered locally for NQ, ES, and Gold instead of making a separate network request for each symbol.
+
+Optional prewarming is disabled by default to avoid multiplying Databento historical usage on every Railway deployment. It can be enabled with:
+
+```env
+DATABENTO_PREWARM_MARKETS=true
+```
 
 ## GEX mapping
 
@@ -28,7 +45,7 @@ For micro charts, the interface explicitly labels the GEX as parent-market expos
 
 - Session status never changes the confidence score.
 - The session gate only controls whether a new setup is actionable or can be armed.
-- Claude is read-only and cannot modify confidence, entries, stops, targets, GEX, or lifecycle state.
+- Claude is read-only and cannot modify confidence, entries, stops, targets, GEX, or lifecycle state. Fallback GEX is a reliability warning, not an independent execution gate.
 - Finnhub news is informational and does not change engine scoring.
 - Broker execution is not enabled.
 
@@ -54,6 +71,8 @@ DATA_PROVIDER=databento
 SIMULATED_MODE=false
 DEFAULT_SYMBOL=NQ
 DATABENTO_API_KEY=your_private_key
+DATABENTO_MARKET_CACHE_SECONDS=1800
+DATABENTO_PREWARM_MARKETS=false
 ```
 
 For Finnhub news:

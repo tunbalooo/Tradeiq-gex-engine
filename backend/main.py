@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
         await trade_engine_service.stop(); await gex_service.stop(); await market_data_service.stop()
 
 
-app = FastAPI(title=settings.app_name, version="1.2.0-multi-market", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="1.3.0-fast-switch", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 

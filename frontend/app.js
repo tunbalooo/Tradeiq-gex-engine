@@ -45,6 +45,7 @@ const state = {
   chartMeta: null,
   instrument: null,
   switchingSymbol: false,
+  marketWarming: false,
   socket: null,
   overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
   claude: { enabled: false, auto: true, busy: false, source: null, text: "", model: "—", lastStartedAt: 0 },
@@ -128,13 +129,15 @@ function renderClaudeAnalysis(text, streaming = false) {
 
   const sections = [];
   let current = null;
-  const headingPattern = /^(BIAS|STATUS|WHAT I SEE|WHAT IS MISSING|RISK|ACTION):\s*(.*)$/i;
+  const headingPattern = /^(BIAS|STATUS|CONFIRMED|MISSING|WHAT I SEE|WHAT IS MISSING|RISK|ACTION):\s*(.*)$/i;
   text.split(/\r?\n/).forEach((rawLine) => {
     const line = rawLine.trim();
     if (!line) return;
     const match = line.match(headingPattern);
     if (match) {
-      current = { heading: match[1].toUpperCase(), lines: [] };
+      const rawHeading = match[1].toUpperCase();
+      const heading = rawHeading === "WHAT I SEE" ? "CONFIRMED" : rawHeading === "WHAT IS MISSING" ? "MISSING" : rawHeading;
+      current = { heading, lines: [] };
       if (match[2]) current.lines.push(match[2]);
       sections.push(current);
       return;
@@ -149,7 +152,8 @@ function renderClaudeAnalysis(text, streaming = false) {
   target.innerHTML = sections.map((section) => {
     const bullets = section.lines.filter((line) => line.startsWith("- ")).map((line) => `<li>${escapeHtml(line.slice(2))}</li>`);
     const prose = section.lines.filter((line) => !line.startsWith("- ")).map((line) => escapeHtml(line)).join(" ");
-    return `<section class="claude-analysis-section"><h4>${escapeHtml(section.heading)}</h4>${prose ? `<p>${prose}</p>` : ""}${bullets.length ? `<ul>${bullets.join("")}</ul>` : ""}</section>`;
+    const sectionClass = `claude-section-${section.heading.toLowerCase().replaceAll(" ", "-")}`;
+    return `<section class="claude-analysis-section ${sectionClass}"><h4>${escapeHtml(section.heading)}</h4>${prose ? `<p>${prose}</p>` : ""}${bullets.length ? `<ul>${bullets.join("")}</ul>` : ""}</section>`;
   }).join("") || `<div class="claude-analysis-raw">${escapeHtml(text)}</div>`;
   target.classList.toggle("claude-cursor", streaming);
   target.scrollTop = target.scrollHeight;
@@ -188,6 +192,9 @@ function stopClaudeStream() {
 
 function startClaudeAnalysis(force = false) {
   if (!state.claude.enabled || state.claude.busy || !$("claudeAnalysis")) return;
+  // Automatic analysis waits for real/cached Databento history. The manual
+  // Analyze Now button can still be used during a visible syncing preview.
+  if (!force && state.marketWarming) return;
   state.claude.busy = true;
   state.claude.text = "";
   state.claude.lastStartedAt = Date.now();
@@ -244,7 +251,7 @@ function startClaudeAnalysis(force = false) {
 }
 
 function maybeRunClaudeOnStateChange(previousSetup, nextSetup) {
-  if (state.currentPage !== "chart" || !state.claude.enabled || !state.claude.auto || !previousSetup || !nextSetup) return;
+  if (state.currentPage !== "chart" || state.marketWarming || !state.claude.enabled || !state.claude.auto || !previousSetup || !nextSetup) return;
   const importantChange = previousSetup.order_state !== nextSetup.order_state
     || previousSetup.direction !== nextSetup.direction
     || Boolean(previousSetup.actionable) !== Boolean(nextSetup.actionable);
@@ -343,6 +350,14 @@ function renderSession(session) {
   if (state.currentPage === "dashboard") $("pageTitle").textContent = open ? `${activeSymbol()} · ${session.display_name}` : `${activeSymbol()} · MARKET CLOSED`;
 }
 
+function previewExplanation(setup, { syncing = false, marketClosed = false } = {}) {
+  if (syncing) return "Temporary levels from local placeholder data while Databento history syncs. Do not trade this preview.";
+  if (marketClosed) return "Watch-only candidate from the latest closed data. It can change or disappear when live trading resumes.";
+  if (!setup.entry_valid) return "Candidate only: the proposed level is not currently a valid resting limit.";
+  if (!setup.actionable) return "Candidate only: one or more mandatory confirmations are still missing. It is not an armed order.";
+  return "Candidate levels only. TradeIQ has not armed an order.";
+}
+
 function renderTradeSetup(setup) {
   const confidence = Math.max(0, Math.min(100, Number(setup.confidence)));
   const circumference = 307.9;
@@ -353,28 +368,31 @@ function renderTradeSetup(setup) {
   $("confidencePct").style.color = gaugeColor;
 
   const activeStates = ["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"];
+  const syncing = state.marketWarming || setup.status === "DATA_SYNCING";
   const marketClosed = state.session && !state.session.is_open;
-  const quality = setup.order_state === "PREVIEW_ONLY" ? "Preview Only" :
+  const quality = setup.order_state === "PREVIEW_ONLY" ? "Watch-only Preview" :
     setup.order_state === "WAITING_FOR_LIMIT" ? "Limit Armed" :
     setup.order_state === "FILLED" ? "Position Filled" :
     setup.order_state === "TP1_HIT" ? "TP1 Hit — Running" :
     setup.order_state.replaceAll("_", " ");
-  $("probabilityLabel").textContent = marketClosed ? "Market Closed" : quality;
+  $("probabilityLabel").textContent = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : quality;
   $("probabilityLabel").style.color = gaugeColor;
   const coreKeys = ["trend_alignment", "gex_alignment", "ote_overlap", "supply_demand", "gex_ote_zone_cluster"];
   const aligned = coreKeys.filter((key) => setup.signals[key]).length;
-  $("coreAlignment").textContent = marketClosed
+  $("coreAlignment").textContent = syncing
+    ? `${aligned} / ${coreKeys.length} core confluences aligned — score preserved, no order while history syncs`
+    : marketClosed
     ? `${aligned} / ${coreKeys.length} core confluences aligned — score preserved, no new order`
     : setup.actionable
       ? `${aligned} / ${coreKeys.length} core confluences aligned — actionable`
       : `${aligned} / ${coreKeys.length} core confluences aligned — do not place yet`;
 
   const label = setup.order_state === "PREVIEW_ONLY" ? `${setup.direction} PREVIEW` : `${setup.direction} ${setup.order_state.replaceAll("_", " ")}`;
-  $("setupLabel").textContent = marketClosed ? "MARKET CLOSED" : label;
-  $("setupLabel").className = `${classForDirection(setup.direction)} mono setup-side-label`;
+  $("setupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
+  $("setupLabel").className = `${syncing || marketClosed ? "a" : classForDirection(setup.direction)} mono setup-side-label`;
   $("setupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("setupDirection").className = `v ${classForDirection(setup.direction)}`;
-  $("entryLabel").textContent = setup.order_state === "PREVIEW_ONLY" ? "Preview Limit" : setup.order_state === "WAITING_FOR_LIMIT" ? "Armed Limit" : "Filled Entry";
+  $("entryLabel").textContent = setup.order_state === "PREVIEW_ONLY" ? "Watch-only Level" : setup.order_state === "WAITING_FOR_LIMIT" ? "Armed Limit" : "Filled Entry";
   $("setupEntry").textContent = fmt(setup.entry);
   $("setupStop").textContent = fmt(setup.stop_loss);
   $("setupTp1").textContent = fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "");
@@ -382,19 +400,20 @@ function renderTradeSetup(setup) {
   $("setupTp1Source").textContent = setup.target_sources?.tp1 || "—";
   $("setupTp2Source").textContent = setup.target_sources?.tp2 || "—";
   $("setupRr").textContent = setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  const statusText = marketClosed ? "Market Closed" : setup.order_state === "PREVIEW_ONLY" ? "Not Ready To Place" : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
+  const statusText = syncing ? "Temporary Preview — Data Syncing" : marketClosed ? "Watch Only — Market Closed" : setup.order_state === "PREVIEW_ONLY" ? "Candidate — Confirmation Missing" : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
   $("setupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
   $("setupCluster").className = `v ${setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
-  $("validLabel").textContent = marketClosed ? "Opens In" : "Valid Until";
-  $("setupValid").textContent = marketClosed ? remainingText(state.session?.next_open_at) : new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : "Valid Until";
+  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
   renderChartTradeSetup(setup, {
     confidence,
     gaugeColor,
     marketClosed,
+    syncing,
     quality,
     aligned,
     coreCount: coreKeys.length,
@@ -406,25 +425,27 @@ function renderTradeSetup(setup) {
 
 function renderChartTradeSetup(setup, context) {
   if (!$("chartSetupPanel")) return;
-  const { confidence, gaugeColor, marketClosed, quality, aligned, coreCount, label, statusText, activeStates } = context;
+  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, coreCount, label, statusText, activeStates } = context;
   const ring = $("chartConfidenceRing");
   ring.style.setProperty("--chart-confidence", `${confidence * 3.6}deg`);
   ring.style.setProperty("--chart-confidence-color", gaugeColor);
   $("chartConfidencePct").textContent = `${Math.round(confidence)}%`;
   $("chartConfidencePct").style.color = gaugeColor;
-  $("chartProbabilityLabel").textContent = marketClosed ? "Market Closed" : quality;
+  $("chartProbabilityLabel").textContent = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : quality;
   $("chartProbabilityLabel").style.color = gaugeColor;
-  $("chartCoreAlignment").textContent = marketClosed
+  $("chartCoreAlignment").textContent = syncing
+    ? `${aligned} / ${coreCount} aligned — score preserved while history syncs`
+    : marketClosed
     ? `${aligned} / ${coreCount} core confluences aligned — score preserved`
     : setup.actionable
       ? `${aligned} / ${coreCount} aligned — actionable`
       : `${aligned} / ${coreCount} aligned — wait for confirmation`;
 
-  $("chartSetupLabel").textContent = marketClosed ? "MARKET CLOSED" : label;
-  $("chartSetupLabel").className = `${marketClosed ? "r" : classForDirection(setup.direction)} mono`;
+  $("chartSetupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
+  $("chartSetupLabel").className = `${syncing ? "a" : marketClosed ? "r" : classForDirection(setup.direction)} mono`;
   $("chartSetupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("chartSetupDirection").className = classForDirection(setup.direction);
-  $("chartEntryLabel").textContent = setup.order_state === "PREVIEW_ONLY" ? "Preview Limit" : setup.order_state === "WAITING_FOR_LIMIT" ? "Armed Limit" : "Filled Entry";
+  $("chartEntryLabel").textContent = setup.order_state === "PREVIEW_ONLY" ? "Watch-only Level" : setup.order_state === "WAITING_FOR_LIMIT" ? "Armed Limit" : "Filled Entry";
   $("chartSetupEntry").textContent = fmt(setup.entry);
   $("chartSetupStop").textContent = fmt(setup.stop_loss);
   $("chartSetupTp1").textContent = fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "");
@@ -438,8 +459,16 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupCluster").className = setup.signals.gex_ote_zone_cluster ? "g" : "a";
   $("chartSetupSession").textContent = state.session?.display_name || "—";
   $("chartSetupSession").className = marketClosed ? "r" : "g";
-  $("chartValidLabel").textContent = marketClosed ? "Opens In" : "Valid Until";
-  $("chartSetupValid").textContent = marketClosed ? remainingText(state.session?.next_open_at) : new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : "Valid Until";
+  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  const previewNotice = $("chartPreviewNotice");
+  if (previewNotice) {
+    const previewOnly = setup.order_state === "PREVIEW_ONLY";
+    previewNotice.hidden = !previewOnly;
+    previewNotice.classList.toggle("syncing", Boolean(syncing));
+    previewNotice.classList.toggle("closed", Boolean(marketClosed));
+    if (previewOnly && $("chartPreviewReason")) $("chartPreviewReason").textContent = previewExplanation(setup, { syncing, marketClosed });
+  }
 }
 function renderGexSummary(setup) {
   const gex = setup.gex;
@@ -599,7 +628,11 @@ async function initialLoad() {
       fetch("/api/dashboard").then((response) => response.json()),
     ]);
     state.baseCandles = snapshot.candles;
-    state.dataSource = health.data_source === "databento" ? "DATABENTO LIVE" : health.mode.toUpperCase();
+    const initialMarket = health.market || {};
+    state.marketWarming = Boolean(initialMarket.warming || (health.data_source === "databento" && !initialMarket.history_cached));
+    state.dataSource = health.data_source === "databento"
+      ? (initialMarket.last_error && !initialMarket.history_cached ? "DATABENTO ERROR" : state.marketWarming ? "DATABENTO SYNC" : "DATABENTO LIVE")
+      : health.mode.toUpperCase();
     applyInstrument(snapshot.instrument || health.instrument || health.market?.instrument);
     $("modeLabel").textContent = state.dataSource;
     renderAll(dashboard.setup, dashboard.meta, dashboard.session || health.session);
@@ -613,14 +646,44 @@ async function initialLoad() {
   }
 }
 
+
+async function reloadSyncedHistory() {
+  try {
+    const snapshot = await fetch("/api/market/snapshot?timeframe=1&limit=1400").then((response) => {
+      if (!response.ok) throw new Error(`Snapshot refresh failed (${response.status})`);
+      return response.json();
+    });
+    if (snapshot.symbol && snapshot.symbol !== activeSymbol()) return false;
+    state.baseCandles = snapshot.candles || [];
+    applyInstrument(snapshot.instrument);
+    renderHeader(snapshot);
+    window.TradeIQChartManager?.marketChanged?.("chart");
+    window.TradeIQChartManager?.marketChanged?.("chartLarge");
+    drawChart();
+    if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
+    toast(`${activeSymbol()} Databento history ready`);
+    return true;
+  } catch (error) {
+    console.error(error);
+    toast("History synced, but the chart refresh failed");
+    return false;
+  }
+}
+
 function connectWebSocket() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${protocol}://${location.host}/ws/market`);
   state.socket = socket;
   socket.onopen = () => setConnection(true);
-  socket.onmessage = (event) => {
+  socket.onmessage = async (event) => {
     if (state.switchingSymbol) return;
     const data = JSON.parse(event.data);
+    const wasWarming = state.marketWarming;
+    state.marketWarming = Boolean(data.market?.warming || (data.market?.data_source === "databento" && !data.market?.history_cached));
+    if (data.market?.data_source === "databento") {
+      state.dataSource = data.market?.last_error && !data.market?.history_cached ? "DATABENTO ERROR" : state.marketWarming ? "DATABENTO SYNC" : "DATABENTO LIVE";
+      if ($("modeLabel")) $("modeLabel").textContent = state.dataSource;
+    }
     const incomingInstrument = data.market?.instrument;
     if (incomingInstrument && incomingInstrument.symbol !== activeSymbol()) {
       state.baseCandles = [];
@@ -632,6 +695,12 @@ function connectWebSocket() {
     else state.baseCandles.push(candle);
     if (state.baseCandles.length > 2400) state.baseCandles.shift();
     renderAll(data.setup, data.meta, data.session);
+    if (wasWarming && !state.marketWarming) {
+      await reloadSyncedHistory();
+      if (state.currentPage === "chart" && state.claude.enabled && state.claude.auto && !state.claude.busy) {
+        startClaudeAnalysis(false);
+      }
+    }
   };
   socket.onerror = () => socket.close();
   socket.onclose = () => {
@@ -648,7 +717,10 @@ async function switchMarket(symbol) {
   selector.disabled = true;
   selector.closest(".symbol-selector")?.classList.add("busy");
   stopClaudeStream();
+  state.claude.text = "";
+  renderClaudeAnalysis("", false);
   setClaudeStatus("WAITING", "cached");
+  if ($("claudeFoot")) $("claudeFoot").textContent = `Waiting for ${symbol} market data…`;
   toast(`Switching TradeIQ to ${symbol}…`);
   try {
     const response = await fetch("/api/market/symbol", {
@@ -661,6 +733,11 @@ async function switchMarket(symbol) {
       throw new Error(failure.detail || `Market switch failed (${response.status})`);
     }
     const selected = await response.json();
+    state.marketWarming = Boolean(selected.market?.warming || (selected.market?.data_source === "databento" && !selected.market?.history_cached));
+    state.dataSource = selected.market?.data_source === "databento"
+      ? (selected.market?.last_error && !selected.market?.history_cached ? "DATABENTO ERROR" : state.marketWarming ? "DATABENTO SYNC" : "DATABENTO LIVE")
+      : String(selected.market?.mode || "simulated").toUpperCase();
+    if ($("modeLabel")) $("modeLabel").textContent = state.dataSource;
     const [snapshot, dashboard] = await Promise.all([
       fetch("/api/market/snapshot?timeframe=1&limit=1400").then((item) => item.json()),
       fetch("/api/dashboard").then((item) => item.json()),
@@ -676,7 +753,10 @@ async function switchMarket(symbol) {
     drawChart();
     if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
     await loadClaudeStatus();
-    toast(`${symbol} market loaded`);
+    if (!state.marketWarming && state.currentPage === "chart" && state.claude.enabled && state.claude.auto) {
+      startClaudeAnalysis(false);
+    }
+    toast(state.marketWarming ? `${symbol} loaded · Databento history syncing` : `${symbol} market loaded`);
   } catch (error) {
     console.error(error);
     selector.value = activeSymbol();

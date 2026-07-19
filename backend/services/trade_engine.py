@@ -59,6 +59,16 @@ class TradeEngineService:
                 self._last_error = None
                 if self._current is None or self._current.order_state in TERMINAL:
                     self._current = self._maybe_arm(candidate, closed)
+                elif self._current.order_state == "PREVIEW_ONLY":
+                    # Preview plans are recalculated every cycle so they can become
+                    # armable after the session opens or market history finishes syncing.
+                    refreshed = self._maybe_arm(candidate, closed)
+                    if refreshed.order_state == "PREVIEW_ONLY":
+                        refreshed = refreshed.model_copy(update={
+                            "setup_id": self._current.setup_id,
+                            "timestamp": self._current.timestamp,
+                        })
+                    self._current = refreshed
                 else:
                     self._current = self._refresh_context(self._current, candidate)
                     if self._last_processed_candle_time is None or closed.time > self._last_processed_candle_time:
@@ -75,6 +85,15 @@ class TradeEngineService:
             return self.current_setup()
 
     def _maybe_arm(self, candidate: TradeSetup, candle) -> TradeSetup:
+        market = market_data_service.health()
+        if market.get("warming") or (market.get("data_source") == "databento" and not market.get("history_cached", False)):
+            # Keep the deterministic confidence untouched, but never arm from the
+            # temporary local preview or an unavailable Databento history state.
+            return candidate.model_copy(update={
+                "order_state": "PREVIEW_ONLY",
+                "actionable": False,
+                "status": "DATA_SYNCING",
+            })
         session = get_session_status()
         if not session["can_trade_now"]:
             # Preserve the calculated confidence and every confluence component.

@@ -371,7 +371,7 @@
 
     if (overlays.trade && setup.entry != null) {
       const preview = setup.order_state === "PREVIEW_ONLY";
-      addPriceLine(instance, setup.entry, preview ? "PREVIEW" : "ENTRY", COLORS.amber, preview ? dotted : dashed, 2);
+      addPriceLine(instance, setup.entry, preview ? "WATCH" : "ENTRY", COLORS.amber, preview ? dotted : dashed, 2);
       addPriceLine(instance, setup.stop_loss, "SL", COLORS.red, dashed, 2);
       addPriceLine(instance, setup.take_profit_1, "TP1", COLORS.green, dashed, 2);
       addPriceLine(instance, setup.take_profit_2, "TP2", COLORS.green, dashed, 2);

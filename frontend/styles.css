@@ -171,3 +171,9 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 @media(max-width:900px){.chart-page-shell{height:auto;overflow:auto}.tv-chart-layout{grid-template-columns:1fr;height:auto}.tv-workstation{height:620px}.tv-chart-rail{height:auto;border-left:0;border-top:1px solid var(--line)}.claude-panel{min-height:360px}.chart-mode-actions{overflow-x:auto}.tradeiq-chart-bar{align-items:flex-start}.chart-overlay-toggles{width:100%}}
 
 .news-link{color:var(--text);text-decoration:none;line-height:1.35}.news-link:hover{color:var(--blue);text-decoration:underline}.news-source{font-size:9px;margin-top:3px}.news-row td{vertical-align:top}
+
+
+/* v1.4: clearer watch-only previews and compact Claude output. */
+.chart-preview-notice{display:grid;gap:4px;margin-top:10px;padding:9px 10px;border:1px solid rgba(245,185,59,.34);border-radius:6px;background:rgba(245,185,59,.07);color:#c9d3df;font:500 9px/1.45 var(--sans)}
+.chart-preview-notice[hidden]{display:none}.chart-preview-notice b{color:var(--amber);font:700 8.5px var(--mono);letter-spacing:.65px}.chart-preview-notice.closed{border-color:rgba(255,77,94,.28);background:rgba(255,77,94,.055)}.chart-preview-notice.closed b{color:var(--red)}.chart-preview-notice.syncing{border-color:rgba(72,163,255,.3);background:rgba(72,163,255,.055)}.chart-preview-notice.syncing b{color:var(--blue)}
+.claude-analysis{font-size:10px;line-height:1.45}.claude-analysis-section{margin:0 0 7px;padding:0}.claude-analysis-section h4{margin-bottom:3px}.claude-analysis-section ul{padding-left:14px}.claude-analysis-section li{margin:1px 0}.claude-section-bias p{font-weight:700;color:var(--text)}.claude-section-status p,.claude-section-action p{color:#d6dfeb}.claude-section-action{padding:7px 8px;border:1px solid rgba(38,208,124,.22);border-radius:5px;background:rgba(38,208,124,.045)}.claude-section-risk{padding-top:5px;border-top:1px solid var(--line)}
