@@ -1,10 +1,10 @@
-const CACHE_NAME = "tradeiq-v1.7-shell";
+const CACHE_NAME = "tradeiq-v1.8-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=17",
-  "/static/boot.js?v=17",
-  "/static/app.js?v=17",
-  "/static/trading_chart.js?v=17",
+  "/static/styles.css?v=18",
+  "/static/boot.js?v=18",
+  "/static/app.js?v=18",
+  "/static/trading_chart.js?v=18",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",

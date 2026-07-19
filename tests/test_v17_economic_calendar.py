@@ -39,5 +39,5 @@ def test_frontend_labels_calendar_time_as_scheduled_not_current_or_published():
 
 def test_service_worker_cache_is_v17():
     worker = (ROOT / "frontend" / "service-worker.js").read_text(encoding="utf-8")
-    assert "tradeiq-v1.7-shell" in worker
-    assert "?v=17" in worker
+    assert "tradeiq-v1.8-shell" in worker
+    assert "?v=18" in worker

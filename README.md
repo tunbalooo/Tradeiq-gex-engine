@@ -136,3 +136,14 @@ GEX is estimated from option open interest, gamma/volatility assumptions, contra
 ## v1.6 mobile reliability
 
 Mobile and iPad charts wait until the chart pane has a real width and height before initialization, resize explicitly on rotation and pane changes, and use a built-in Canvas fallback if the external Lightweight Charts library cannot be reached. Finnhub cards display weekday, date, time, and ET timezone.
+
+## v1.8 clean mobile terminal and GEX-by-strike
+
+- Mobile chart rendering now uses TradeIQ's native Canvas engine on phone and tablet widths. It draws real backend candles, volume, EMAs, active GEX levels, VWAP, supply/demand shading, and the current trade plan without depending on a third-party CDN.
+- Touch drag, chart zoom buttons, pan buttons, recenter, fit, candle/line mode, and fullscreen remain available.
+- The mobile interface follows a restrained terminal layout with a compact symbol header, standard timeframe strip, full-height chart, flat bottom navigation, and simplified Setup, Assistant, News, and GEX screens.
+- Mobile News is split into `Economic Calendar` and `Headlines` tabs. Economic releases are grouped by scheduled day/date and show their scheduled ET time, impact, forecast, and previous value.
+- The desktop GEX Analysis page now includes `GEX Exposure by Strike`, using positive green bars, negative red bars, and a dashed gamma-flip marker.
+- The API GEX object now exposes `by_strike` rows containing `strike`, `call_gex`, `put_gex`, and `net_gex`.
+
+Desktop charts continue to use TradingView Lightweight Charts 5.2. Mobile and tablet charts intentionally use the built-in Canvas renderer for reliability in Safari and installed PWAs.

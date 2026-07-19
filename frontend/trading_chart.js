@@ -2,6 +2,7 @@
   "use strict";
 
   const LC = window.LightweightCharts;
+  const USE_MOBILE_CANVAS = window.matchMedia?.("(max-width: 900px)")?.matches === true;
 
   function installCanvasFallback() {
     console.warn("Lightweight Charts was unavailable; TradeIQ is using its built-in Canvas chart fallback.");
@@ -34,12 +35,75 @@
       canvas.className = "tradeiq-canvas-fallback";
       canvas.setAttribute("aria-label", "TradeIQ fallback candlestick chart");
       host.appendChild(canvas);
-      instance = { id, host, canvas, payload: null };
+      instance = { id, host, canvas, payload: null, visibleCount: id === "chartLarge" ? 88 : 72, offset: 0, chartStyle: "candles", dragging: false, dragX: 0, dragOffset: 0 };
       fallbackInstances.set(id, instance);
       const observer = new ResizeObserver(() => drawFallback(instance));
       observer.observe(host);
       instance.resizeObserver = observer;
+      bindFallbackControls(instance);
+      bindFallbackGestures(instance);
       return instance;
+    }
+
+    function clamp(value, minimum, maximum) { return Math.max(minimum, Math.min(maximum, value)); }
+
+    function bindFallbackControls(instance) {
+      document.querySelectorAll(`[data-chart-id="${instance.id}"] [data-chart-action]`).forEach((button) => {
+        if (button.dataset.mobileCanvasBound === "true") return;
+        button.dataset.mobileCanvasBound = "true";
+        button.addEventListener("click", () => {
+          const action = button.dataset.chartAction;
+          if (action === "zoom-in") instance.visibleCount = clamp(Math.round(instance.visibleCount * .78), 24, 180);
+          if (action === "zoom-out") instance.visibleCount = clamp(Math.round(instance.visibleCount * 1.28), 24, 180);
+          if (action === "pan-left") instance.offset = clamp(instance.offset + Math.max(3, Math.round(instance.visibleCount * .2)), 0, Math.max(0, (instance.payload?.candles?.length || 0) - 10));
+          if (action === "pan-right") instance.offset = clamp(instance.offset - Math.max(3, Math.round(instance.visibleCount * .2)), 0, Math.max(0, (instance.payload?.candles?.length || 0) - 10));
+          if (["recenter", "fit"].includes(action)) instance.offset = 0;
+          if (action === "fit") instance.visibleCount = instance.id === "chartLarge" ? 88 : 72;
+          if (action === "candles") instance.chartStyle = "candles";
+          if (action === "line") instance.chartStyle = "line";
+          if (action === "fullscreen") {
+            const root = instance.host.closest(".tv-full-panel") || instance.host.closest(".tv-workstation") || instance.host;
+            if (document.fullscreenElement) document.exitFullscreen?.(); else root.requestFullscreen?.();
+          }
+          drawFallback(instance);
+        });
+      });
+    }
+
+    function bindFallbackGestures(instance) {
+      const canvas = instance.canvas;
+      canvas.addEventListener("pointerdown", (event) => {
+        instance.dragging = true; instance.dragX = event.clientX; instance.dragOffset = instance.offset;
+        canvas.setPointerCapture?.(event.pointerId);
+      });
+      canvas.addEventListener("pointermove", (event) => {
+        if (!instance.dragging) return;
+        const candles = instance.payload?.candles?.length || 0;
+        const pixelsPerBar = Math.max(3, canvas.clientWidth / Math.max(instance.visibleCount, 1));
+        const shift = Math.round((event.clientX - instance.dragX) / pixelsPerBar);
+        instance.offset = clamp(instance.dragOffset + shift, 0, Math.max(0, candles - 10));
+        drawFallback(instance);
+      });
+      const stop = () => { instance.dragging = false; };
+      canvas.addEventListener("pointerup", stop); canvas.addEventListener("pointercancel", stop);
+      canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        instance.visibleCount = clamp(Math.round(instance.visibleCount * (event.deltaY < 0 ? .88 : 1.12)), 24, 180);
+        drawFallback(instance);
+      }, { passive: false });
+    }
+
+    function simpleEma(values, period) {
+      if (!values.length) return [];
+      const alpha = 2 / (period + 1); let current = values[0].close;
+      return values.map((item) => { current = item.close * alpha + current * (1 - alpha); return current; });
+    }
+
+    function linePath(ctx, values, toY, color, width = 1) {
+      if (values.length < 2) return;
+      ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
+      values.forEach((value, index) => { const x = value.x; const y = toY(value.value); index ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.stroke(); ctx.restore();
     }
 
     function horizontal(ctx, y, width, label, color, dashed = true) {
@@ -80,7 +144,7 @@
       const raw = Array.isArray(payload?.candles) ? payload.candles : [];
       const candles = raw.map((item) => ({
         time: fallbackTime(item.time), open: Number(item.open), high: Number(item.high),
-        low: Number(item.low), close: Number(item.close),
+        low: Number(item.low), close: Number(item.close), volume: Number(item.volume || 0),
       })).filter((item) => item.time != null && [item.open, item.high, item.low, item.close].every(Number.isFinite));
       if (!candles.length) {
         ctx.fillStyle = "#7788A3";
@@ -90,12 +154,14 @@
         return;
       }
 
-      const visibleCount = Math.min(candles.length, instance.id === "chartLarge" ? 130 : 90);
-      const values = candles.slice(-visibleCount);
-      const setup = payload?.setup || {};
-      const extra = [setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2,
-        setup.vwap, setup.standard_deviation_high, setup.standard_deviation_low,
-        setup.gex?.call_wall, setup.gex?.gamma_flip, setup.gex?.put_wall]
+      const visibleCount = Math.min(candles.length, instance.visibleCount || (instance.id === "chartLarge" ? 88 : 72));
+      const end = Math.max(1, candles.length - Math.max(0, instance.offset || 0));
+      const start = Math.max(0, end - visibleCount);
+      const values = candles.slice(start, end);
+      const setupForScale = payload?.setup || {};
+      const extra = [setupForScale.entry, setupForScale.stop_loss, setupForScale.take_profit_1, setupForScale.take_profit_2,
+        setupForScale.vwap, setupForScale.standard_deviation_high, setupForScale.standard_deviation_low,
+        setupForScale.gex?.call_wall, setupForScale.gex?.gamma_flip, setupForScale.gex?.put_wall]
         .map(Number).filter(Number.isFinite);
       let low = Math.min(...values.map((item) => item.low), ...extra);
       let high = Math.max(...values.map((item) => item.high), ...extra);
@@ -103,7 +169,8 @@
       low -= pad; high += pad;
       const plotRight = width - 58;
       const plotTop = 16;
-      const plotBottom = height - 28;
+      const volumeHeight = Math.max(34, Math.min(60, height * .14));
+      const plotBottom = height - volumeHeight - 28;
       const plotHeight = Math.max(1, plotBottom - plotTop);
       const toY = (price) => plotTop + (high - Number(price)) / (high - low || 1) * plotHeight;
 
@@ -120,17 +187,48 @@
 
       const step = plotRight / Math.max(1, values.length);
       const bodyWidth = Math.max(1.5, Math.min(8, step * 0.64));
+      const setup = payload?.setup || {};
+      const overlays = payload?.overlays || {};
+
+      if (overlays.zones) {
+        (setup.zones || []).slice(0, 4).forEach((zone) => {
+          const top = toY(zone.high), bottom = toY(zone.low);
+          ctx.fillStyle = zone.kind === "DEMAND" ? "rgba(38,208,124,.075)" : "rgba(255,77,94,.075)";
+          ctx.fillRect(0, Math.min(top, bottom), plotRight, Math.abs(bottom - top));
+        });
+      }
+
+      if (instance.chartStyle === "line") {
+        linePath(ctx, values.map((item, index) => ({ x: (index + .5) * step, value: item.close })), toY, "#48A3FF", 1.8);
+      } else {
+        values.forEach((item, index) => {
+          const x = (index + 0.5) * step;
+          const up = item.close >= item.open;
+          const color = up ? "#26D07C" : "#FF4D5E";
+          ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(x, toY(item.high)); ctx.lineTo(x, toY(item.low)); ctx.stroke();
+          const yOpen = toY(item.open); const yClose = toY(item.close);
+          ctx.fillRect(x - bodyWidth / 2, Math.min(yOpen, yClose), bodyWidth, Math.max(1, Math.abs(yClose - yOpen)));
+        });
+      }
+
+      if (overlays.emas) {
+        [[9,"#F5B93B"],[21,"#48A3FF"],[55,"#A98BFF"]].forEach(([period,color]) => {
+          const series = simpleEma(values, period).map((value, index) => ({ x: (index + .5) * step, value }));
+          linePath(ctx, series, toY, color, 1);
+        });
+      }
+
+      const maxVolume = Math.max(...values.map((item) => Number(item.volume || 0)), 1);
+      const volumeTop = plotBottom + 12;
+      const volumeBottom = height - 28;
       values.forEach((item, index) => {
-        const x = (index + 0.5) * step;
-        const up = item.close >= item.open;
-        const color = up ? "#26D07C" : "#FF4D5E";
-        ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(x, toY(item.high)); ctx.lineTo(x, toY(item.low)); ctx.stroke();
-        const yOpen = toY(item.open); const yClose = toY(item.close);
-        ctx.fillRect(x - bodyWidth / 2, Math.min(yOpen, yClose), bodyWidth, Math.max(1, Math.abs(yClose - yOpen)));
+        const x = (index + .5) * step;
+        const barHeight = Number(item.volume || 0) / maxVolume * Math.max(2, volumeBottom - volumeTop);
+        ctx.fillStyle = item.close >= item.open ? "rgba(38,208,124,.42)" : "rgba(255,77,94,.42)";
+        ctx.fillRect(x - bodyWidth / 2, volumeBottom - barHeight, bodyWidth, barHeight);
       });
 
-      const overlays = payload?.overlays || {};
       if (overlays.gex && setup.gex) {
         horizontal(ctx, toY(setup.gex.call_wall), plotRight, "CALL", lineColors.gex);
         horizontal(ctx, toY(setup.gex.gamma_flip), plotRight, "γ FLIP", lineColors.entry);
@@ -146,22 +244,33 @@
       ctx.fillStyle = "#7788A3";
       ctx.font = "500 9px ui-monospace, monospace";
       ctx.textAlign = "left";
-      ctx.fillText("Canvas fallback · live TradeIQ data", 8, height - 9);
+      const legend = document.getElementById(`${instance.id}Ohlc`);
+      const last = values.at(-1);
+      if (legend && last) {
+        const positive = last.close >= last.open;
+        legend.innerHTML = `<b>${payload?.displaySymbol || payload?.symbol || "FUTURES"}</b><span>O ${last.open.toFixed(payload?.pricePrecision ?? 2)}</span><span>H ${last.high.toFixed(payload?.pricePrecision ?? 2)}</span><span>L ${last.low.toFixed(payload?.pricePrecision ?? 2)}</span><span class="${positive ? "g" : "r"}">C ${last.close.toFixed(payload?.pricePrecision ?? 2)}</span>`;
+      }
     }
 
     function render(id, data) {
       const instance = ensureFallback(id);
       if (!instance) return;
+      const marketChanged = instance.payload && (instance.payload.symbol !== data.symbol || instance.payload.timeframe !== data.timeframe);
       instance.payload = data;
+      if (marketChanged) instance.offset = 0;
       requestAnimationFrame(() => drawFallback(instance));
     }
-    function reset(id) { const instance = fallbackInstances.get(id); if (instance) drawFallback(instance); }
+    function reset(id) {
+      const instance = fallbackInstances.get(id);
+      if (instance) { instance.offset = 0; instance.visibleCount = id === "chartLarge" ? 88 : 72; drawFallback(instance); }
+    }
     function marketChanged(id) { const instance = fallbackInstances.get(id); if (instance) { instance.payload = null; drawFallback(instance); } }
     function resize(id) { const instance = fallbackInstances.get(id); if (instance) drawFallback(instance); }
-    window.TradeIQChartManager = { render, reset, marketChanged, resize, instances: fallbackInstances, fallback: true };
+    function refresh(id) { const instance = fallbackInstances.get(id); if (instance) drawFallback(instance); }
+    window.TradeIQChartManager = { render, reset, marketChanged, resize, refresh, instances: fallbackInstances, fallback: true, mobileCanvas: USE_MOBILE_CANVAS };
   }
 
-  if (!LC) {
+  if (!LC || USE_MOBILE_CANVAS) {
     installCanvasFallback();
     return;
   }

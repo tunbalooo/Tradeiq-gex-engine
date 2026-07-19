@@ -20,6 +20,13 @@ class GexLevel(BaseModel):
     strength: int = Field(default=3, ge=0, le=5)
 
 
+class GexStrike(BaseModel):
+    strike: float
+    call_gex: float = 0.0
+    put_gex: float = 0.0
+    net_gex: float = 0.0
+
+
 class GexSummary(BaseModel):
     regime: Literal["POSITIVE", "NEGATIVE", "NEUTRAL"]
     gamma_flip: float
@@ -27,6 +34,7 @@ class GexSummary(BaseModel):
     call_wall: float
     net_gex: float
     levels: list[GexLevel]
+    by_strike: list[GexStrike] = Field(default_factory=list)
     call_wall_gex: float | None = None
     put_wall_gex: float | None = None
     source: str = "simulated"

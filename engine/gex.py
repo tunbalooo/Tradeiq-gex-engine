@@ -142,6 +142,7 @@ def derive_gex_summary_from_positions(
             "call_wall_gex": 0.0,
             "put_wall_gex": 0.0,
             "levels": [],
+            "by_strike": [],
         }
 
     components = aggregate_gex_components_by_strike(futures_price, positions)
@@ -174,6 +175,15 @@ def derive_gex_summary_from_positions(
         }
         for strike, value in ranked
     ]
+    by_strike = [
+        {
+            "strike": float(strike),
+            "call_gex": float(values["call"]),
+            "put_gex": float(values["put"]),
+            "net_gex": float(values["net"]),
+        }
+        for strike, values in components.items()
+    ]
 
     return {
         "regime": regime,
@@ -184,6 +194,7 @@ def derive_gex_summary_from_positions(
         "call_wall_gex": float(call_wall_gex),
         "put_wall_gex": float(put_wall_gex),
         "levels": levels,
+        "by_strike": by_strike,
     }
 
 
@@ -199,6 +210,7 @@ def derive_gex_summary(futures_price: float, strike_gex: dict[float, float]) -> 
             "call_wall_gex": 0.0,
             "put_wall_gex": 0.0,
             "levels": [],
+            "by_strike": [],
         }
 
     net_gex = sum(strike_gex.values())
@@ -226,6 +238,15 @@ def derive_gex_summary(futures_price: float, strike_gex: dict[float, float]) -> 
         }
         for strike, value in ranked
     ]
+    by_strike = [
+        {
+            "strike": float(strike),
+            "call_gex": float(max(value, 0.0)),
+            "put_gex": float(min(value, 0.0)),
+            "net_gex": float(value),
+        }
+        for strike, value in sorted(strike_gex.items())
+    ]
     return {
         "regime": regime,
         "gamma_flip": float(best_flip),
@@ -235,4 +256,5 @@ def derive_gex_summary(futures_price: float, strike_gex: dict[float, float]) -> 
         "call_wall_gex": float(strike_gex[call_wall]),
         "put_wall_gex": float(strike_gex[put_wall]),
         "levels": levels,
+        "by_strike": by_strike,
     }

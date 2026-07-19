@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=17" />
+<link rel="stylesheet" href="/static/styles.css?v=18" />
 </head>
 <body>
 <div class="app">
@@ -278,6 +278,11 @@
                 <div class="chart-interaction-note">Scroll to zoom · drag to pan · double-click price scale to reset</div>
                 <a class="tv-attribution" href="https://www.tradingview.com/" target="_blank" rel="noopener">Powered by TradingView Lightweight Charts™</a>
               </div>
+              <div class="mobile-chart-footer" data-chart-id="chartLarge">
+                <button type="button" id="mobileIndicatorsButton"><span>⌁</span> Indicators</button>
+                <button type="button" data-draw-mode="hline"><span>╱</span> Draw</button>
+                <button type="button" data-chart-action="fullscreen"><span>⛶</span> Full screen</button>
+              </div>
             </div>
 
             <div class="tv-chart-rail" id="chartSideRail">
@@ -335,15 +340,21 @@
               </aside>
 
               <aside class="mobile-info-panel mobile-news-panel" id="mobileNewsPanel" data-mobile-pane="news" aria-label="Economic calendar and market news">
-                <div class="mobile-info-head">
-                  <div><h3 id="mobileNewsTitle">Calendar + News</h3><small>Upcoming releases show their scheduled day, date and time</small></div>
+                <div class="mobile-info-head mobile-news-head">
+                  <div><h3 id="mobileNewsTitle">Market News</h3><small>Scheduled releases and verified market headlines</small></div>
                   <span class="source-chip">FINNHUB</span>
                 </div>
+                <div class="mobile-news-tabs" role="tablist" aria-label="News sections">
+                  <button type="button" class="active" data-mobile-news-tab="calendar" role="tab">Economic Calendar</button>
+                  <button type="button" data-mobile-news-tab="headlines" role="tab">Headlines</button>
+                </div>
                 <div class="mobile-market-scroll">
-                  <div class="mobile-section-label">Upcoming Economic Events</div>
-                  <div class="mobile-calendar-list" id="mobileCalendarList"><div class="mobile-empty">Loading upcoming events…</div></div>
-                  <div class="mobile-section-label headlines-label">Market Headlines</div>
-                  <div class="mobile-news-list" id="mobileNewsList"><div class="mobile-empty">Waiting for headlines…</div></div>
+                  <section class="mobile-news-pane active" id="mobileCalendarPane" data-mobile-news-pane="calendar">
+                    <div class="mobile-calendar-list" id="mobileCalendarList"><div class="mobile-empty">Loading upcoming events…</div></div>
+                  </section>
+                  <section class="mobile-news-pane" id="mobileHeadlinesPane" data-mobile-news-pane="headlines">
+                    <div class="mobile-news-list" id="mobileNewsList"><div class="mobile-empty">Waiting for headlines…</div></div>
+                  </section>
                 </div>
               </aside>
 
@@ -361,6 +372,11 @@
                   <div><span>Applied To</span><b id="mobileGexApplied">—</b></div>
                 </div>
                 <div class="mobile-gex-scale"><span>-GEX</span><i><b id="mobileGexNeedle"></b></i><span>+GEX</span></div>
+                <div class="mobile-gex-chart-card">
+                  <div class="mobile-gex-chart-head"><b>GEX by Strike</b><span id="mobileGexChartStatus">Net exposure</span></div>
+                  <canvas id="mobileGexStrikeChart" aria-label="Gamma exposure by strike"></canvas>
+                  <div class="gex-chart-legend"><span class="negative">Put / negative GEX</span><span class="positive">Call / positive GEX</span><span class="flip">Gamma flip</span></div>
+                </div>
                 <p class="mobile-gex-note" id="mobileGexNote">Gamma levels are informational and do not change the confidence score.</p>
               </aside>
             </div>
@@ -370,9 +386,17 @@
     </section>
 
     <section class="page" id="page-gex">
-      <div class="page-shell two-col">
+      <div class="page-shell gex-page-grid">
         <div class="panel page-panel"><div class="panel-h"><h3>Gamma Profile</h3><button class="mini-btn" id="refreshGex">Refresh GEX</button></div><div class="panel-b" id="gexProfile"></div></div>
         <div class="panel page-panel"><div class="panel-h"><h3>Key GEX Levels</h3></div><div class="panel-b table-pad"><table><thead><tr><th>Type</th><th>Price</th><th>Exposure</th><th>Strength</th></tr></thead><tbody id="gexPageTable"></tbody></table></div></div>
+        <div class="panel page-panel gex-strike-panel">
+          <div class="panel-h"><div><h3>GEX Exposure by Strike</h3><small id="gexStrikeSubtitle">Net dealer gamma exposure across available strikes</small></div><span class="source-chip" id="gexStrikeSource">GEX</span></div>
+          <div class="panel-b gex-strike-body">
+            <canvas id="gexStrikeChart" aria-label="Desktop gamma exposure by strike chart"></canvas>
+            <div class="gex-chart-legend"><span class="negative">Put / negative GEX</span><span class="positive">Call / positive GEX</span><span class="flip">Gamma flip</span></div>
+            <p class="note" id="gexStrikeNote">Bars use the currently available TradeIQ GEX dataset. Fallback values remain estimates.</p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -419,7 +443,7 @@
     <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/></svg><span>Setup</span>
   </button>
   <button type="button" data-mobile-target="claude" aria-label="Claude analyst">
-    <svg viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5z"/><path d="M18 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z"/></svg><span>Claude</span>
+    <svg viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5z"/><path d="M18 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z"/></svg><span>Assistant</span>
   </button>
   <button type="button" data-mobile-target="news" aria-label="Market news">
     <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>News</span>
@@ -429,7 +453,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=17"></script>
+<script src="/static/boot.js?v=18"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

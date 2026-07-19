@@ -30,8 +30,8 @@
 
     // trading_chart.js includes a Canvas fallback, so TradeIQ still displays
     // candles if both external chart-library mirrors are unavailable.
-    await loadScript("/static/trading_chart.js?v=17");
-    await loadScript("/static/app.js?v=17");
+    await loadScript("/static/trading_chart.js?v=18");
+    await loadScript("/static/app.js?v=18");
   }
 
   boot().catch((error) => {

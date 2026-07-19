@@ -50,6 +50,7 @@ const state = {
   overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
   claude: { enabled: false, auto: true, busy: false, source: null, text: "", model: "—", lastStartedAt: 0 },
   mobilePane: localStorage.getItem("tradeiq-mobile-pane") || "chart",
+  mobileNewsTab: localStorage.getItem("tradeiq-mobile-news-tab") || "calendar",
   deferredInstallPrompt: null,
 };
 
@@ -123,6 +124,115 @@ function calendarDateParts(item = {}) {
 function calendarValue(value, unit) {
   if (value === null || value === undefined || value === "") return "—";
   return `${value}${unit ? ` ${unit}` : ""}`;
+}
+
+function compactNumber(value) {
+  const number = Number(value || 0);
+  const absolute = Math.abs(number);
+  if (absolute >= 1e9) return `${number < 0 ? "-" : ""}${(absolute / 1e9).toFixed(1)}B`;
+  if (absolute >= 1e6) return `${number < 0 ? "-" : ""}${(absolute / 1e6).toFixed(0)}M`;
+  if (absolute >= 1e3) return `${number < 0 ? "-" : ""}${(absolute / 1e3).toFixed(0)}K`;
+  return number.toFixed(0);
+}
+
+function gexStrikeRows(gex = {}) {
+  const rows = Array.isArray(gex.by_strike) ? gex.by_strike : [];
+  if (rows.length) {
+    return rows.map((item) => ({
+      strike: Number(item.strike),
+      call_gex: Number(item.call_gex || 0),
+      put_gex: Number(item.put_gex || 0),
+      net_gex: Number(item.net_gex || 0),
+    })).filter((item) => Number.isFinite(item.strike) && Number.isFinite(item.net_gex)).sort((a, b) => a.strike - b.strike);
+  }
+  return (gex.levels || []).map((item) => ({
+    strike: Number(item.price),
+    call_gex: Math.max(Number(item.gex || 0), 0),
+    put_gex: Math.min(Number(item.gex || 0), 0),
+    net_gex: Number(item.gex || 0),
+  })).filter((item) => Number.isFinite(item.strike)).sort((a, b) => a.strike - b.strike);
+}
+
+function drawGexStrikeChart(canvas, gex = {}, compact = false) {
+  if (!canvas) return;
+  const width = Math.floor(canvas.clientWidth || canvas.parentElement?.clientWidth || 0);
+  const height = Math.floor(canvas.clientHeight || (compact ? 210 : 340));
+  if (width < 120 || height < 100) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#0A111A";
+  ctx.fillRect(0, 0, width, height);
+
+  let rows = gexStrikeRows(gex);
+  if (rows.length > (compact ? 31 : 55)) {
+    const anchor = Number(gex.gamma_flip || rows[Math.floor(rows.length / 2)].strike);
+    const nearest = rows.reduce((best, item, index) => Math.abs(item.strike - anchor) < Math.abs(rows[best].strike - anchor) ? index : best, 0);
+    const count = compact ? 31 : 55;
+    const start = Math.max(0, Math.min(rows.length - count, nearest - Math.floor(count / 2)));
+    rows = rows.slice(start, start + count);
+  }
+  if (!rows.length) {
+    ctx.fillStyle = "#7788A3";
+    ctx.font = `${compact ? 11 : 12}px Inter, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText("Waiting for GEX-by-strike data…", width / 2, height / 2);
+    return;
+  }
+
+  const margin = compact ? { left: 10, right: 44, top: 14, bottom: 28 } : { left: 18, right: 66, top: 18, bottom: 36 };
+  const plotW = Math.max(1, width - margin.left - margin.right);
+  const plotH = Math.max(1, height - margin.top - margin.bottom);
+  const maxAbs = Math.max(...rows.map((item) => Math.abs(item.net_gex)), 1);
+  const zeroY = margin.top + plotH / 2;
+  const valueY = (value) => zeroY - (Number(value) / maxAbs) * (plotH * 0.44);
+
+  ctx.strokeStyle = "rgba(129,145,166,.13)";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#7788A3";
+  ctx.font = `${compact ? 8 : 10}px JetBrains Mono, monospace`;
+  ctx.textAlign = "left";
+  [-1, -.5, 0, .5, 1].forEach((ratio) => {
+    const y = zeroY - ratio * plotH * .44;
+    ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(margin.left + plotW, y); ctx.stroke();
+    if (!compact || ratio === -1 || ratio === 0 || ratio === 1) ctx.fillText(compactNumber(maxAbs * ratio), margin.left + plotW + 6, y + 3);
+  });
+
+  const step = plotW / rows.length;
+  const barW = Math.max(1, Math.min(compact ? 8 : 14, step * .72));
+  rows.forEach((item, index) => {
+    const x = margin.left + step * (index + .5);
+    const y = valueY(item.net_gex);
+    ctx.fillStyle = item.net_gex >= 0 ? "#26D07C" : "#FF4D5E";
+    ctx.fillRect(x - barW / 2, Math.min(y, zeroY), barW, Math.max(1, Math.abs(zeroY - y)));
+  });
+
+  const flip = Number(gex.gamma_flip);
+  if (Number.isFinite(flip) && flip >= rows[0].strike && flip <= rows.at(-1).strike) {
+    const ratio = (flip - rows[0].strike) / Math.max(rows.at(-1).strike - rows[0].strike, 1e-9);
+    const x = margin.left + ratio * plotW;
+    ctx.save(); ctx.strokeStyle = "#DCE4EF"; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x, margin.top); ctx.lineTo(x, margin.top + plotH); ctx.stroke(); ctx.restore();
+  }
+
+  const labels = compact ? 4 : 6;
+  ctx.fillStyle = "#7788A3";
+  ctx.font = `${compact ? 8 : 10}px JetBrains Mono, monospace`;
+  ctx.textAlign = "center";
+  for (let i = 0; i < labels; i += 1) {
+    const index = Math.round(i * (rows.length - 1) / Math.max(labels - 1, 1));
+    const x = margin.left + step * (index + .5);
+    ctx.fillText(fmt(rows[index].strike, pricePrecision()), x, height - (compact ? 8 : 12));
+  }
+}
+
+function refreshGexCharts() {
+  const gex = state.setup?.gex;
+  if (!gex) return;
+  drawGexStrikeChart($("gexStrikeChart"), gex, false);
+  drawGexStrikeChart($("mobileGexStrikeChart"), gex, true);
 }
 
 function classForDirection(direction) {
@@ -538,6 +648,7 @@ function renderGexSummary(setup) {
     $("mobileGexNote").textContent = estimated
       ? "Estimated fallback GEX: use the price levels as context, not as confirmed options positioning. It never changes the confidence score."
       : `Native parent-market gamma levels applied to ${activeSymbol()}. GEX remains informational and never changes the confidence score.`;
+    window.setTimeout(() => drawGexStrikeChart($("mobileGexStrikeChart"), gex, true), 0);
   }
 }
 
@@ -580,12 +691,27 @@ function renderEconomicCalendar(items = [], status = {}) {
 
   const mobile = $("mobileCalendarList");
   if (mobile) {
-    mobile.innerHTML = items.length ? items.map((item) => {
-      const stamp = calendarDateParts(item);
-      const impact = String(item.impact || "Low");
-      const impactKind = impact.toLowerCase() === "high" ? "high" : impact.toLowerCase().startsWith("med") ? "med" : "low";
-      return `<article class="mobile-calendar-card"><time datetime="${escapeHtml(item.scheduled_at || "")}"><b>${escapeHtml(stamp.day)}</b><span>${escapeHtml(stamp.date)}</span><em>${escapeHtml(stamp.time)}</em></time><div><strong>${escapeHtml(item.event || "Economic event")}</strong><small>Forecast ${escapeHtml(calendarValue(item.estimate, item.unit))} · Previous ${escapeHtml(calendarValue(item.previous, item.unit))}</small></div><span class="impact-pill ${impactKind}">${escapeHtml(impact)}</span></article>`;
-    }).join("") : `<div class="mobile-empty">${escapeHtml(unavailable)}</div>`;
+    if (!items.length) {
+      mobile.innerHTML = `<div class="mobile-empty">${escapeHtml(unavailable)}</div>`;
+    } else {
+      const groups = new Map();
+      items.forEach((item) => {
+        const stamp = calendarDateParts(item);
+        const key = stamp.date;
+        if (!groups.has(key)) groups.set(key, { label: `${stamp.day}, ${stamp.date}`, items: [] });
+        groups.get(key).items.push({ item, stamp });
+      });
+      mobile.innerHTML = [...groups.values()].map((group, groupIndex) => {
+        const prefix = groupIndex === 0 ? "Next" : "Upcoming";
+        const rows = group.items.map(({ item, stamp }) => {
+          const impact = String(item.impact || "Low");
+          const impactKind = impact.toLowerCase() === "high" ? "high" : impact.toLowerCase().startsWith("med") ? "med" : "low";
+          const dots = impactKind === "high" ? 3 : impactKind === "med" ? 2 : 1;
+          return `<article class="economic-event-row"><time datetime="${escapeHtml(item.scheduled_at || "")}"><b>${escapeHtml(stamp.time.replace(" ET", ""))}</b><span>${escapeHtml(item.country || "US")}</span></time><span class="impact-dots ${impactKind}" aria-label="${escapeHtml(impact)} impact">${"<i></i>".repeat(dots)}</span><div class="economic-event-copy"><strong>${escapeHtml(item.event || "Economic event")}</strong><small>Forecast: ${escapeHtml(calendarValue(item.estimate, item.unit))} &nbsp; Previous: ${escapeHtml(calendarValue(item.previous, item.unit))}</small></div><span class="impact-label ${impactKind}">${escapeHtml(impact)}</span></article>`;
+        }).join("");
+        return `<section class="economic-day-group"><h4><span>${prefix}</span>${escapeHtml(group.label)}</h4>${rows}</section>`;
+      }).join("");
+    }
   }
 }
 
@@ -619,8 +745,6 @@ function renderNews(items = []) {
   const mobileTarget = $("mobileNewsList");
   if (mobileTarget) {
     mobileTarget.innerHTML = items.length ? items.map((item) => {
-      const impact = String(item.impact || "Low");
-      const impactKind = impact.toLowerCase() === "high" ? "high" : impact.toLowerCase().startsWith("med") ? "med" : "low";
       const headline = escapeHtml(item.event || "Untitled headline");
       const source = escapeHtml(item.source || "Finnhub");
       const stamp = newsDateParts(item);
@@ -628,7 +752,7 @@ function renderNews(items = []) {
       const headlineHtml = safeUrl
         ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${headline}</a>`
         : `<div class="mobile-news-headline">${headline}</div>`;
-      return `<article class="mobile-news-card"><time datetime="${escapeHtml(item.published_at || "")}"><b>${escapeHtml(stamp.day)}</b><span>${escapeHtml(stamp.date)}</span><em>${escapeHtml(stamp.time)}</em></time><div>${headlineHtml}<small>${source}</small></div><span class="impact-pill ${impactKind}">${escapeHtml(impact)}</span></article>`;
+      return `<article class="headline-row"><div>${headlineHtml}<small>${escapeHtml(stamp.date)} · ${escapeHtml(stamp.time)} · ${source}</small></div><span aria-hidden="true">›</span></article>`;
     }).join("") : '<div class="mobile-empty">No recent headlines available.</div>';
   }
 }
@@ -932,6 +1056,14 @@ function toggleMobileMenu() {
   $("mobileMenuButton")?.setAttribute("aria-expanded", opening ? "true" : "false");
 }
 
+function setMobileNewsTab(name) {
+  const resolved = name === "headlines" ? "headlines" : "calendar";
+  state.mobileNewsTab = resolved;
+  localStorage.setItem("tradeiq-mobile-news-tab", resolved);
+  document.querySelectorAll("[data-mobile-news-tab]").forEach((button) => button.classList.toggle("active", button.dataset.mobileNewsTab === resolved));
+  document.querySelectorAll("[data-mobile-news-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.mobileNewsPane === resolved));
+}
+
 function setMobilePane(name, navigate = true) {
   const allowed = new Set(["chart", "setup", "claude", "news", "gex"]);
   const resolved = allowed.has(name) ? name : "chart";
@@ -941,6 +1073,8 @@ function setMobilePane(name, navigate = true) {
   document.querySelectorAll("[data-mobile-pane]").forEach((item) => item.classList.toggle("mobile-pane-active", item.dataset.mobilePane === resolved));
   document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.classList.toggle("active", button.dataset.mobileTarget === resolved && state.currentPage === "chart"));
   if (resolved === "chart") scheduleChartDraw("chartLarge", 20);
+  if (resolved === "news") setMobileNewsTab(state.mobileNewsTab);
+  if (resolved === "gex") window.setTimeout(refreshGexCharts, 30);
   if (resolved === "claude" && state.claude.enabled && state.claude.auto && !state.claude.text && !state.claude.busy) setTimeout(() => startClaudeAnalysis(false), 80);
   closeMobileMenu();
 }
@@ -985,6 +1119,7 @@ function setPage(name, runLoaders = true) {
   syncMobileNavigation();
   if (!runLoaders) return;
   if (name === "chart") setTimeout(() => { drawChart("chartLarge"); if (state.claude.enabled && state.claude.auto && !state.claude.text) startClaudeAnalysis(false); }, 30);
+  if (name === "gex") window.setTimeout(refreshGexCharts, 30);
   if (name === "setups") loadSetups();
   if (name === "alerts") loadAlertsPage();
   if (name === "positions") loadPositions();
@@ -1011,6 +1146,13 @@ function renderGexPage(setup) {
     {type:"PUT WALL",price:g.put_wall,gex:g.put_wall_gex,strength:5},
   ];
   $("gexPageTable").innerHTML = levels.map((level) => `<tr><td class="${Number(level.gex||0)>=0?'g':'r'}">${level.type || 'LEVEL'}</td><td>${fmt(level.price)}</td><td>${level.gex == null?'—':fmtGex(level.gex)}</td><td class="a">${level.strength?stars(level.strength):'—'}</td></tr>`).join("");
+  if ($("gexStrikeSource")) $("gexStrikeSource").textContent = g.is_estimate ? "ESTIMATED" : "NATIVE";
+  if ($("gexStrikeSource")) $("gexStrikeSource").classList.toggle("estimated", Boolean(g.is_estimate));
+  if ($("gexStrikeSubtitle")) $("gexStrikeSubtitle").textContent = `${g.source_label || g.source || "GEX"} · ${activeSymbol()}`;
+  if ($("gexStrikeNote")) $("gexStrikeNote").textContent = g.is_estimate
+    ? "Estimated GEX-by-strike profile from the fallback model. Use it as context until native option positioning is available."
+    : "Native GEX-by-strike profile from the currently available option-position dataset.";
+  window.setTimeout(() => drawGexStrikeChart($("gexStrikeChart"), g, false), 0);
 }
 function renderConfluencePage(setup) {
   if (!setup || !$("confluencePage")) return;
@@ -1065,6 +1207,9 @@ document.querySelectorAll(".overlay-btn").forEach((button) => button.addEventLis
   document.querySelectorAll(`.overlay-btn[data-overlay="${name}"]`).forEach((item) => item.classList.toggle("active", state.overlays[name]));
   drawChart(); if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
 }));
+if ($("mobileIndicatorsButton")) $("mobileIndicatorsButton").addEventListener("click", () => {
+  document.querySelector(".chart-overlay-toggles")?.classList.toggle("mobile-expanded");
+});
 document.querySelectorAll(".tf").forEach((button) => button.addEventListener("click", () => {
   state.timeframe = Number(button.dataset.tf);
   document.querySelectorAll(".tf").forEach((item) => item.classList.toggle("active", Number(item.dataset.tf) === state.timeframe));
@@ -1077,6 +1222,7 @@ if ($("symbolSelect")) $("symbolSelect").addEventListener("change", (event) => s
 if ($("mobileMenuButton")) $("mobileMenuButton").addEventListener("click", toggleMobileMenu);
 if ($("mobileBackdrop")) $("mobileBackdrop").addEventListener("click", closeMobileMenu);
 document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.addEventListener("click", () => setMobilePane(button.dataset.mobileTarget)));
+document.querySelectorAll("[data-mobile-news-tab]").forEach((button) => button.addEventListener("click", () => setMobileNewsTab(button.dataset.mobileNewsTab)));
 if ($("headerAnalyze")) $("headerAnalyze").addEventListener("click", () => {
   setPage("chart");
   setMobilePane("claude", false);
@@ -1095,6 +1241,7 @@ if ($("pwaInstall")) $("pwaInstall").addEventListener("click", async () => {
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMobileMenu(); });
 registerInstallPrompt();
 setMobilePane(state.mobilePane, false);
+setMobileNewsTab(state.mobileNewsTab);
 const requestedView = new URLSearchParams(window.location.search).get("view");
 if (requestedView === "gex") setPage("gex");
 else if (requestedView === "claude") { setPage("chart"); setMobilePane("claude", false); }
@@ -1107,6 +1254,7 @@ function refreshVisibleCharts() {
   window.TradeIQChartManager?.resize?.("chart");
   if ($("page-chart")?.classList.contains("active")) scheduleChartDraw("chartLarge", 10);
   if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve);
+  refreshGexCharts();
 }
 window.addEventListener("resize", refreshVisibleCharts);
 window.addEventListener("orientationchange", () => setTimeout(refreshVisibleCharts, 160));
