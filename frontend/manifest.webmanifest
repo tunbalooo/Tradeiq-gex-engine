@@ -1,0 +1,21 @@
+{
+  "name": "TradeIQ Multi-Market Futures Engine",
+  "short_name": "TradeIQ",
+  "description": "Responsive multi-market futures charting, setup analysis, GEX, Finnhub news and Claude read-only analysis.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#080B11",
+  "theme_color": "#080B11",
+  "orientation": "any",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    {"src": "/static/app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/static/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ],
+  "shortcuts": [
+    {"name": "Chart", "short_name": "Chart", "url": "/?view=chart"},
+    {"name": "GEX", "short_name": "GEX", "url": "/?view=gex"},
+    {"name": "Claude", "short_name": "Claude", "url": "/?view=claude"}
+  ]
+}

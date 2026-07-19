@@ -49,6 +49,8 @@ const state = {
   socket: null,
   overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
   claude: { enabled: false, auto: true, busy: false, source: null, text: "", model: "—", lastStartedAt: 0 },
+  mobilePane: localStorage.getItem("tradeiq-mobile-pane") || "chart",
+  deferredInstallPrompt: null,
 };
 
 function activeSymbol() { return state.instrument?.symbol || state.setup?.symbol || "NQ"; }
@@ -69,6 +71,7 @@ function applyInstrument(instrument) {
   if ($("chartCaption")) $("chartCaption").textContent = chartFeedLabel();
   if ($("chartLargeStatus")) $("chartLargeStatus").textContent = chartFeedLabel();
   if ($("newsPanelTitle")) $("newsPanelTitle").textContent = `${instrument.symbol} Market News · Finnhub`;
+  if ($("mobileNewsTitle")) $("mobileNewsTitle").textContent = `${instrument.symbol} Market News`;
   if ($("pageTitle")) setPage(state.currentPage, false);
 }
 
@@ -167,6 +170,7 @@ async function loadClaudeStatus() {
     state.claude.model = status.model || "—";
     $("claudeModel").textContent = state.claude.model;
     $("claudeAnalyze").disabled = !state.claude.enabled;
+    if ($("headerAnalyze")) $("headerAnalyze").disabled = !state.claude.enabled;
     if (state.claude.enabled) {
       setClaudeStatus(status.cached ? "CACHED" : "READY", status.cached ? "cached" : "ready");
       $("claudeFoot").textContent = status.cached_at ? `Last generated ${new Date(status.cached_at).toLocaleTimeString()}` : "Ready. Analysis is cached to control API cost.";
@@ -187,7 +191,10 @@ function stopClaudeStream() {
     state.claude.source = null;
   }
   state.claude.busy = false;
-  $("claudeAnalyze")?.removeAttribute("disabled");
+  if (state.claude.enabled) {
+    $("claudeAnalyze")?.removeAttribute("disabled");
+    $("headerAnalyze")?.removeAttribute("disabled");
+  }
 }
 
 function startClaudeAnalysis(force = false) {
@@ -199,6 +206,7 @@ function startClaudeAnalysis(force = false) {
   state.claude.text = "";
   state.claude.lastStartedAt = Date.now();
   $("claudeAnalyze").disabled = true;
+  if ($("headerAnalyze")) $("headerAnalyze").disabled = true;
   renderClaudeAnalysis("", true);
   setClaudeStatus("ANALYZING", "analyzing");
   $("claudeFoot").textContent = "Claude is reading the current TradeIQ snapshot…";
@@ -484,7 +492,26 @@ function renderGexSummary(setup) {
   const sourceEl = $("gexSource");
   if (sourceEl) sourceEl.textContent = gex.source_label || gex.source || "—";
   const normalized = 50 + Math.tanh(gex.net_gex / 1e9) * 42;
-  $("gexNeedle").style.left = `${Math.max(2, Math.min(98, normalized))}%`;
+  const needlePosition = Math.max(2, Math.min(98, normalized));
+  $("gexNeedle").style.left = `${needlePosition}%`;
+
+  if ($("mobileGexRegime")) {
+    const estimated = Boolean(gex.is_estimate) || String(gex.source || "").toLowerCase().includes("fallback") || String(gex.source_label || "").toLowerCase().includes("fallback");
+    $("mobileGexRegime").textContent = `${gex.regime.charAt(0)}${gex.regime.slice(1).toLowerCase()}`;
+    $("mobileGexRegime").className = gex.regime === "POSITIVE" ? "g" : gex.regime === "NEGATIVE" ? "r" : "a";
+    $("mobileNetGex").textContent = fmtGex(gex.net_gex);
+    $("mobileGammaFlip").textContent = fmt(gex.gamma_flip);
+    $("mobileCallWall").textContent = fmt(gex.call_wall);
+    $("mobilePutWall").textContent = fmt(gex.put_wall);
+    $("mobileGexApplied").textContent = activeSymbol();
+    $("mobileGexSource").textContent = gex.source_label || gex.source || "Fallback model";
+    $("mobileGexBadge").textContent = estimated ? "ESTIMATE" : "NATIVE";
+    $("mobileGexBadge").className = `source-chip ${estimated ? "estimated" : ""}`;
+    $("mobileGexNeedle").style.left = `${needlePosition}%`;
+    $("mobileGexNote").textContent = estimated
+      ? "Estimated fallback GEX: use the price levels as context, not as confirmed options positioning. It never changes the confidence score."
+      : `Native parent-market gamma levels applied to ${activeSymbol()}. GEX remains informational and never changes the confidence score.`;
+  }
 }
 
 function renderZones(setup) {
@@ -508,8 +535,7 @@ function renderAlerts(items = []) {
 }
 function renderNews(items = []) {
   const target = $("news");
-  if (!target) return;
-  target.innerHTML = items.length ? items.map((item) => {
+  const rows = items.map((item) => {
     const impactClass = item.impact === "High" ? "r" : item.impact === "Med" ? "a" : "m";
     const headline = escapeHtml(item.event || "Untitled headline");
     const source = escapeHtml(item.source || "Finnhub");
@@ -518,7 +544,23 @@ function renderNews(items = []) {
       ? `<a class="news-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${headline}</a>`
       : headline;
     return `<tr class="news-row"><td class="mono m">${escapeHtml(item.time || "—")}</td><td>${headlineHtml}<div class="m news-source">${source}</div></td><td class="${impactClass}" style="text-align:right">${escapeHtml(item.impact || "Low")}</td></tr>`;
-  }).join("") : '<tr><td colspan="3" class="m">No recent headlines available</td></tr>';
+  });
+  if (target) target.innerHTML = rows.length ? rows.join("") : '<tr><td colspan="3" class="m">No recent headlines available</td></tr>';
+
+  const mobileTarget = $("mobileNewsList");
+  if (mobileTarget) {
+    mobileTarget.innerHTML = items.length ? items.map((item) => {
+      const impact = String(item.impact || "Low");
+      const impactKind = impact.toLowerCase() === "high" ? "high" : impact.toLowerCase().startsWith("med") ? "med" : "low";
+      const headline = escapeHtml(item.event || "Untitled headline");
+      const source = escapeHtml(item.source || "Finnhub");
+      const safeUrl = typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? item.url : "";
+      const headlineHtml = safeUrl
+        ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${headline}</a>`
+        : `<div class="mobile-news-headline">${headline}</div>`;
+      return `<article class="mobile-news-card"><time>${escapeHtml(item.time || "—")}</time><div>${headlineHtml}<small>${source}</small></div><span class="impact-pill ${impactKind}">${escapeHtml(impact)}</span></article>`;
+    }).join("") : '<div class="mobile-empty">No recent headlines available.</div>';
+  }
 }
 function renderPerformance(performance) {
   if (!performance) return;
@@ -785,6 +827,58 @@ function tick() {
 }
 
 
+function isMobileWorkspace() {
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+
+function closeMobileMenu() {
+  document.querySelector(".side")?.classList.remove("mobile-open");
+  document.body.classList.remove("mobile-nav-open");
+  const button = $("mobileMenuButton");
+  if (button) button.setAttribute("aria-expanded", "false");
+}
+
+function toggleMobileMenu() {
+  const side = document.querySelector(".side");
+  if (!side) return;
+  const opening = !side.classList.contains("mobile-open");
+  side.classList.toggle("mobile-open", opening);
+  document.body.classList.toggle("mobile-nav-open", opening);
+  $("mobileMenuButton")?.setAttribute("aria-expanded", opening ? "true" : "false");
+}
+
+function setMobilePane(name, navigate = true) {
+  const allowed = new Set(["chart", "setup", "claude", "news", "gex"]);
+  const resolved = allowed.has(name) ? name : "chart";
+  state.mobilePane = resolved;
+  localStorage.setItem("tradeiq-mobile-pane", resolved);
+  if (navigate && state.currentPage !== "chart") setPage("chart");
+  document.querySelectorAll("[data-mobile-pane]").forEach((item) => item.classList.toggle("mobile-pane-active", item.dataset.mobilePane === resolved));
+  document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.classList.toggle("active", button.dataset.mobileTarget === resolved && state.currentPage === "chart"));
+  if (resolved === "chart") setTimeout(() => drawChart("chartLarge"), 40);
+  if (resolved === "claude" && state.claude.enabled && state.claude.auto && !state.claude.text && !state.claude.busy) setTimeout(() => startClaudeAnalysis(false), 80);
+  closeMobileMenu();
+}
+
+function syncMobileNavigation() {
+  const onChart = state.currentPage === "chart";
+  document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.classList.toggle("active", onChart && button.dataset.mobileTarget === state.mobilePane));
+  if (onChart) setMobilePane(state.mobilePane, false);
+}
+
+function registerInstallPrompt() {
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    state.deferredInstallPrompt = event;
+    if ($("pwaInstall")) $("pwaInstall").hidden = false;
+  });
+  window.addEventListener("appinstalled", () => {
+    state.deferredInstallPrompt = null;
+    if ($("pwaInstall")) $("pwaInstall").hidden = true;
+    toast("TradeIQ installed");
+  });
+}
+
 function toast(message) {
   const el = $("toast");
   if (!el) return;
@@ -798,10 +892,12 @@ function setPage(name, runLoaders = true) {
   document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === `page-${name}`));
   document.querySelectorAll("#nav button[data-page]").forEach((button) => button.classList.toggle("active", button.dataset.page === name));
   state.currentPage = name;
+  closeMobileMenu();
   const symbol = activeSymbol();
   const dashboardTitle = state.session ? (state.session.is_open ? `${symbol} · ${state.session.display_name}` : `${symbol} · MARKET CLOSED`) : `${symbol} TRADE ENGINE`;
   const titles = { dashboard:dashboardTitle, chart:`ADVANCED ${symbol} CHART`, gex:`${symbol} GEX ANALYSIS`, confluence:`${symbol} CONFLUENCE ENGINE`, setups:`${symbol} TRADE SETUPS`, alerts:"ALERT CENTER", positions:"POSITIONS", backtest:`${symbol} BACKTEST LAB`, settings:"SETTINGS" };
   $("pageTitle").textContent = titles[name] || dashboardTitle;
+  syncMobileNavigation();
   if (!runLoaders) return;
   if (name === "chart") setTimeout(() => { drawChart("chartLarge"); if (state.claude.enabled && state.claude.auto && !state.claude.text) startClaudeAnalysis(false); }, 30);
   if (name === "setups") loadSetups();
@@ -893,8 +989,33 @@ document.querySelectorAll(".tf").forEach((button) => button.addEventListener("cl
 }));
 document.querySelectorAll("#nav button[data-page]").forEach((item) => item.addEventListener("click", () => setPage(item.dataset.page)));
 if ($("symbolSelect")) $("symbolSelect").addEventListener("change", (event) => switchMarket(event.target.value));
+if ($("mobileMenuButton")) $("mobileMenuButton").addEventListener("click", toggleMobileMenu);
+if ($("mobileBackdrop")) $("mobileBackdrop").addEventListener("click", closeMobileMenu);
+document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.addEventListener("click", () => setMobilePane(button.dataset.mobileTarget)));
+if ($("headerAnalyze")) $("headerAnalyze").addEventListener("click", () => {
+  setPage("chart");
+  setMobilePane("claude", false);
+  startClaudeAnalysis(true);
+});
+if ($("pwaInstall")) $("pwaInstall").addEventListener("click", async () => {
+  if (!state.deferredInstallPrompt) {
+    toast(/iPad|iPhone|iPod/.test(navigator.userAgent) ? "On iPhone/iPad: Share → Add to Home Screen" : "Use your browser menu to install TradeIQ");
+    return;
+  }
+  state.deferredInstallPrompt.prompt();
+  await state.deferredInstallPrompt.userChoice;
+  state.deferredInstallPrompt = null;
+  $("pwaInstall").hidden = true;
+});
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMobileMenu(); });
+registerInstallPrompt();
+setMobilePane(state.mobilePane, false);
+const requestedView = new URLSearchParams(window.location.search).get("view");
+if (requestedView === "gex") setPage("gex");
+else if (requestedView === "claude") { setPage("chart"); setMobilePane("claude", false); }
+else if (requestedView === "chart" || isMobileWorkspace()) { setPage("chart"); setMobilePane(requestedView === "chart" ? "chart" : state.mobilePane, false); }
 
-window.addEventListener("resize", () => { drawChart(); if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge"); if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve); });
+window.addEventListener("resize", () => { if (!isMobileWorkspace()) closeMobileMenu(); syncMobileNavigation(); drawChart(); if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge"); if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve); });
 
 if ($("refreshGex")) $("refreshGex").addEventListener("click", refreshGexCache);
 if ($("settingsRefreshGex")) $("settingsRefreshGex").addEventListener("click", refreshGexCache);

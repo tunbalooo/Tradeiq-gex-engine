@@ -1,4 +1,4 @@
-# TradeIQ Multi-Market GEX Engine v1.4
+# TradeIQ Multi-Market GEX Engine v1.5
 
 TradeIQ is a FastAPI and browser-based futures decision-support dashboard for:
 
@@ -11,6 +11,19 @@ TradeIQ is a FastAPI and browser-based futures decision-support dashboard for:
 
 The active market selector updates candles, EMA structure, supply/demand, Fib/OTE, trade levels, Claude analysis, Finnhub relevance filtering, session rules, tick size, and GEX metadata. During the current single-user development stage, the selected symbol is global for the running server.
 
+
+## Mobile and iPad workspace
+
+TradeIQ v1.5 keeps the desktop workstation and adds a connected responsive interface for phones and tablets. It is not a separate mock application: the mobile Chart, Setup, Claude, News, and GEX views read the same live FastAPI endpoints, WebSocket updates, instrument selector, session gate, engine score, Databento state, Finnhub feed, and Claude stream as the desktop dashboard.
+
+- **Phone:** fixed bottom navigation for Chart, Setup, Claude, News, and GEX.
+- **iPad portrait:** full-width chart with switchable analysis panes.
+- **iPad landscape:** chart and analysis rail share the screen.
+- **PWA:** installable from supported browsers; iPhone and iPad can use Share → Add to Home Screen.
+- **Touch charting:** pinch zoom, horizontal drag, kinetic scrolling, overlay toggles, recenter, fit, and fullscreen.
+- **Safe continuity:** mobile layout does not alter confidence, actionability, order lifecycle, GEX calculations, or Claude permissions.
+
+The supplied mobile concept was used as the visual direction. TradeIQ continues using its existing Lightweight Charts 5.2 integration rather than embedding the pasted minified 4.2 library or mock candle generator.
 
 ## What a preview means
 

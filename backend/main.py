@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
         await trade_engine_service.stop(); await gex_service.stop(); await market_data_service.stop()
 
 
-app = FastAPI(title=settings.app_name, version="1.3.0-fast-switch", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="1.5.0-mobile-ipad", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
@@ -34,6 +34,14 @@ def dashboard(): return FileResponse(Path("frontend/index.html"))
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon(): return FileResponse(Path("frontend/favicon.svg"), media_type="image/svg+xml")
+
+@app.get("/service-worker.js", include_in_schema=False)
+def service_worker():
+    return FileResponse(
+        Path("frontend/service-worker.js"),
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+    )
 
 @app.websocket("/ws/market")
 async def market_websocket(websocket: WebSocket):

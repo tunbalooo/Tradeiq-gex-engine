@@ -2,12 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#080B11" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="TradeIQ" />
+<link rel="manifest" href="/static/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/static/app-icon-192.png" />
 <title>TradeIQ — Multi-Market Futures Engine</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=12" />
+<link rel="stylesheet" href="/static/styles.css?v=15" />
 </head>
 <body>
 <div class="app">
@@ -39,10 +46,16 @@
       <div class="clock g" id="sessionTimer">00:00:00</div>
       <div class="m session-state" id="sessionState">Checking session…</div>
     </div>
+    <button type="button" class="install-app" id="pwaInstall" hidden>Install TradeIQ</button>
   </aside>
+  <button type="button" class="mobile-backdrop" id="mobileBackdrop" aria-label="Close navigation"></button>
 
   <div class="main">
     <div class="topbar">
+      <button type="button" class="mobile-menu-button" id="mobileMenuButton" aria-label="Open navigation" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="mobile-brand" aria-label="TradeIQ">Trade<span>IQ</span></div>
       <div class="title" id="pageTitle">TRADEIQ FUTURES ENGINE</div>
       <label class="symbol-pill symbol-selector" aria-label="Active futures market">
         <select id="symbolSelect">
@@ -58,6 +71,7 @@
         <span class="mode-badge" id="modeLabel">CONNECTING</span>
         <span class="dot" id="liveDot"></span><span class="g" id="connectionLabel">LIVE</span>
       </div>
+      <button type="button" class="header-analyze" id="headerAnalyze" disabled>Analyze Now</button>
     </div>
 
     <section class="page active" id="page-dashboard">
@@ -238,7 +252,7 @@
           </div>
 
           <div class="tv-chart-layout">
-            <div class="tv-workstation" data-chart-id="chartLarge">
+            <div class="tv-workstation" data-chart-id="chartLarge" data-mobile-pane="chart">
               <div class="tv-left-tools" aria-label="Chart tools">
                 <button type="button" class="active" data-draw-mode="cursor" title="Cursor">↖</button>
                 <button type="button" data-draw-mode="crosshair" data-chart-action="crosshair" title="Crosshair">╳</button>
@@ -262,7 +276,7 @@
             </div>
 
             <div class="tv-chart-rail" id="chartSideRail">
-              <aside class="tv-chart-setup" id="chartSetupPanel" aria-label="Live trade setup">
+              <aside class="tv-chart-setup" id="chartSetupPanel" data-mobile-pane="setup" aria-label="Live trade setup">
                 <div class="tv-chart-setup-head">
                   <h3>Trade Setup</h3>
                   <span class="mono m" id="chartSetupLabel">SCANNING</span>
@@ -296,7 +310,7 @@
                 </div>
               </aside>
 
-              <aside class="claude-panel" id="claudePanel" aria-label="Claude market analyst">
+              <aside class="claude-panel" id="claudePanel" data-mobile-pane="claude" aria-label="Claude market analyst">
                 <div class="claude-panel-head">
                   <div>
                     <h3>Claude Market Analyst</h3>
@@ -313,6 +327,31 @@
                   <div class="claude-empty">Claude will explain the current bias, evidence, missing conditions, risk and next action. It cannot change the score or place a trade.</div>
                 </div>
                 <div class="claude-foot" id="claudeFoot">API key stays in the Python backend and Railway variables.</div>
+              </aside>
+
+              <aside class="mobile-info-panel mobile-news-panel" id="mobileNewsPanel" data-mobile-pane="news" aria-label="Market news">
+                <div class="mobile-info-head">
+                  <div><h3 id="mobileNewsTitle">Market News</h3><small>Finnhub headlines filtered for the active market</small></div>
+                  <span class="source-chip">LIVE</span>
+                </div>
+                <div class="mobile-news-list" id="mobileNewsList"><div class="mobile-empty">Waiting for headlines…</div></div>
+              </aside>
+
+              <aside class="mobile-info-panel mobile-gex-panel" id="mobileGexPanel" data-mobile-pane="gex" aria-label="Gamma exposure">
+                <div class="mobile-info-head">
+                  <div><h3>Gamma Exposure</h3><small id="mobileGexSource">Waiting for GEX source…</small></div>
+                  <span class="source-chip" id="mobileGexBadge">GEX</span>
+                </div>
+                <div class="mobile-gex-grid">
+                  <div><span>Regime</span><b id="mobileGexRegime">—</b></div>
+                  <div><span>Net GEX</span><b id="mobileNetGex">—</b></div>
+                  <div><span>Gamma Flip</span><b id="mobileGammaFlip">—</b></div>
+                  <div><span>Call Wall</span><b class="g" id="mobileCallWall">—</b></div>
+                  <div><span>Put Wall</span><b class="r" id="mobilePutWall">—</b></div>
+                  <div><span>Applied To</span><b id="mobileGexApplied">—</b></div>
+                </div>
+                <div class="mobile-gex-scale"><span>-GEX</span><i><b id="mobileGexNeedle"></b></i><span>+GEX</span></div>
+                <p class="mobile-gex-note" id="mobileGexNote">Gamma levels are informational and do not change the confidence score.</p>
               </aside>
             </div>
           </div>
@@ -362,9 +401,31 @@
     </section>
   </div>
 </div>
+<nav class="mobile-bottom-nav" id="mobileBottomNav" aria-label="Mobile workspace">
+  <button type="button" class="active" data-mobile-target="chart" aria-label="Chart">
+    <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M6 15l4-5 3 3 5-7"/></svg><span>Chart</span>
+  </button>
+  <button type="button" data-mobile-target="setup" aria-label="Trade setup">
+    <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/></svg><span>Setup</span>
+  </button>
+  <button type="button" data-mobile-target="claude" aria-label="Claude analyst">
+    <svg viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5z"/><path d="M18 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z"/></svg><span>Claude</span>
+  </button>
+  <button type="button" data-mobile-target="news" aria-label="Market news">
+    <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>News</span>
+  </button>
+  <button type="button" data-mobile-target="gex" aria-label="Gamma exposure">
+    <svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>GEX</span>
+  </button>
+</nav>
 <div id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js" onerror="this.onerror=null;this.src='https://unpkg.com/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js'"></script>
-<script src="/static/trading_chart.js?v=12"></script>
-<script src="/static/app.js?v=12"></script>
+<script src="/static/trading_chart.js?v=15"></script>
+<script src="/static/app.js?v=15"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));
+  }
+</script>
 </body>
 </html>
