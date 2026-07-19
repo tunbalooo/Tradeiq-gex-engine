@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     finnhub_api_key: str | None = None
     finnhub_news_refresh_seconds: int = 300
+    finnhub_calendar_refresh_seconds: int = 900
     finnhub_request_timeout_seconds: float = 12.0
 
     anthropic_api_key: str | None = None

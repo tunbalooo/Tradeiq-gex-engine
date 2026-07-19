@@ -1,114 +1,155 @@
-"""
-Finnhub economic calendar — replaces the demo calendar with real upcoming
-high-impact US events (FOMC, CPI, NFP, etc.), mapped to TradeIQ's NewsItem
-schema (time / event / impact).
-
-Adapted from the user's reference integration. Free tier: 60 calls/min.
-Set FINNHUB_API_KEY in the environment (already set on Railway). If the key
-is missing or the API fails, we fall back to the static demo list so the
-panel is never empty.
-
-Cached 30 min to stay well under the rate limit.
-"""
-
 from __future__ import annotations
 
-import os
-import time
 from datetime import datetime, timedelta, timezone
+from threading import Lock
+from time import monotonic
+from typing import Any
 
-import requests
+import httpx
 
-from backend.models.schemas import NewsItem
-
-FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
-FINNHUB_BASE = "https://finnhub.io/api/v1"
-
-_cache: dict = {"data": None, "ts": 0.0, "ttl": 1800}
-
-# Fallback shown only if the key is missing or the API errors.
-_DEMO = [
-    NewsItem(time="10:00", event="US JOLTS Job Openings", impact="High"),
-    NewsItem(time="10:30", event="Crude Oil Inventories", impact="Med"),
-    NewsItem(time="11:00", event="Fed Chair / Member Speech", impact="High"),
-    NewsItem(time="14:00", event="FOMC Member Speech", impact="Med"),
-]
-
-_ALWAYS_HIGH = ("FOMC", "NFP", "CPI", "PPI", "GDP", "PCE", "NON-FARM", "RATE DECISION", "POWELL")
+from backend.core.config import settings
+from backend.models.schemas import EconomicEvent
 
 
-def _impact_label(raw: str, event_name: str) -> str:
-    name = (event_name or "").upper()
-    if any(k in name for k in _ALWAYS_HIGH):
-        return "High"
-    raw = (raw or "").lower()
-    if raw == "high":
-        return "High"
-    if raw == "medium":
-        return "Med"
-    return "Low"
+class FinnhubEconomicCalendarService:
+    """Cached upcoming US economic releases from Finnhub.
 
+    This is intentionally separate from the market-headlines service. Headline
+    timestamps are publication times; calendar timestamps are the scheduled
+    release times traders care about. Calendar data is informational only and
+    never changes confidence, actionability, order arming, stops, or targets.
+    """
 
-def _fmt_time(raw_time: str) -> str:
-    # Finnhub gives "YYYY-MM-DD HH:MM:SS"; show HH:MM, else the date.
-    if not raw_time:
-        return "—"
-    try:
-        if " " in raw_time:
-            return raw_time.split(" ", 1)[1][:5]
-        return raw_time[5:10]  # MM-DD
-    except Exception:
-        return raw_time[:5]
+    BASE_URL = "https://finnhub.io/api/v1"
 
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._items: list[EconomicEvent] = []
+        self._cached_at: float = 0.0
+        self._next_retry_at: float = 0.0
+        self._last_error: str | None = None
+        self._last_success_at: datetime | None = None
+        self._access: str = "unknown"
 
-def get_calendar(days_ahead: int = 2) -> list[NewsItem]:
-    """Upcoming medium/high-impact US events, newest window first. Never empty."""
-    now = time.time()
-    if _cache["data"] is not None and now - _cache["ts"] < _cache["ttl"]:
-        return _cache["data"]
+    @property
+    def enabled(self) -> bool:
+        return bool(settings.finnhub_api_key)
 
-    if not FINNHUB_API_KEY:
-        return _DEMO
+    def status(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "source": "finnhub-economic-calendar" if self.enabled else "not-configured",
+            "access": self._access,
+            "cached_items": len(self._items),
+            "last_success_at": self._last_success_at.isoformat() if self._last_success_at else None,
+            "last_error": self._last_error,
+            "refresh_seconds": settings.finnhub_calendar_refresh_seconds,
+        }
 
-    today = datetime.now(timezone.utc).date()
-    try:
-        resp = requests.get(
-            f"{FINNHUB_BASE}/calendar/economic",
-            params={
-                "from": today.isoformat(),
-                "to": (today + timedelta(days=days_ahead)).isoformat(),
-                "token": FINNHUB_API_KEY,
-            },
-            timeout=8,
+    def latest(self, limit: int = 10, days: int = 7) -> list[EconomicEvent]:
+        if not self.enabled:
+            self._access = "not-configured"
+            return []
+
+        if self._is_fresh():
+            return self._upcoming(limit)
+        if monotonic() < self._next_retry_at:
+            return self._upcoming(limit)
+
+        with self._lock:
+            if not self._is_fresh():
+                now = datetime.now(timezone.utc)
+                try:
+                    payload = self._fetch(now.date().isoformat(), (now.date() + timedelta(days=days)).isoformat())
+                    self._items = self._parse(payload, now=now)
+                    self._cached_at = monotonic()
+                    self._next_retry_at = 0.0
+                    self._last_error = None
+                    self._last_success_at = now
+                    self._access = "ready"
+                except httpx.HTTPStatusError as exc:
+                    code = exc.response.status_code
+                    self._access = "premium-required" if code in {401, 402, 403} else "error"
+                    self._last_error = f"Finnhub economic calendar request failed ({code})"
+                    self._next_retry_at = monotonic() + min(300.0, float(settings.finnhub_calendar_refresh_seconds))
+                except Exception as exc:  # keep the application usable during provider failure
+                    self._access = "error"
+                    self._last_error = str(exc)[:300]
+                    self._next_retry_at = monotonic() + min(120.0, float(settings.finnhub_calendar_refresh_seconds))
+
+        return self._upcoming(limit)
+
+    def _is_fresh(self) -> bool:
+        return bool(
+            self._cached_at
+            and monotonic() - self._cached_at < settings.finnhub_calendar_refresh_seconds
         )
-        if resp.status_code != 200:
-            return _cache["data"] or _DEMO
-        events = (resp.json() or {}).get("economicCalendar", []) or []
-    except Exception:
-        return _cache["data"] or _DEMO
 
-    now_utc = datetime.now(timezone.utc)
-    items: list[tuple[str, NewsItem]] = []
-    for ev in events:
-        country = ev.get("country", "")
-        raw_impact = ev.get("impact", "")
-        name = ev.get("event", "")
-        is_us = country == "US"
-        important = raw_impact in ("medium", "high") or any(k in name.upper() for k in _ALWAYS_HIGH)
-        if not (is_us and important):
-            continue
-        raw_time = ev.get("time", "")
-        # keep only events still upcoming (or within the last hour)
-        try:
-            ev_dt = datetime.strptime(raw_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            if ev_dt < now_utc - timedelta(hours=1):
+    def _upcoming(self, limit: int) -> list[EconomicEvent]:
+        now = datetime.now(timezone.utc)
+        return [item for item in self._items if item.scheduled_at >= now - timedelta(minutes=2)][:limit]
+
+    def _fetch(self, from_date: str, to_date: str) -> dict[str, Any]:
+        headers = {"X-Finnhub-Token": settings.finnhub_api_key or ""}
+        with httpx.Client(timeout=settings.finnhub_request_timeout_seconds, headers=headers) as client:
+            response = client.get(
+                f"{self.BASE_URL}/calendar/economic",
+                params={"from": from_date, "to": to_date},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Finnhub returned an unexpected economic calendar response")
+        return payload
+
+    def _parse(self, payload: dict[str, Any], now: datetime | None = None) -> list[EconomicEvent]:
+        now = now or datetime.now(timezone.utc)
+        raw_items = payload.get("economicCalendar")
+        if not isinstance(raw_items, list):
+            raise RuntimeError("Finnhub economic calendar response did not contain economicCalendar")
+
+        events: list[EconomicEvent] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
                 continue
-        except Exception:
-            ev_dt = now_utc
-        items.append((raw_time, NewsItem(time=_fmt_time(raw_time), event=name[:40] or "Event",
-                                         impact=_impact_label(raw_impact, name))))
+            country = str(raw.get("country") or "").upper().strip()
+            event_name = str(raw.get("event") or "").strip()
+            scheduled_at = self._parse_time(raw.get("time"))
+            if country not in {"US", "USA"} or not event_name or scheduled_at is None:
+                continue
+            if scheduled_at < now - timedelta(minutes=2):
+                continue
 
-    items.sort(key=lambda x: x[0])
-    result = [ni for _, ni in items[:6]] or _DEMO
-    _cache.update(data=result, ts=now)
-    return result
+            impact_raw = str(raw.get("impact") or "low").lower()
+            impact = "High" if impact_raw.startswith("high") else "Med" if impact_raw.startswith(("med", "moderate")) else "Low"
+            events.append(EconomicEvent(
+                scheduled_at=scheduled_at,
+                event=event_name,
+                impact=impact,
+                country=country,
+                actual=raw.get("actual"),
+                estimate=raw.get("estimate"),
+                previous=raw.get("prev"),
+                unit=str(raw.get("unit") or "") or None,
+            ))
+
+        events.sort(key=lambda item: (item.scheduled_at, {"High": 0, "Med": 1, "Low": 2}[item.impact]))
+        return events
+
+    @staticmethod
+    def _parse_time(value: Any) -> datetime | None:
+        if not value:
+            return None
+        text = str(value).strip()
+        try:
+            # Finnhub calendar examples use UTC-style wall-clock values.
+            return datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+
+
+finnhub_calendar_service = FinnhubEconomicCalendarService()

@@ -132,3 +132,7 @@ The test environment forces simulated data and disables paid external services.
 ## Important
 
 GEX is estimated from option open interest, gamma/volatility assumptions, contract multipliers, and an assumed dealer-side sign. It is decision-support information, not a guarantee of profitability.
+
+## v1.6 mobile reliability
+
+Mobile and iPad charts wait until the chart pane has a real width and height before initialization, resize explicitly on rotation and pane changes, and use a built-in Canvas fallback if the external Lightweight Charts library cannot be reached. Finnhub cards display weekday, date, time, and ET timezone.

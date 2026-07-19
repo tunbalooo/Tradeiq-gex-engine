@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from threading import Lock
 from time import monotonic
 from typing import Any
@@ -128,9 +129,10 @@ class FinnhubNewsService:
             relevance = sum(1 for term in terms if term in text)
             timestamp = int(raw.get("datetime") or 0)
             impact = "High" if relevance >= 2 else "Med" if relevance == 1 else "Low"
-            published = datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone() if timestamp else None
+            published = datetime.fromtimestamp(timestamp, tz=timezone.utc) if timestamp else None
+            published_et = published.astimezone(ZoneInfo("America/New_York")) if published else None
             scored.append((relevance, timestamp, NewsItem(
-                time=published.strftime("%H:%M") if published else "—",
+                time=published_et.strftime("%H:%M") if published_et else "—",
                 event=headline,
                 impact=impact,
                 source=str(raw.get("source") or "Finnhub"),

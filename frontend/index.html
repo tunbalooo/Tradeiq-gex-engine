@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=15" />
+<link rel="stylesheet" href="/static/styles.css?v=17" />
 </head>
 <body>
 <div class="app">
@@ -135,8 +135,13 @@
             <div class="panel-b table-pad"><table><tbody id="alerts"></tbody></table></div>
           </div>
           <div class="panel">
-            <div class="panel-h"><h3 id="newsPanelTitle">Market News · Finnhub</h3></div>
-            <div class="panel-b table-pad"><table><tbody id="news"></tbody></table></div>
+            <div class="panel-h"><h3 id="newsPanelTitle">Economic Calendar + Market News</h3></div>
+            <div class="panel-b market-info-panel">
+              <div class="market-info-label">Upcoming US Economic Events · scheduled release time</div>
+              <div class="table-pad"><table><tbody id="economicCalendar"><tr><td class="m">Loading upcoming events…</td></tr></tbody></table></div>
+              <div class="market-info-label headlines-label">Market Headlines · publication time</div>
+              <div class="table-pad"><table><tbody id="news"></tbody></table></div>
+            </div>
           </div>
           <div class="panel">
             <div class="panel-h"><h3>Performance · Logged Setups</h3></div>
@@ -329,12 +334,17 @@
                 <div class="claude-foot" id="claudeFoot">API key stays in the Python backend and Railway variables.</div>
               </aside>
 
-              <aside class="mobile-info-panel mobile-news-panel" id="mobileNewsPanel" data-mobile-pane="news" aria-label="Market news">
+              <aside class="mobile-info-panel mobile-news-panel" id="mobileNewsPanel" data-mobile-pane="news" aria-label="Economic calendar and market news">
                 <div class="mobile-info-head">
-                  <div><h3 id="mobileNewsTitle">Market News</h3><small>Finnhub headlines filtered for the active market</small></div>
-                  <span class="source-chip">LIVE</span>
+                  <div><h3 id="mobileNewsTitle">Calendar + News</h3><small>Upcoming releases show their scheduled day, date and time</small></div>
+                  <span class="source-chip">FINNHUB</span>
                 </div>
-                <div class="mobile-news-list" id="mobileNewsList"><div class="mobile-empty">Waiting for headlines…</div></div>
+                <div class="mobile-market-scroll">
+                  <div class="mobile-section-label">Upcoming Economic Events</div>
+                  <div class="mobile-calendar-list" id="mobileCalendarList"><div class="mobile-empty">Loading upcoming events…</div></div>
+                  <div class="mobile-section-label headlines-label">Market Headlines</div>
+                  <div class="mobile-news-list" id="mobileNewsList"><div class="mobile-empty">Waiting for headlines…</div></div>
+                </div>
               </aside>
 
               <aside class="mobile-info-panel mobile-gex-panel" id="mobileGexPanel" data-mobile-pane="gex" aria-label="Gamma exposure">
@@ -419,9 +429,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js" onerror="this.onerror=null;this.src='https://unpkg.com/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js'"></script>
-<script src="/static/trading_chart.js?v=15"></script>
-<script src="/static/app.js?v=15"></script>
+<script src="/static/boot.js?v=17"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

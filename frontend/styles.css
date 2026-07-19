@@ -269,3 +269,29 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
   .topbar{height:50px;min-height:50px;padding-top:4px;padding-bottom:4px}.page,.chart-page-shell{height:calc(100dvh - 50px - 56px - env(safe-area-inset-bottom))}.mobile-bottom-nav{height:calc(56px + env(safe-area-inset-bottom))}.mobile-bottom-nav button{flex-direction:row;font-size:8px}.mobile-bottom-nav button svg{width:16px;height:16px}.tradeiq-chart-bar{min-height:38px}.chart-command-bar{min-height:31px}.tv-chart-layout{height:calc(100% - 69px)}
 }
 .source-chip.estimated{color:var(--amber);border-color:rgba(245,185,59,.34);background:rgba(245,185,59,.07)}
+
+/* v1.6: iOS/mobile chart reliability and full news timestamps. */
+.tradeiq-canvas-fallback{position:absolute;inset:0;display:block;width:100%;height:100%;background:#090f18}
+.news-datetime{min-width:150px;white-space:normal;line-height:1.35}
+
+@media (max-width:900px){
+  .tv-chart-host{min-width:0;min-height:300px;contain:layout size style}
+  .tv-chart-surface.full{isolation:isolate}
+  .mobile-news-card{grid-template-columns:76px minmax(0,1fr) auto}
+  .mobile-news-card time{display:flex;flex-direction:column;gap:2px;min-width:0;color:var(--muted);font:500 9px/1.2 var(--mono)}
+  .mobile-news-card time b{color:var(--text);font-size:10px;letter-spacing:.25px}
+  .mobile-news-card time span{color:#91a0b4;font-size:9px}
+  .mobile-news-card time em{color:var(--green);font-size:8.5px;font-style:normal;white-space:nowrap}
+}
+
+@media (max-width:560px){
+  .mobile-news-card{grid-template-columns:68px minmax(0,1fr)}
+  .mobile-news-card .impact-pill{grid-column:2;justify-self:start}
+}
+
+/* v1.7: upcoming economic calendar uses scheduled release timestamps. */
+.market-info-panel{padding:0!important;overflow:auto}.market-info-label{position:sticky;top:0;z-index:1;padding:8px 10px;border-bottom:1px solid var(--line);background:rgba(12,19,30,.97);color:var(--muted);font:700 8px var(--sans);letter-spacing:.75px;text-transform:uppercase}.market-info-label.headlines-label{border-top:1px solid var(--line)}
+.calendar-row td{vertical-align:top}.calendar-datetime{min-width:158px;white-space:normal;color:var(--green);line-height:1.35}.calendar-values{margin-top:3px;font-size:9px}.calendar-unavailable{padding:13px 10px!important;line-height:1.45}
+.mobile-market-scroll{height:100%;overflow:auto;-webkit-overflow-scrolling:touch}.mobile-section-label{position:sticky;top:69px;z-index:1;padding:9px 14px;border-bottom:1px solid var(--line);background:rgba(9,16,25,.97);color:var(--muted);font:700 8px var(--sans);letter-spacing:.85px;text-transform:uppercase}.mobile-section-label.headlines-label{border-top:1px solid var(--line)}
+.mobile-calendar-list{padding:4px 14px 10px}.mobile-calendar-card{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:10px;padding:14px 0;border-bottom:1px solid var(--line);align-items:start}.mobile-calendar-card time{display:flex;flex-direction:column;gap:2px;color:var(--muted);font:500 9px/1.2 var(--mono)}.mobile-calendar-card time b{color:var(--text);font-size:10px}.mobile-calendar-card time span{color:#91a0b4}.mobile-calendar-card time em{color:var(--green);font-style:normal;white-space:nowrap}.mobile-calendar-card strong{display:block;color:var(--text);font:650 12px/1.4 var(--sans)}.mobile-calendar-card small{display:block;margin-top:5px;color:var(--muted);font:500 9px/1.4 var(--sans)}
+@media (max-width:560px){.mobile-calendar-card{grid-template-columns:68px minmax(0,1fr)}.mobile-calendar-card .impact-pill{grid-column:2;justify-self:start}.mobile-section-label{top:67px}}

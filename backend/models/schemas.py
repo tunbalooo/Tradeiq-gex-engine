@@ -85,6 +85,18 @@ class NewsItem(BaseModel):
     published_at: datetime | None = None
 
 
+class EconomicEvent(BaseModel):
+    scheduled_at: datetime
+    event: str
+    impact: Literal["High", "Med", "Low"]
+    country: str = "US"
+    actual: Any | None = None
+    estimate: Any | None = None
+    previous: Any | None = None
+    unit: str | None = None
+    source: str = "Finnhub Economic Calendar"
+
+
 class PerformanceSummary(BaseModel):
     win_rate: float
     trades: int
@@ -149,6 +161,8 @@ class DashboardMeta(BaseModel):
     overview: list[MarketOverviewItem]
     alerts: list[AlertItem]
     news: list[NewsItem]
+    economic_events: list[EconomicEvent] = Field(default_factory=list)
+    economic_calendar_status: dict[str, Any] = Field(default_factory=dict)
     performance: PerformanceSummary
 
 

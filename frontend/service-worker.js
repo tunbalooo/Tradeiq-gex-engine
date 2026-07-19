@@ -1,9 +1,10 @@
-const CACHE_NAME = "tradeiq-v1.5-shell";
+const CACHE_NAME = "tradeiq-v1.7-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=15",
-  "/static/app.js?v=15",
-  "/static/trading_chart.js?v=15",
+  "/static/styles.css?v=17",
+  "/static/boot.js?v=17",
+  "/static/app.js?v=17",
+  "/static/trading_chart.js?v=17",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",
@@ -29,11 +30,14 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(fetch(request));
     return;
   }
+
+  // Network-first prevents an installed iPhone/iPad app from remaining stuck
+  // on an older TradeIQ deployment after Railway publishes a new version.
   event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request).then((response) => {
+    fetch(request).then((response) => {
       const copy = response.clone();
       caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
       return response;
-    }).catch(() => caches.match("/")))
+    }).catch(() => caches.match(request).then((cached) => cached || caches.match("/")))
   );
 });

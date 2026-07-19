@@ -7,6 +7,7 @@ from backend.services.backtest_service import run_backtest
 from backend.services.claude_analysis import claude_analysis_service
 from backend.services.dashboard_service import build_dashboard_meta
 from backend.services.finnhub_news import finnhub_news_service
+from backend.services.finnhub_calendar import finnhub_calendar_service
 from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
 from backend.services.instruments import get_instrument, instrument_registry
@@ -129,7 +130,7 @@ def backtest(request: BacktestRequest):
 @router.get("/settings")
 def read_settings():
     profile = instrument_registry.active
-    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "active_symbol": profile.symbol, "supported_symbols": ", ".join(item["symbol"] for item in instrument_registry.list_public()), "dataset": settings.databento_dataset, "futures_symbol": profile.futures_continuous, "options_parent": profile.options_parent, "gex_source": profile.gex_source_label, "tick_size": profile.tick_size, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled}
+    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "active_symbol": profile.symbol, "supported_symbols": ", ".join(item["symbol"] for item in instrument_registry.list_public()), "dataset": settings.databento_dataset, "futures_symbol": profile.futures_continuous, "options_parent": profile.options_parent, "gex_source": profile.gex_source_label, "tick_size": profile.tick_size, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled, "finnhub_economic_calendar": finnhub_calendar_service.status()}
 
 
 @router.get("/news")
@@ -146,6 +147,16 @@ def news_status(symbol: str | None = Query(default=None)):
         return finnhub_news_service.status(symbol=symbol)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/economic-calendar")
+def economic_calendar(limit: int = Query(10, ge=1, le=30), days: int = Query(7, ge=1, le=30)):
+    return {"items": finnhub_calendar_service.latest(limit=limit, days=days), "status": finnhub_calendar_service.status()}
+
+
+@router.get("/economic-calendar/status")
+def economic_calendar_status():
+    return finnhub_calendar_service.status()
 
 
 @router.get("/ai/status")

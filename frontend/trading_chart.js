@@ -2,11 +2,167 @@
   "use strict";
 
   const LC = window.LightweightCharts;
+
+  function installCanvasFallback() {
+    console.warn("Lightweight Charts was unavailable; TradeIQ is using its built-in Canvas chart fallback.");
+    const fallbackInstances = new Map();
+    const lineColors = {
+      entry: "#F5B93B", stop: "#FF4D5E", target: "#26D07C",
+      gex: "#48A3FF", vwap: "#E4D06F", fib: "#A98BFF",
+    };
+
+    function fallbackSize(host) {
+      const rect = host.getBoundingClientRect();
+      return {
+        width: Math.max(280, Math.floor(rect.width || host.parentElement?.clientWidth || window.innerWidth || 390)),
+        height: Math.max(300, Math.floor(rect.height || host.parentElement?.clientHeight || 480)),
+      };
+    }
+
+    function fallbackTime(value) {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function ensureFallback(id) {
+      let instance = fallbackInstances.get(id);
+      if (instance) return instance;
+      const host = document.getElementById(id);
+      if (!host) return null;
+      host.innerHTML = "";
+      const canvas = document.createElement("canvas");
+      canvas.className = "tradeiq-canvas-fallback";
+      canvas.setAttribute("aria-label", "TradeIQ fallback candlestick chart");
+      host.appendChild(canvas);
+      instance = { id, host, canvas, payload: null };
+      fallbackInstances.set(id, instance);
+      const observer = new ResizeObserver(() => drawFallback(instance));
+      observer.observe(host);
+      instance.resizeObserver = observer;
+      return instance;
+    }
+
+    function horizontal(ctx, y, width, label, color, dashed = true) {
+      if (!Number.isFinite(y)) return;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash(dashed ? [5, 4] : []);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "600 10px ui-monospace, monospace";
+      const textWidth = ctx.measureText(label).width + 10;
+      ctx.fillRect(Math.max(0, width - textWidth), y - 9, textWidth, 18);
+      ctx.fillStyle = "#071019";
+      ctx.fillText(label, Math.max(4, width - textWidth + 5), y + 4);
+      ctx.restore();
+    }
+
+    function drawFallback(instance) {
+      const payload = instance.payload;
+      const { width, height } = fallbackSize(instance.host);
+      const dpr = window.devicePixelRatio || 1;
+      const canvas = instance.canvas;
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#090F18";
+      ctx.fillRect(0, 0, width, height);
+
+      const raw = Array.isArray(payload?.candles) ? payload.candles : [];
+      const candles = raw.map((item) => ({
+        time: fallbackTime(item.time), open: Number(item.open), high: Number(item.high),
+        low: Number(item.low), close: Number(item.close),
+      })).filter((item) => item.time != null && [item.open, item.high, item.low, item.close].every(Number.isFinite));
+      if (!candles.length) {
+        ctx.fillStyle = "#7788A3";
+        ctx.font = "500 12px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("Waiting for market candles…", width / 2, height / 2);
+        return;
+      }
+
+      const visibleCount = Math.min(candles.length, instance.id === "chartLarge" ? 130 : 90);
+      const values = candles.slice(-visibleCount);
+      const setup = payload?.setup || {};
+      const extra = [setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2,
+        setup.vwap, setup.standard_deviation_high, setup.standard_deviation_low,
+        setup.gex?.call_wall, setup.gex?.gamma_flip, setup.gex?.put_wall]
+        .map(Number).filter(Number.isFinite);
+      let low = Math.min(...values.map((item) => item.low), ...extra);
+      let high = Math.max(...values.map((item) => item.high), ...extra);
+      const pad = Math.max((high - low) * 0.08, Number(payload?.tickSize || 0.25) * 8);
+      low -= pad; high += pad;
+      const plotRight = width - 58;
+      const plotTop = 16;
+      const plotBottom = height - 28;
+      const plotHeight = Math.max(1, plotBottom - plotTop);
+      const toY = (price) => plotTop + (high - Number(price)) / (high - low || 1) * plotHeight;
+
+      ctx.strokeStyle = "rgba(135,151,173,.10)";
+      ctx.fillStyle = "#7788A3";
+      ctx.font = "500 9px ui-monospace, monospace";
+      ctx.textAlign = "left";
+      for (let i = 0; i <= 6; i += 1) {
+        const y = plotTop + (plotHeight * i / 6);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotRight, y); ctx.stroke();
+        const price = high - (high - low) * i / 6;
+        ctx.fillText(price.toLocaleString("en-US", { maximumFractionDigits: payload?.pricePrecision ?? 2 }), plotRight + 5, y + 3);
+      }
+
+      const step = plotRight / Math.max(1, values.length);
+      const bodyWidth = Math.max(1.5, Math.min(8, step * 0.64));
+      values.forEach((item, index) => {
+        const x = (index + 0.5) * step;
+        const up = item.close >= item.open;
+        const color = up ? "#26D07C" : "#FF4D5E";
+        ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, toY(item.high)); ctx.lineTo(x, toY(item.low)); ctx.stroke();
+        const yOpen = toY(item.open); const yClose = toY(item.close);
+        ctx.fillRect(x - bodyWidth / 2, Math.min(yOpen, yClose), bodyWidth, Math.max(1, Math.abs(yClose - yOpen)));
+      });
+
+      const overlays = payload?.overlays || {};
+      if (overlays.gex && setup.gex) {
+        horizontal(ctx, toY(setup.gex.call_wall), plotRight, "CALL", lineColors.gex);
+        horizontal(ctx, toY(setup.gex.gamma_flip), plotRight, "γ FLIP", lineColors.entry);
+        horizontal(ctx, toY(setup.gex.put_wall), plotRight, "PUT", lineColors.stop);
+      }
+      if (overlays.vwap) horizontal(ctx, toY(setup.vwap), plotRight, "VWAP", lineColors.vwap, false);
+      if (overlays.trade && setup.entry != null) {
+        horizontal(ctx, toY(setup.entry), plotRight, setup.order_state === "PREVIEW_ONLY" ? "WATCH" : "ENTRY", lineColors.entry, false);
+        horizontal(ctx, toY(setup.stop_loss), plotRight, "SL", lineColors.stop, false);
+        horizontal(ctx, toY(setup.take_profit_1), plotRight, "TP1", lineColors.target);
+        horizontal(ctx, toY(setup.take_profit_2), plotRight, "TP2", lineColors.target, false);
+      }
+      ctx.fillStyle = "#7788A3";
+      ctx.font = "500 9px ui-monospace, monospace";
+      ctx.textAlign = "left";
+      ctx.fillText("Canvas fallback · live TradeIQ data", 8, height - 9);
+    }
+
+    function render(id, data) {
+      const instance = ensureFallback(id);
+      if (!instance) return;
+      instance.payload = data;
+      requestAnimationFrame(() => drawFallback(instance));
+    }
+    function reset(id) { const instance = fallbackInstances.get(id); if (instance) drawFallback(instance); }
+    function marketChanged(id) { const instance = fallbackInstances.get(id); if (instance) { instance.payload = null; drawFallback(instance); } }
+    function resize(id) { const instance = fallbackInstances.get(id); if (instance) drawFallback(instance); }
+    window.TradeIQChartManager = { render, reset, marketChanged, resize, instances: fallbackInstances, fallback: true };
+  }
+
   if (!LC) {
-    console.error("Lightweight Charts failed to load; interactive chart is unavailable.");
-    document.querySelectorAll("#chart, #chartLarge").forEach((host) => {
-      host.innerHTML = '<div class="chart-load-error">Interactive chart library could not load. Refresh the page or check the browser network connection.</div>';
-    });
+    installCanvasFallback();
     return;
   }
 
@@ -25,6 +181,8 @@
   };
 
   const instances = new Map();
+  const pendingRenders = new Map();
+  const renderTimers = new Map();
   const dashed = LC.LineStyle?.Dashed ?? 2;
   const dotted = LC.LineStyle?.Dotted ?? 1;
 
@@ -84,12 +242,67 @@
     });
   }
 
+  function measureHost(host) {
+    if (!host) return { width: 0, height: 0 };
+    const rect = host.getBoundingClientRect();
+    return {
+      width: Math.floor(rect.width || host.clientWidth || 0),
+      height: Math.floor(rect.height || host.clientHeight || 0),
+    };
+  }
+
+  function hostIsReady(host) {
+    const size = measureHost(host);
+    return Boolean(host?.isConnected && size.width >= 180 && size.height >= 180);
+  }
+
+  function resizeInstance(instance) {
+    if (!instance) return false;
+    const { width, height } = measureHost(instance.host);
+    if (width < 2 || height < 2) return false;
+    if (instance.lastWidth !== width || instance.lastHeight !== height) {
+      instance.chart.resize(width, height);
+      instance.lastWidth = width;
+      instance.lastHeight = height;
+      scheduleOverlay(instance);
+    }
+    return true;
+  }
+
+  function scheduleRender(id, data) {
+    pendingRenders.set(id, data);
+    if (renderTimers.has(id)) return;
+    let attempts = 0;
+    const tryRender = () => {
+      attempts += 1;
+      const host = document.getElementById(id);
+      if (hostIsReady(host)) {
+        renderTimers.delete(id);
+        const latest = pendingRenders.get(id);
+        pendingRenders.delete(id);
+        if (latest) render(id, latest, true);
+        return;
+      }
+      if (attempts < 80) {
+        renderTimers.set(id, window.setTimeout(tryRender, 50));
+      } else {
+        renderTimers.delete(id);
+        if (host) host.innerHTML = '<div class="chart-load-error">Chart area did not receive a usable size. Rotate the device or tap Chart again.</div>';
+      }
+    };
+    renderTimers.set(id, window.setTimeout(tryRender, 0));
+  }
+
   function createInstance(id) {
     const host = document.getElementById(id);
     if (!host) return null;
 
+    const initialSize = measureHost(host);
+    if (initialSize.width < 2 || initialSize.height < 2) return null;
     const chart = LC.createChart(host, {
-      autoSize: true,
+      autoSize: false,
+      width: initialSize.width,
+      height: initialSize.height,
       layout: {
         background: { type: LC.ColorType?.Solid ?? "solid", color: COLORS.background },
         textColor: COLORS.text,
@@ -197,13 +410,17 @@
       instrumentName: "E-mini Nasdaq-100",
       tickSize: 0.25,
       pricePrecision: 2,
+      lastWidth: initialSize.width,
+      lastHeight: initialSize.height,
     };
 
     chart.subscribeCrosshairMove((param) => updateLegend(instance, param));
     chart.subscribeClick((param) => handleChartClick(instance, param));
     chart.timeScale().subscribeVisibleLogicalRangeChange(() => scheduleOverlay(instance));
 
-    const resizeObserver = new ResizeObserver(() => scheduleOverlay(instance));
+    const resizeObserver = new ResizeObserver(() => {
+      if (resizeInstance(instance)) scheduleOverlay(instance);
+    });
     resizeObserver.observe(host);
     instance.resizeObserver = resizeObserver;
 
@@ -492,9 +709,18 @@
     }
   }
 
-  function render(id, data) {
+  function render(id, data, fromScheduledRender = false) {
+    const host = document.getElementById(id);
+    if (!hostIsReady(host)) {
+      scheduleRender(id, data);
+      return;
+    }
     const instance = instances.get(id) || createInstance(id);
-    if (!instance) return;
+    if (!instance) {
+      if (!fromScheduledRender) scheduleRender(id, data);
+      return;
+    }
+    resizeInstance(instance);
     const changedSymbol = instance.symbol !== data.symbol;
     instance.setup = data.setup || null;
     instance.overlays = { ...(data.overlays || {}) };
@@ -543,5 +769,21 @@
     scheduleOverlay(instance);
   }
 
-  window.TradeIQChartManager = { render, reset, marketChanged, instances };
+  function resize(id) {
+    const instance = instances.get(id);
+    if (instance) resizeInstance(instance);
+    const pending = pendingRenders.get(id);
+    if (pending) scheduleRender(id, pending);
+  }
+
+  function refresh(id) {
+    const instance = instances.get(id);
+    if (instance) {
+      resizeInstance(instance);
+      instance.chart.timeScale().scrollToRealTime();
+      scheduleOverlay(instance);
+    }
+  }
+
+  window.TradeIQChartManager = { render, reset, marketChanged, resize, refresh, instances };
 })();

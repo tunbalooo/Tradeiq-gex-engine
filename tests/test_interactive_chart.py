@@ -4,10 +4,11 @@ ROOT = Path(__file__).resolve().parents[1]
 HTML = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 JS = (ROOT / "frontend" / "trading_chart.js").read_text(encoding="utf-8")
 APP = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+BOOT = (ROOT / "frontend" / "boot.js").read_text(encoding="utf-8")
 
 
 def test_lightweight_chart_workstation_is_wired():
-    assert "lightweight-charts@5.2.0" in HTML
+    assert "lightweight-charts@5.2.0" in BOOT
     assert 'id="chart" class="tv-chart-host"' in HTML
     assert 'id="chartLarge" class="tv-chart-host"' in HTML
     assert 'data-chart-action="recenter"' in HTML

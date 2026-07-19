@@ -98,6 +98,33 @@ function timeLabel(value) {
   const date = new Date(value);
   return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" });
 }
+function newsDateParts(item = {}) {
+  const raw = item.published_at || item.datetime || item.date || null;
+  const date = raw ? new Date(raw) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    return { day: "—", date: "Date unavailable", time: String(item.time || "—"), full: String(item.time || "—") };
+  }
+  const day = date.toLocaleDateString("en-US", { weekday: "short", timeZone: "America/New_York" });
+  const calendarDate = date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined, timeZone: "America/New_York" });
+  const clock = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York" });
+  return { day, date: calendarDate, time: `${clock} ET`, full: `${day}, ${calendarDate} · ${clock} ET` };
+}
+function calendarDateParts(item = {}) {
+  const raw = item.scheduled_at || item.time || null;
+  const date = raw ? new Date(raw) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    return { day: "—", date: "Date unavailable", time: "—", full: "Scheduled time unavailable" };
+  }
+  const day = date.toLocaleDateString("en-US", { weekday: "short", timeZone: "America/New_York" });
+  const calendarDate = date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/New_York" });
+  const clock = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York" });
+  return { day, date: calendarDate, time: `${clock} ET`, full: `${day}, ${calendarDate} · ${clock} ET` };
+}
+function calendarValue(value, unit) {
+  if (value === null || value === undefined || value === "") return "—";
+  return `${value}${unit ? ` ${unit}` : ""}`;
+}
+
 function classForDirection(direction) {
   return direction === "LONG" ? "g" : direction === "SHORT" ? "r" : "m";
 }
@@ -533,17 +560,59 @@ function renderAlerts(items = []) {
   $("alerts").innerHTML = items.map((item) => `<tr class="alert-row"><td>${item.time}</td><td class="${classes[item.severity] || "b"}">${item.title}</td></tr>
     <tr><td colspan="2" class="m" style="border-top:none;padding-top:0;font-size:11px">${item.detail}</td></tr>`).join("");
 }
+function renderEconomicCalendar(items = [], status = {}) {
+  const access = String(status.access || "unknown");
+  const unavailable = access === "premium-required"
+    ? "Upcoming economic calendar unavailable on the current Finnhub plan."
+    : access === "not-configured"
+      ? "Finnhub is not configured for upcoming economic events."
+      : "No upcoming US economic events were returned.";
+
+  const desktop = $("economicCalendar");
+  if (desktop) {
+    desktop.innerHTML = items.length ? items.map((item) => {
+      const stamp = calendarDateParts(item);
+      const impact = String(item.impact || "Low");
+      const impactClass = impact === "High" ? "r" : impact === "Med" ? "a" : "m";
+      return `<tr class="calendar-row"><td class="mono calendar-datetime">${escapeHtml(stamp.full)}</td><td><b>${escapeHtml(item.event || "Economic event")}</b><div class="m calendar-values">Forecast ${escapeHtml(calendarValue(item.estimate, item.unit))} · Previous ${escapeHtml(calendarValue(item.previous, item.unit))}</div></td><td class="${impactClass}" style="text-align:right">${escapeHtml(impact)}</td></tr>`;
+    }).join("") : `<tr><td colspan="3" class="m calendar-unavailable">${escapeHtml(unavailable)}</td></tr>`;
+  }
+
+  const mobile = $("mobileCalendarList");
+  if (mobile) {
+    mobile.innerHTML = items.length ? items.map((item) => {
+      const stamp = calendarDateParts(item);
+      const impact = String(item.impact || "Low");
+      const impactKind = impact.toLowerCase() === "high" ? "high" : impact.toLowerCase().startsWith("med") ? "med" : "low";
+      return `<article class="mobile-calendar-card"><time datetime="${escapeHtml(item.scheduled_at || "")}"><b>${escapeHtml(stamp.day)}</b><span>${escapeHtml(stamp.date)}</span><em>${escapeHtml(stamp.time)}</em></time><div><strong>${escapeHtml(item.event || "Economic event")}</strong><small>Forecast ${escapeHtml(calendarValue(item.estimate, item.unit))} · Previous ${escapeHtml(calendarValue(item.previous, item.unit))}</small></div><span class="impact-pill ${impactKind}">${escapeHtml(impact)}</span></article>`;
+    }).join("") : `<div class="mobile-empty">${escapeHtml(unavailable)}</div>`;
+  }
+}
+
+async function loadEconomicCalendar() {
+  try {
+    const response = await fetch("/api/economic-calendar?limit=10&days=7");
+    if (!response.ok) throw new Error(`Economic calendar failed (${response.status})`);
+    const payload = await response.json();
+    renderEconomicCalendar(payload.items || [], payload.status || {});
+  } catch (error) {
+    console.error(error);
+    renderEconomicCalendar([], { access: "error" });
+  }
+}
+
 function renderNews(items = []) {
   const target = $("news");
   const rows = items.map((item) => {
     const impactClass = item.impact === "High" ? "r" : item.impact === "Med" ? "a" : "m";
     const headline = escapeHtml(item.event || "Untitled headline");
     const source = escapeHtml(item.source || "Finnhub");
+    const stamp = newsDateParts(item);
     const safeUrl = typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? item.url : "";
     const headlineHtml = safeUrl
       ? `<a class="news-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${headline}</a>`
       : headline;
-    return `<tr class="news-row"><td class="mono m">${escapeHtml(item.time || "—")}</td><td>${headlineHtml}<div class="m news-source">${source}</div></td><td class="${impactClass}" style="text-align:right">${escapeHtml(item.impact || "Low")}</td></tr>`;
+    return `<tr class="news-row"><td class="mono m news-datetime">${escapeHtml(stamp.full)}</td><td>${headlineHtml}<div class="m news-source">${source}</div></td><td class="${impactClass}" style="text-align:right">${escapeHtml(item.impact || "Low")}</td></tr>`;
   });
   if (target) target.innerHTML = rows.length ? rows.join("") : '<tr><td colspan="3" class="m">No recent headlines available</td></tr>';
 
@@ -554,14 +623,16 @@ function renderNews(items = []) {
       const impactKind = impact.toLowerCase() === "high" ? "high" : impact.toLowerCase().startsWith("med") ? "med" : "low";
       const headline = escapeHtml(item.event || "Untitled headline");
       const source = escapeHtml(item.source || "Finnhub");
+      const stamp = newsDateParts(item);
       const safeUrl = typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? item.url : "";
       const headlineHtml = safeUrl
         ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${headline}</a>`
         : `<div class="mobile-news-headline">${headline}</div>`;
-      return `<article class="mobile-news-card"><time>${escapeHtml(item.time || "—")}</time><div>${headlineHtml}<small>${source}</small></div><span class="impact-pill ${impactKind}">${escapeHtml(impact)}</span></article>`;
+      return `<article class="mobile-news-card"><time datetime="${escapeHtml(item.published_at || "")}"><b>${escapeHtml(stamp.day)}</b><span>${escapeHtml(stamp.date)}</span><em>${escapeHtml(stamp.time)}</em></time><div>${headlineHtml}<small>${source}</small></div><span class="impact-pill ${impactKind}">${escapeHtml(impact)}</span></article>`;
     }).join("") : '<div class="mobile-empty">No recent headlines available.</div>';
   }
 }
+
 function renderPerformance(performance) {
   if (!performance) return;
   $("perfWin").textContent = `${performance.win_rate.toFixed(0)}%`;
@@ -587,6 +658,7 @@ function renderAll(setup, meta, session = state.session) {
   renderZones(setup);
   renderFib(setup);
   renderAlerts(meta.alerts);
+  renderEconomicCalendar(meta.economic_events || [], meta.economic_calendar_status || {});
   renderNews(meta.news);
   renderPerformance(meta.performance);
   drawChart();
@@ -662,6 +734,18 @@ function drawChart(chartId = "chart") {
   });
 }
 
+function scheduleChartDraw(chartId = "chartLarge", delay = 0) {
+  window.setTimeout(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        drawChart(chartId);
+        window.TradeIQChartManager?.resize?.(chartId);
+        window.setTimeout(() => window.TradeIQChartManager?.refresh?.(chartId), 80);
+      });
+    });
+  }, delay);
+}
+
 async function initialLoad() {
   try {
     const [health, snapshot, dashboard] = await Promise.all([
@@ -682,6 +766,7 @@ async function initialLoad() {
     renderHeader(snapshot);
     setConnection(true);
     await loadClaudeStatus();
+    loadEconomicCalendar();
     connectWebSocket();
   } catch (error) {
     console.error(error); setConnection(false); $("modeLabel").textContent = "ERROR";
@@ -855,7 +940,7 @@ function setMobilePane(name, navigate = true) {
   if (navigate && state.currentPage !== "chart") setPage("chart");
   document.querySelectorAll("[data-mobile-pane]").forEach((item) => item.classList.toggle("mobile-pane-active", item.dataset.mobilePane === resolved));
   document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.classList.toggle("active", button.dataset.mobileTarget === resolved && state.currentPage === "chart"));
-  if (resolved === "chart") setTimeout(() => drawChart("chartLarge"), 40);
+  if (resolved === "chart") scheduleChartDraw("chartLarge", 20);
   if (resolved === "claude" && state.claude.enabled && state.claude.auto && !state.claude.text && !state.claude.busy) setTimeout(() => startClaudeAnalysis(false), 80);
   closeMobileMenu();
 }
@@ -1015,7 +1100,18 @@ if (requestedView === "gex") setPage("gex");
 else if (requestedView === "claude") { setPage("chart"); setMobilePane("claude", false); }
 else if (requestedView === "chart" || isMobileWorkspace()) { setPage("chart"); setMobilePane(requestedView === "chart" ? "chart" : state.mobilePane, false); }
 
-window.addEventListener("resize", () => { if (!isMobileWorkspace()) closeMobileMenu(); syncMobileNavigation(); drawChart(); if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge"); if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve); });
+function refreshVisibleCharts() {
+  if (!isMobileWorkspace()) closeMobileMenu();
+  syncMobileNavigation();
+  drawChart();
+  window.TradeIQChartManager?.resize?.("chart");
+  if ($("page-chart")?.classList.contains("active")) scheduleChartDraw("chartLarge", 10);
+  if (state.meta?.performance) drawEquity(state.meta.performance.equity_curve);
+}
+window.addEventListener("resize", refreshVisibleCharts);
+window.addEventListener("orientationchange", () => setTimeout(refreshVisibleCharts, 160));
+window.addEventListener("pageshow", () => scheduleChartDraw("chartLarge", 30));
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state.currentPage === "chart") scheduleChartDraw("chartLarge", 30); });
 
 if ($("refreshGex")) $("refreshGex").addEventListener("click", refreshGexCache);
 if ($("settingsRefreshGex")) $("settingsRefreshGex").addEventListener("click", refreshGexCache);
@@ -1050,5 +1146,6 @@ if ($("claudeAuto")) $("claudeAuto").addEventListener("change", (event) => {
 setInterval(() => {
   if (state.currentPage === "chart" && state.claude.enabled && state.claude.auto && !state.claude.busy) startClaudeAnalysis(false);
 }, 300000);
+setInterval(loadEconomicCalendar, 900000);
 
 setInterval(tick, 1000); tick(); initialLoad();
