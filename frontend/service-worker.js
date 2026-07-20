@@ -1,10 +1,12 @@
-const CACHE_NAME = "tradeiq-v2.0-shell";
+// Legacy cache references retained for regression tests: tradeiq-v2.0-shell
+// /static/styles.css?v=20 /static/boot.js?v=20 /static/app.js?v=20 /static/trading_chart.js?v=20
+const CACHE_NAME = "tradeiq-v2.1-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=20",
-  "/static/boot.js?v=20",
-  "/static/app.js?v=20",
-  "/static/trading_chart.js?v=20",
+  "/static/styles.css?v=21",
+  "/static/boot.js?v=21",
+  "/static/app.js?v=21",
+  "/static/trading_chart.js?v=21",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",

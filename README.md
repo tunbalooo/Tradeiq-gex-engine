@@ -155,3 +155,8 @@ The mobile chart now supports full two-dimensional navigation: drag horizontally
 ## v2.0 locked trade plans
 
 TradeIQ separates a continuously recalculated **candidate** from an **armed setup**. Candidate entry, stop and target calculations are kept off the chart. The risk box and Entry/SL/TP lines appear only when the engine transitions to `WAITING_FOR_LIMIT`. Those trade levels are then frozen for the life of the setup and cannot follow the current price.
+
+
+## v2.1 Watching lifecycle
+
+A developing setup now enters `WATCHING` before an order is armed. TradeIQ shows the fixed watched direction and entry, such as `WATCHING LONG @ 28,750.25`, but hides SL, targets and the risk box. After all mandatory confirmations pass, it transitions to `WAITING_FOR_LIMIT` and locks the complete trade plan.

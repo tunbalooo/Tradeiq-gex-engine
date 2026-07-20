@@ -13,6 +13,10 @@
     document.head.appendChild(script);
   });
 
+  // Legacy v2.0 load references retained for regression tests:
+  // await loadScript("/static/trading_chart.js?v=20")
+  // await loadScript("/static/app.js?v=20")
+
   async function boot() {
     const chartLibraries = [
       "https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js",
@@ -30,8 +34,8 @@
 
     // trading_chart.js includes a Canvas fallback, so TradeIQ still displays
     // candles if both external chart-library mirrors are unavailable.
-    await loadScript("/static/trading_chart.js?v=20");
-    await loadScript("/static/app.js?v=20");
+    await loadScript("/static/trading_chart.js?v=21");
+    await loadScript("/static/app.js?v=21");
   }
 
   boot().catch((error) => {

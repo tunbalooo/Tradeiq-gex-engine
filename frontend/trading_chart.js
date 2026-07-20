@@ -7,6 +7,15 @@
   const MAX_CACHED_HISTORY_BARS = 5000;
   const ACTIVE_TRADE_STATES = new Set(["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"]);
 
+  function hasWatchingPlan(setup) {
+    return Boolean(
+      setup
+      && setup.order_state === "WATCHING"
+      && ["LONG", "SHORT"].includes(setup.direction)
+      && Number.isFinite(Number(setup.entry))
+    );
+  }
+
   function hasLockedTradePlan(setup) {
     if (!setup || !ACTIVE_TRADE_STATES.has(setup.order_state)) return false;
     if (!setup.armed_at) return false;
@@ -297,10 +306,11 @@
       const setupForScale = payload?.setup || {};
       const marketContextLevels = [setupForScale.vwap, setupForScale.standard_deviation_high, setupForScale.standard_deviation_low,
         setupForScale.gex?.call_wall, setupForScale.gex?.gamma_flip, setupForScale.gex?.put_wall];
+      const watchedTradeLevels = hasWatchingPlan(setupForScale) ? [setupForScale.entry] : [];
       const lockedTradeLevels = hasLockedTradePlan(setupForScale)
         ? [setupForScale.entry, setupForScale.stop_loss, setupForScale.take_profit_1, setupForScale.take_profit_2]
         : [];
-      const extra = [...marketContextLevels, ...lockedTradeLevels].map(Number).filter(Number.isFinite);
+      const extra = [...marketContextLevels, ...watchedTradeLevels, ...lockedTradeLevels].map(Number).filter(Number.isFinite);
       let low = Math.min(...values.map((item) => item.low), ...extra);
       let high = Math.max(...values.map((item) => item.high), ...extra);
       const pad = Math.max((high - low) * 0.08, Number(payload?.tickSize || 0.25) * 8);
@@ -382,8 +392,10 @@
         horizontal(ctx, toY(setup.gex.put_wall), plotRight, "PUT", lineColors.stop);
       }
       if (overlays.vwap) horizontal(ctx, toY(setup.vwap), plotRight, "VWAP", lineColors.vwap, false);
-      if (overlays.trade && hasLockedTradePlan(setup)) {
-        horizontal(ctx, toY(setup.entry), plotRight, "ENTRY", lineColors.entry, false);
+      if (overlays.trade && hasWatchingPlan(setup)) {
+        horizontal(ctx, toY(setup.entry), plotRight, `WATCH ${setup.direction}`, lineColors.entry, false);
+      } else if (overlays.trade && hasLockedTradePlan(setup)) {
+        horizontal(ctx, toY(setup.entry), plotRight, "LIMIT", lineColors.entry, false);
         horizontal(ctx, toY(setup.stop_loss), plotRight, "SL", lineColors.stop, false);
         horizontal(ctx, toY(setup.take_profit_1), plotRight, "TP1", lineColors.target);
         horizontal(ctx, toY(setup.take_profit_2), plotRight, "TP2", lineColors.target, false);
@@ -894,8 +906,10 @@
       addPriceLine(instance, setup.standard_deviation_low, "-1σ", COLORS.muted, dotted, 1);
     }
 
-    if (overlays.trade && hasLockedTradePlan(setup)) {
-      addPriceLine(instance, setup.entry, "ENTRY", COLORS.amber, dashed, 2);
+    if (overlays.trade && hasWatchingPlan(setup)) {
+      addPriceLine(instance, setup.entry, `WATCH ${setup.direction}`, COLORS.amber, dashed, 2);
+    } else if (overlays.trade && hasLockedTradePlan(setup)) {
+      addPriceLine(instance, setup.entry, "LIMIT", COLORS.amber, dashed, 2);
       addPriceLine(instance, setup.stop_loss, "SL", COLORS.red, dashed, 2);
       addPriceLine(instance, setup.take_profit_1, "TP1", COLORS.green, dashed, 2);
       addPriceLine(instance, setup.take_profit_2, "TP2", COLORS.green, dashed, 2);

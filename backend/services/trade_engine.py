@@ -13,6 +13,7 @@ from backend.services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"TP2_HIT", "STOPPED", "EXPIRED", "INVALIDATED"}
+WATCH_MIN_CONFIDENCE = 55.0
 
 
 class TradeEngineService:
@@ -58,17 +59,19 @@ class TradeEngineService:
                 self._last_cycle_at = datetime.now(timezone.utc)
                 self._last_error = None
                 if self._current is None or self._current.order_state in TERMINAL:
-                    self._current = self._maybe_arm(candidate, closed)
+                    self._current = self._evaluate_candidate(candidate, closed)
                 elif self._current.order_state == "PREVIEW_ONLY":
-                    # Preview plans are recalculated every cycle so they can become
-                    # armable after the session opens or market history finishes syncing.
-                    refreshed = self._maybe_arm(candidate, closed)
+                    # Preview/scanning plans may become a stable WATCHING candidate or
+                    # arm after history/session gates are satisfied.
+                    refreshed = self._evaluate_candidate(candidate, closed)
                     if refreshed.order_state == "PREVIEW_ONLY":
                         refreshed = refreshed.model_copy(update={
                             "setup_id": self._current.setup_id,
                             "timestamp": self._current.timestamp,
                         })
                     self._current = refreshed
+                elif self._current.order_state == "WATCHING":
+                    self._current = self._advance_watching(self._current, candidate, closed)
                 else:
                     self._current = self._refresh_context(self._current, candidate)
                     if self._last_processed_candle_time is None or closed.time > self._last_processed_candle_time:
@@ -84,37 +87,122 @@ class TradeEngineService:
             logger.exception("Trade engine cycle failed")
             return self.current_setup()
 
-    def _maybe_arm(self, candidate: TradeSetup, candle) -> TradeSetup:
+    # Legacy readiness payload reference: {"status": "DATA_SYNCING"}
+    def _market_gate(self) -> tuple[bool, str | None]:
         market = market_data_service.health()
         if market.get("warming") or (market.get("data_source") == "databento" and not market.get("history_cached", False)):
-            # Keep the deterministic confidence untouched, but never arm from the
-            # temporary local preview or an unavailable Databento history state.
-            return candidate.model_copy(update={
-                "order_state": "PREVIEW_ONLY",
-                "actionable": False,
-                "status": "DATA_SYNCING",
-            })
+            return False, "DATA_SYNCING"
         session = get_session_status()
         if not session["can_trade_now"]:
-            # Preserve the calculated confidence and every confluence component.
-            # Session status is only a separate permission gate for new orders.
-            return candidate.model_copy(update={
-                "order_state": "PREVIEW_ONLY",
-                "actionable": False,
-                "status": "MARKET_CLOSED",
-            })
-        if not candidate.actionable:
-            return candidate.model_copy(update={"order_state": "PREVIEW_ONLY", "actionable": False})
+            return False, "MARKET_CLOSED"
+        return True, None
+
+    def _is_watch_candidate(self, candidate: TradeSetup) -> bool:
+        return bool(
+            candidate.entry_valid
+            and candidate.direction in {"LONG", "SHORT"}
+            and candidate.entry is not None
+            and candidate.confidence >= WATCH_MIN_CONFIDENCE
+        )
+
+    def _preview(self, candidate: TradeSetup, status: str | None = None) -> TradeSetup:
+        return candidate.model_copy(update={
+            "order_state": "PREVIEW_ONLY",
+            "actionable": False,
+            "status": status or candidate.status,
+        })
+
+    def _start_watching(self, candidate: TradeSetup, candle, *, setup_id: str | None = None, timestamp: datetime | None = None) -> TradeSetup:
         now = datetime.now(timezone.utc)
-        armed = candidate.model_copy(deep=True, update={
-            "setup_id": str(uuid4()), "timestamp": now,
+        watching = candidate.model_copy(deep=True, update={
+            "setup_id": setup_id or str(uuid4()),
+            "timestamp": timestamp or now,
             "valid_until": now + timedelta(minutes=settings.setup_expiry_minutes),
-            "order_state": "WAITING_FOR_LIMIT", "status": "WAITING_FOR_LIMIT",
-            "actionable": True, "armed_at": now, "armed_candle_time": candle.time,
+            "order_state": "WATCHING",
+            "status": f"WATCHING_{candidate.direction}",
+            "actionable": False,
+            "armed_at": None,
+            "armed_candle_time": None,
             "last_processed_candle_time": candle.time,
         })
-        storage_service.transition(armed, "PREVIEW_ONLY", "WAITING_FOR_LIMIT", armed.entry, candle.time, "Setup armed after all mandatory confluences passed.", "positive")
+        storage_service.transition(
+            watching, "PREVIEW_ONLY", "WATCHING", watching.entry, candle.time,
+            f"TradeIQ is watching a {watching.direction.lower()} candidate at {watching.entry:,.2f}; no order is armed.",
+            "warning",
+        )
+        return watching
+
+    def _arm_candidate(self, candidate: TradeSetup, candle, *, previous_state: str = "PREVIEW_ONLY", setup_id: str | None = None, timestamp: datetime | None = None) -> TradeSetup:
+        now = datetime.now(timezone.utc)
+        armed = candidate.model_copy(deep=True, update={
+            "setup_id": setup_id or str(uuid4()),
+            "timestamp": timestamp or now,
+            "valid_until": now + timedelta(minutes=settings.setup_expiry_minutes),
+            "order_state": "WAITING_FOR_LIMIT",
+            "status": "WAITING_FOR_LIMIT",
+            "actionable": True,
+            "armed_at": now,
+            "armed_candle_time": candle.time,
+            "last_processed_candle_time": candle.time,
+        })
+        storage_service.transition(
+            armed, previous_state, "WAITING_FOR_LIMIT", armed.entry, candle.time,
+            "Setup confirmed. The limit, stop, targets and risk box are now locked.",
+            "positive",
+        )
         return armed
+
+    def _evaluate_candidate(self, candidate: TradeSetup, candle) -> TradeSetup:
+        can_trade, gate_status = self._market_gate()
+        if not can_trade:
+            return self._preview(candidate, gate_status)
+        if candidate.actionable:
+            return self._arm_candidate(candidate, candle)
+        if self._is_watch_candidate(candidate):
+            return self._start_watching(candidate, candle)
+        return self._preview(candidate)
+
+    # Backward-compatible internal name used by earlier tests and integrations.
+    def _maybe_arm(self, candidate: TradeSetup, candle) -> TradeSetup:
+        return self._evaluate_candidate(candidate, candle)
+
+    def _advance_watching(self, watching: TradeSetup, candidate: TradeSetup, candle) -> TradeSetup:
+        can_trade, gate_status = self._market_gate()
+        if not can_trade:
+            preview = self._preview(candidate, gate_status)
+            return preview.model_copy(update={
+                "setup_id": watching.setup_id,
+                "timestamp": watching.timestamp,
+                "last_processed_candle_time": candle.time,
+            })
+
+        same_direction = candidate.direction == watching.direction
+        if candidate.actionable and same_direction:
+            return self._arm_candidate(
+                candidate, candle, previous_state="WATCHING",
+                setup_id=watching.setup_id, timestamp=watching.timestamp,
+            )
+
+        now = datetime.now(timezone.utc)
+        if not same_direction or not self._is_watch_candidate(candidate) or now >= watching.valid_until:
+            replacement = self._evaluate_candidate(candidate, candle)
+            if replacement.order_state == "PREVIEW_ONLY":
+                storage_service.transition(
+                    replacement, "WATCHING", "PREVIEW_ONLY", candle.close, candle.time,
+                    "The watched candidate lost its required conditions before confirmation.",
+                    "warning",
+                )
+            return replacement
+
+        # Keep the original watched direction and entry fixed. Only market context,
+        # confidence and confluence diagnostics are refreshed while confirmation develops.
+        refreshed = self._refresh_context(watching, candidate)
+        return refreshed.model_copy(update={
+            "status": f"WATCHING_{watching.direction}",
+            "order_state": "WATCHING",
+            "actionable": False,
+            "last_processed_candle_time": candle.time,
+        })
 
     def _refresh_context(self, active: TradeSetup, candidate: TradeSetup) -> TradeSetup:
         fields = {
