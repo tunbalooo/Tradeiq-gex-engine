@@ -100,10 +100,18 @@
     return Number.isFinite(Number(setup?.watch_trigger)) ? Number(setup.watch_trigger) : null;
   }
 
+  function initialStop(setup) {
+    return Number.isFinite(Number(setup?.initial_stop_loss)) ? Number(setup.initial_stop_loss) : Number(setup?.stop_loss);
+  }
+
+  function activeStop(setup) {
+    return Number.isFinite(Number(setup?.active_stop_loss)) ? Number(setup.active_stop_loss) : initialStop(setup);
+  }
+
   function hasLockedTradePlan(setup) {
     if (!setup || !ACTIVE_TRADE_STATES.has(setup.order_state)) return false;
     if (!setup.armed_at) return false;
-    return [setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2]
+    return [setup.entry, initialStop(setup), setup.take_profit_1, setup.take_profit_2]
       .every((value) => Number.isFinite(Number(value)));
   }
 
@@ -396,7 +404,7 @@
         setupForScale.gex?.max_pain, setupForScale.gex?.gamma_support, setupForScale.gex?.put_wall];
       const watchedTradeLevels = hasWatchingPlan(setupForScale) ? [watchTrigger(setupForScale)] : [];
       const lockedTradeLevels = hasLockedTradePlan(setupForScale)
-        ? [setupForScale.entry, setupForScale.stop_loss, setupForScale.take_profit_1, setupForScale.take_profit_2]
+        ? [setupForScale.entry, initialStop(setupForScale), activeStop(setupForScale), setupForScale.take_profit_1, setupForScale.take_profit_2]
         : [];
       const candleLow = Math.min(...values.map((item) => item.low));
       const candleHigh = Math.max(...values.map((item) => item.high));
@@ -495,7 +503,9 @@
         horizontal(ctx, toY(watchTrigger(setup)), plotRight, `MONITOR ${setup.direction} · NO ORDER`, lineColors.entry, true);
       } else if (overlays.trade && hasLockedTradePlan(setup)) {
         horizontal(ctx, toY(setup.entry), plotRight, "LIMIT", lineColors.entry, false);
-        horizontal(ctx, toY(setup.stop_loss), plotRight, "SL", lineColors.stop, false);
+        horizontal(ctx, toY(initialStop(setup)), plotRight, "INITIAL SL", lineColors.stop, false);
+        if (Math.abs(activeStop(setup) - initialStop(setup)) > Number(payload?.tickSize || .25) / 2)
+          horizontal(ctx, toY(activeStop(setup)), plotRight, "ACTIVE SL / BE", lineColors.entry, true);
         horizontal(ctx, toY(setup.take_profit_1), plotRight, "TP1", lineColors.target);
         horizontal(ctx, toY(setup.take_profit_2), plotRight, "TP2", lineColors.target, false);
       }
@@ -1055,7 +1065,9 @@
       addPriceLine(instance, watchTrigger(setup), `MONITOR ${setup.direction} · NO ORDER`, COLORS.amber, dotted, 1);
     } else if (overlays.trade && hasLockedTradePlan(setup)) {
       addPriceLine(instance, setup.entry, "LIMIT", COLORS.amber, dashed, 2);
-      addPriceLine(instance, setup.stop_loss, "SL", COLORS.red, dashed, 2);
+      addPriceLine(instance, initialStop(setup), "INITIAL SL", COLORS.red, dashed, 2);
+      if (Math.abs(activeStop(setup) - initialStop(setup)) > Number(instance.tickSize || .25) / 2)
+        addPriceLine(instance, activeStop(setup), "ACTIVE SL / BE", COLORS.amber, dotted, 2);
       addPriceLine(instance, setup.take_profit_1, "TP1", COLORS.green, dashed, 2);
       addPriceLine(instance, setup.take_profit_2, "TP2", COLORS.green, dashed, 2);
     }
@@ -1133,7 +1145,7 @@
 
     if (overlays.trade && hasLockedTradePlan(setup)) {
       const entry = coordinate(setup.entry);
-      const stop = coordinate(setup.stop_loss);
+      const stop = coordinate(initialStop(setup));
       const target = coordinate(setup.take_profit_2);
       if (entry != null && stop != null && target != null) {
         const startX = chartWidth * (instance.id === "chartLarge" ? 0.68 : 0.72);

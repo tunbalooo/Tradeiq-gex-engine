@@ -56,18 +56,81 @@ class StorageService:
         except Exception:
             logger.exception("Unable to persist lifecycle transition")
 
+
+    def load_active_setup(self, symbol: str | None = None) -> TradeSetup | None:
+        """Restore the newest non-terminal setup after a server restart.
+
+        The complete validated TradeSetup is persisted in setup_snapshot. Claude,
+        the UI and the trade engine therefore resume the same lifecycle object
+        instead of silently creating a new setup after every deployment.
+        """
+        active_states = {"WATCHING", "WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"}
+        try:
+            with SessionLocal() as db:
+                statement = select(TradeSetupRecord).where(
+                    TradeSetupRecord.order_state.in_(active_states),
+                    TradeSetupRecord.closed_at.is_(None),
+                )
+                if symbol:
+                    statement = statement.where(TradeSetupRecord.symbol == symbol)
+                record = db.scalar(statement.order_by(TradeSetupRecord.updated_at.desc()).limit(1))
+                if record is None or not record.setup_snapshot:
+                    return None
+                setup = TradeSetup.model_validate(record.setup_snapshot)
+                if setup.order_state not in active_states or setup.closed_at is not None:
+                    return None
+                return setup
+        except Exception:
+            logger.exception("Unable to restore active setup")
+            return None
+
+    def setup_timeline(self, setup_id: str, limit: int = 100) -> list[dict]:
+        """Return deterministic lifecycle transitions in chronological order."""
+        try:
+            with SessionLocal() as db:
+                rows = list(db.scalars(
+                    select(SetupTransitionRecord)
+                    .where(SetupTransitionRecord.setup_id == setup_id)
+                    .order_by(SetupTransitionRecord.created_at.desc())
+                    .limit(max(1, min(limit, 500)))
+                ))
+                rows.reverse()
+                return [{
+                    "created_at": row.created_at,
+                    "candle_time": row.candle_time,
+                    "previous_state": row.previous_state,
+                    "new_state": row.new_state,
+                    "price": row.price,
+                    "detail": row.detail,
+                } for row in rows]
+        except Exception:
+            logger.exception("Unable to read setup timeline")
+            return []
+
     def recent_setups(self, limit: int = 100) -> list[dict]:
         try:
             with SessionLocal() as db:
                 rows = list(db.scalars(select(TradeSetupRecord).order_by(TradeSetupRecord.updated_at.desc()).limit(limit)))
-                return [{
-                    "setup_id": r.setup_id, "created_at": r.created_at, "updated_at": r.updated_at,
-                    "direction": r.direction, "confidence": r.confidence, "entry": r.entry,
-                    "stop_loss": r.stop_loss, "take_profit_1": r.take_profit_1,
-                    "take_profit_2": r.take_profit_2, "risk_reward": r.risk_reward,
-                    "status": r.status, "order_state": r.order_state, "outcome": r.outcome,
-                    "result_r": r.result_r, "target_sources": r.target_sources or {},
-                } for r in rows]
+                results = []
+                for r in rows:
+                    snapshot = r.setup_snapshot or {}
+                    results.append({
+                        "setup_id": r.setup_id, "created_at": r.created_at, "updated_at": r.updated_at,
+                        "symbol": r.symbol, "direction": r.direction, "confidence": r.confidence,
+                        "confidence_grade": snapshot.get("confidence_grade", "—"),
+                        "primary_entry_model": snapshot.get("primary_entry_model"),
+                        "primary_model_score": snapshot.get("primary_model_score", 0),
+                        "entry": r.entry, "stop_loss": r.stop_loss,
+                        "active_stop_loss": snapshot.get("active_stop_loss"),
+                        "take_profit_1": r.take_profit_1, "take_profit_2": r.take_profit_2,
+                        "risk_reward": r.risk_reward, "status": r.status,
+                        "order_state": r.order_state, "management_state": snapshot.get("management_state", "FLAT"),
+                        "outcome": r.outcome, "result_r": r.result_r,
+                        "mfe_points": snapshot.get("max_favorable_excursion_points", 0),
+                        "mae_points": snapshot.get("max_adverse_excursion_points", 0),
+                        "target_sources": r.target_sources or {},
+                    })
+                return results
         except Exception:
             logger.exception("Unable to read setup history")
             return []

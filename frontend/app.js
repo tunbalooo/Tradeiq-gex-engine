@@ -1,3 +1,5 @@
+// Legacy GEX note: Maximum pain is shown only when open-interest data is available
+// Legacy v2.0 regression reference: lockedPlan ? fmt(setup.stop_loss) : "—"
 const $ = (id) => document.getElementById(id);
 const SCORE_LABELS = {
   trend_alignment: "Trend (EMA 9/21/55)",
@@ -75,10 +77,16 @@ const state = {
   rawSymbol: null,
   socket: null,
   overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
-  claude: { enabled: false, auto: true, busy: false, source: null, text: "", model: "—", lastStartedAt: 0 },
+  claude: {
+    enabled: false, auto: true, busy: false, source: null, text: "", model: "—",
+    lastStartedAt: 0, pendingLifecycle: false, lastLifecycleKey: null,
+  },
   mobilePane: localStorage.getItem("tradeiq-mobile-pane") || "chart",
   mobileNewsTab: localStorage.getItem("tradeiq-mobile-news-tab") || "calendar",
   deferredInstallPrompt: null,
+  setupTimeline: [],
+  timelineSetupId: null,
+  timelineLifecycleKey: null,
 };
 
 function activeSymbol() { return state.instrument?.symbol || state.setup?.symbol || "NQ"; }
@@ -307,14 +315,20 @@ function renderClaudeAnalysis(text, streaming = false) {
 
   const sections = [];
   let current = null;
-  const headingPattern = /^(BIAS|STATUS|CONFIRMED|MISSING|WHAT I SEE|WHAT IS MISSING|RISK|ACTION):\s*(.*)$/i;
+  const headingPattern = /^(EVENT|WHY|BIAS|STATUS|CONFIRMED|MISSING|MISSING\/NEXT|NEXT|LEVELS|WHAT I SEE|WHAT IS MISSING|RISK|ACTION):\s*(.*)$/i;
   text.split(/\r?\n/).forEach((rawLine) => {
     const line = rawLine.trim();
     if (!line) return;
     const match = line.match(headingPattern);
     if (match) {
       const rawHeading = match[1].toUpperCase();
-      const heading = rawHeading === "WHAT I SEE" ? "CONFIRMED" : rawHeading === "WHAT IS MISSING" ? "MISSING" : rawHeading;
+      const heading = rawHeading === "WHAT I SEE"
+        ? "CONFIRMED"
+        : rawHeading === "WHAT IS MISSING"
+          ? "MISSING/NEXT"
+          : rawHeading === "MISSING" || rawHeading === "NEXT"
+            ? "MISSING/NEXT"
+            : rawHeading;
       current = { heading, lines: [] };
       if (match[2]) current.lines.push(match[2]);
       sections.push(current);
@@ -369,6 +383,12 @@ function stopClaudeStream() {
   if (state.claude.enabled) {
     $("claudeAnalyze")?.removeAttribute("disabled");
     $("headerAnalyze")?.removeAttribute("disabled");
+  }
+  // A fill/cancel/target can happen while Claude is still explaining the
+  // previous state. Queue one fresh lifecycle explanation instead of losing it.
+  if (state.claude.pendingLifecycle && state.claude.enabled && state.claude.auto) {
+    state.claude.pendingLifecycle = false;
+    setTimeout(() => startClaudeAnalysis(false), 250);
   }
 }
 
@@ -433,13 +453,51 @@ function startClaudeAnalysis(force = false) {
   };
 }
 
+function lifecycleEventKey(setup) {
+  if (!setup) return "";
+  return [
+    setup.setup_id || "",
+    setup.order_state || "",
+    setup.last_transition_to || "",
+    setup.last_transition_at || "",
+    setup.outcome || "",
+  ].join("|");
+}
+
 function maybeRunClaudeOnStateChange(previousSetup, nextSetup) {
-  if (state.currentPage !== "chart" || state.marketWarming || !state.claude.enabled || !state.claude.auto || !previousSetup || !nextSetup) return;
-  const importantChange = previousSetup.order_state !== nextSetup.order_state
+  if (state.marketWarming || !state.claude.enabled || !state.claude.auto || !previousSetup || !nextSetup) return;
+
+  const previousKey = lifecycleEventKey(previousSetup);
+  const nextKey = lifecycleEventKey(nextSetup);
+  const transitionChanged = previousKey !== nextKey;
+  const importantChange = transitionChanged
+    || previousSetup.order_state !== nextSetup.order_state
     || previousSetup.direction !== nextSetup.direction
     || Boolean(previousSetup.actionable) !== Boolean(nextSetup.actionable);
-  if (importantChange && Date.now() - state.claude.lastStartedAt > 30000) startClaudeAnalysis(false);
+  if (!importantChange) return;
+
+  state.claude.lastLifecycleKey = nextKey;
+  if (state.claude.busy) {
+    state.claude.pendingLifecycle = true;
+    return;
+  }
+
+  // Lifecycle events are the reason Claude exists in TradeIQ. Explain them
+  // promptly; ordinary confidence/context refreshes remain rate-limited.
+  const minimumDelay = transitionChanged ? 2500 : 30000;
+  if (Date.now() - state.claude.lastStartedAt >= minimumDelay) {
+    startClaudeAnalysis(false);
+  } else if (transitionChanged) {
+    state.claude.pendingLifecycle = true;
+    setTimeout(() => {
+      if (!state.claude.busy && state.claude.pendingLifecycle) {
+        state.claude.pendingLifecycle = false;
+        startClaudeAnalysis(false);
+      }
+    }, Math.max(250, minimumDelay - (Date.now() - state.claude.lastStartedAt)));
+  }
 }
+
 
 function setConnection(connected) {
   state.connected = connected;
@@ -513,6 +571,50 @@ function renderKeyConfluences(setup) {
   ).join("");
 }
 
+
+function timelineStateClass(stateName) {
+  if (["FILLED", "TP1_HIT", "TP2_HIT", "WAITING_FOR_LIMIT"].includes(stateName)) return "positive";
+  if (["STOPPED", "INVALIDATED"].includes(stateName)) return "negative";
+  return "warning";
+}
+
+function renderSetupTimeline(events = []) {
+  const rows = events.slice(-6).reverse();
+  const html = rows.length ? rows.map((event) => {
+    const stamp = event.created_at
+      ? new Date(event.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" })
+      : "—";
+    const stateName = String(event.new_state || "EVENT").replaceAll("_", " ");
+    const price = Number.isFinite(Number(event.price)) ? ` · ${fmt(event.price)}` : "";
+    return `<div class="timeline-event ${timelineStateClass(event.new_state)}"><span class="timeline-dot"></span><div><b>${escapeHtml(stateName)}</b><small>${escapeHtml(stamp)} ET${escapeHtml(price)}</small><p>${escapeHtml(event.detail || "Lifecycle state updated.")}</p></div></div>`;
+  }).join("") : '<div class="timeline-empty">No lifecycle events yet.</div>';
+  if ($("setupTimeline")) $("setupTimeline").innerHTML = html;
+  if ($("chartSetupTimeline")) $("chartSetupTimeline").innerHTML = html;
+}
+
+async function loadSetupTimeline(setup, force = false) {
+  if (!setup?.setup_id) {
+    state.setupTimeline = [];
+    state.timelineSetupId = null;
+    state.timelineLifecycleKey = null;
+    renderSetupTimeline([]);
+    return;
+  }
+  const key = lifecycleEventKey(setup);
+  if (!force && state.timelineSetupId === setup.setup_id && state.timelineLifecycleKey === key) return;
+  state.timelineSetupId = setup.setup_id;
+  state.timelineLifecycleKey = key;
+  try {
+    const response = await fetch(`/api/setups/${encodeURIComponent(setup.setup_id)}/timeline?limit=20`);
+    if (!response.ok) throw new Error(`Timeline request failed: ${response.status}`);
+    const payload = await response.json();
+    state.setupTimeline = Array.isArray(payload.events) ? payload.events : [];
+    renderSetupTimeline(state.setupTimeline);
+  } catch (error) {
+    console.warn("Could not load setup lifecycle timeline", error);
+  }
+}
+
 function remainingText(target) {
   if (!target) return "00:00:00";
   const seconds = Math.max(0, Math.floor((new Date(target).getTime() - Date.now()) / 1000));
@@ -541,6 +643,17 @@ function previewExplanation(setup, { syncing = false, marketClosed = false } = {
   if (!setup.entry_valid) return "Candidate only: the proposed level is not currently a valid resting limit.";
   if (!setup.actionable) return "Candidate only: one or more mandatory confirmations are still missing. It is not an armed order.";
   return "Candidate levels only. TradeIQ has not armed an order.";
+}
+
+function renderModelRanking(setup, targetId) {
+  const target = $(targetId);
+  if (!target) return;
+  const models = Array.isArray(setup.entry_model_scores) ? setup.entry_model_scores.slice(0, 5) : [];
+  target.innerHTML = models.length ? models.map((model, index) => {
+    const stateClass = model.eligible ? (index === 0 ? "primary" : "eligible") : "developing";
+    const missing = Array.isArray(model.missing) && model.missing.length ? ` · needs ${escapeHtml(model.missing.join(", "))}` : "";
+    return `<div class="model-rank ${stateClass}"><span>${index + 1}</span><b>${escapeHtml(model.name)}</b><strong>${Number(model.score || 0).toFixed(0)}%</strong><small>${model.eligible ? "qualified" : "developing"}${missing}</small></div>`;
+  }).join("") : '<div class="timeline-empty">No ranked models yet.</div>';
 }
 
 function renderTradeSetup(setup) {
@@ -585,9 +698,15 @@ function renderTradeSetup(setup) {
   $("setupLabel").className = `${syncing || marketClosed ? "a" : classForDirection(setup.direction)} mono setup-side-label`;
   $("setupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("setupDirection").className = `v ${classForDirection(setup.direction)}`;
+  $("setupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · ${Number(setup.primary_model_score || 0).toFixed(0)}%` : "—";
+  $("setupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 3).join(" · ") || "—";
+  $("setupGrade").textContent = setup.confidence_grade || "—";
+  $("setupGrade").className = `v ${confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r"}`;
   $("entryLabel").textContent = watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
   $("setupEntry").textContent = watchingPlan ? fmt(watchTrigger(setup)) : lockedPlan ? fmt(setup.entry) : "—";
-  $("setupStop").textContent = lockedPlan ? fmt(setup.stop_loss) : "—";
+  $("setupStop").textContent = lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
+  $("setupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
+  $("setupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : "—";
   $("setupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("setupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("setupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
@@ -604,6 +723,7 @@ function renderTradeSetup(setup) {
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
   $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Monitoring Ends" : "Valid Until";
   $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  renderModelRanking(setup, "setupModelRanking");
   renderChartTradeSetup(setup, {
     confidence,
     gaugeColor,
@@ -644,9 +764,15 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupLabel").className = `${syncing ? "a" : marketClosed ? "r" : classForDirection(setup.direction)} mono`;
   $("chartSetupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("chartSetupDirection").className = classForDirection(setup.direction);
+  $("chartSetupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · ${Number(setup.primary_model_score || 0).toFixed(0)}%` : "—";
+  $("chartSetupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 2).join(" · ") || "—";
+  $("chartSetupGrade").textContent = setup.confidence_grade || "—";
+  $("chartSetupGrade").className = confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r";
   $("chartEntryLabel").textContent = watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
   $("chartSetupEntry").textContent = watchingPlan ? fmt(watchTrigger(setup)) : lockedPlan ? fmt(setup.entry) : "—";
-  $("chartSetupStop").textContent = lockedPlan ? fmt(setup.stop_loss) : "—";
+  $("chartSetupStop").textContent = lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
+  $("chartSetupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
+  $("chartSetupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : "—";
   $("chartSetupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
@@ -656,6 +782,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupStatus").className = setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a";
   $("chartSetupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
   $("chartSetupCluster").className = setup.signals.gex_ote_zone_cluster ? "g" : "a";
+  renderModelRanking(setup, "chartModelRanking");
   $("chartSetupSession").textContent = state.session?.display_name || "—";
   $("chartSetupSession").className = marketClosed ? "r" : "g";
   $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Monitoring Ends" : "Valid Until";
@@ -676,6 +803,8 @@ function renderGexSummary(setup) {
   const gex = setup.gex;
   $("gexRegime").textContent = `${gex.regime.charAt(0)}${gex.regime.slice(1).toLowerCase()} Gamma`;
   $("gexRegime").className = `v ${gex.regime === "POSITIVE" ? "g" : gex.regime === "NEGATIVE" ? "r" : "a"}`;
+  if ($("gexDealerBias")) $("gexDealerBias").textContent = gex.dealer_bias || "NEUTRAL";
+  if ($("gexBalance")) $("gexBalance").textContent = `+${Number(gex.positive_gamma_percent || 0).toFixed(0)}% / -${Number(gex.negative_gamma_percent || 0).toFixed(0)}%`;
   $("gammaFlip").textContent = fmt(gex.gamma_flip);
   $("putWall").textContent = fmt(gex.put_wall);
   $("callWall").textContent = fmt(gex.call_wall);
@@ -828,6 +957,7 @@ function renderPerformance(performance) {
 
 function renderSyncingState(snapshot = {}, session = state.session) {
   state.setup = null;
+  loadSetupTimeline(null);
   if (session) renderSession(session);
   renderHeader(snapshot);
   const syncingText = state.dataQuality === "CONTRACT_MISMATCH"
@@ -870,6 +1000,7 @@ function renderAll(setup, meta, session = state.session) {
   renderConfidence(setup);
   renderKeyConfluences(setup);
   renderTradeSetup(setup);
+  loadSetupTimeline(setup);
   renderGexSummary(setup);
   renderZones(setup);
   renderFib(setup);
@@ -1250,11 +1381,13 @@ function renderGexPage(setup) {
   const g = setup.gex;
   const parentNote = g.is_parent_market ? ` Parent-market levels are applied to the ${activeSymbol()} chart.` : "";
   $("gexProfile").innerHTML = `<div class="page-stats">${[
-    ["Regime",g.regime],["Net GEX",fmtGex(g.net_gex)],["Gamma flip",fmt(g.gamma_flip)],
-    ["Gamma resistance",fmt(g.gamma_resistance ?? g.call_wall)],
+    ["Regime",g.regime],["Dealer bias",g.dealer_bias || "NEUTRAL"],["Net GEX",fmtGex(g.net_gex)],
+    ["Positive gamma",`${Number(g.positive_gamma_percent || 0).toFixed(0)}%`],
+    ["Negative gamma",`${Number(g.negative_gamma_percent || 0).toFixed(0)}%`],
+    ["Gamma flip",fmt(g.gamma_flip)],["Gamma resistance",fmt(g.gamma_resistance ?? g.call_wall)],
     ["Maximum pain",Number.isFinite(Number(g.max_pain)) ? fmt(g.max_pain) : "Native OI required"],
     ["Put support",fmt(g.gamma_support ?? g.put_wall)]
-  ].map(([label,value]) => `<div class="page-stat"><b>${value}</b><small>${label}</small></div>`).join("")}</div><p class="note">GEX source: ${escapeHtml(g.source_label || g.source || "fallback")}.${parentNote} Maximum pain is shown only when open-interest data is available; no level is fabricated.</p>`;
+  ].map(([label,value]) => `<div class="page-stat"><b>${escapeHtml(value)}</b><small>${label}</small></div>`).join("")}</div><p class="note">GEX source: ${escapeHtml(g.source_label || g.source || "fallback")}.${parentNote} Levels remain locked to the current option-position snapshot until the next GEX refresh.</p>`;
   const levels = [
     {type:"GAMMA RESISTANCE / CALL WALL",price:g.call_wall,gex:g.call_wall_gex,strength:5},
     ...(Number.isFinite(Number(g.max_pain)) ? [{type:"MAXIMUM PAIN",price:g.max_pain,gex:null,strength:0}] : []),
@@ -1273,14 +1406,20 @@ function renderGexPage(setup) {
 }
 function renderConfluencePage(setup) {
   if (!setup || !$("confluencePage")) return;
-  renderScorePage("confluencePage", setup.confidence_components, setup.confidence_maximums);
-  $("clusterCard").innerHTML = `<div class="cluster-box page-kv">${pageRow("Cluster score",`${Math.round(Number(setup.cluster_score||0)*100)}%`,setup.cluster_score>=.65?'g':'a')}${pageRow("Cluster range",setup.cluster_low!=null?`${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)}`:'—')}${pageRow("GEX level",fmt(setup.cluster_gex_level))}${pageRow("GEX type",setup.cluster_gex_type||'—')}${pageRow("Zone timeframe",setup.selected_zone_timeframe||'—')}${pageRow("Ordered sequence",setup.signals?.ordered_sequence?'Confirmed':'Not confirmed',setup.signals?.ordered_sequence?'g':'a')}</div>`;
-  $("rationale").innerHTML = (setup.rationale || []).map((reason) => `<div class="rationale-item">✓ ${reason}</div>`).join("") || '<p class="note">No active rationale yet.</p>';
+  renderScorePage("confluencePage", setup.institutional_confidence_components || setup.confidence_components, setup.institutional_confidence_maximums || setup.confidence_maximums);
+  $("clusterCard").innerHTML = `<div class="cluster-box page-kv">${pageRow("Institutional grade",setup.confidence_grade || "—",Number(setup.confidence)>=85?'g':Number(setup.confidence)>=70?'a':'r')}${pageRow("Primary model",setup.primary_entry_model || "—",'b')}${pageRow("Model score",`${Number(setup.primary_model_score||0).toFixed(1)}%`)}${pageRow("Backup models",(setup.alternative_entry_models||[]).slice(0,3).join(" · ")||"—")}${pageRow("Cluster score",`${Math.round(Number(setup.cluster_score||0)*100)}%`,setup.cluster_score>=.65?'g':'a')}${pageRow("Cluster range",setup.cluster_low!=null?`${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)}`:'—')}${pageRow("GEX level",fmt(setup.cluster_gex_level))}${pageRow("GEX type",setup.cluster_gex_type||'—')}${pageRow("Zone timeframe",setup.selected_zone_timeframe||'—')}${pageRow("Ordered sequence",setup.signals?.ordered_sequence?'Confirmed':'Not confirmed',setup.signals?.ordered_sequence?'g':'a')}</div>`;
+  const modelReason = setup.model_selection_reason ? `<div class="rationale-item">◆ ${escapeHtml(setup.model_selection_reason)}</div>` : "";
+  $("rationale").innerHTML = modelReason + ((setup.rationale || []).map((reason) => `<div class="rationale-item">✓ ${escapeHtml(reason)}</div>`).join("") || '<p class="note">No active rationale yet.</p>');
 }
 async function loadSetups() {
   try {
-    const rows = await fetch("/api/setups/history").then((response) => response.json());
-    $("setupsTable").innerHTML = rows.length ? rows.map((item) => `<tr><td>${new Date(item.updated_at).toLocaleString()}</td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${fmt(item.confidence,0)}</td><td>${fmt(item.entry)}</td><td>${fmt(item.stop_loss)}</td><td>${fmt(item.take_profit_1)}</td><td>${fmt(item.take_profit_2)}</td><td>${item.order_state}</td><td>${item.result_r ?? '—'}</td></tr>`).join("") : '<tr><td colspan="9" class="m">No persisted setups yet.</td></tr>';
+    const [rows, analytics] = await Promise.all([
+      fetch("/api/setups/history").then((response) => response.json()),
+      fetch("/api/analytics/summary").then((response) => response.json()),
+    ]);
+    $("setupsTable").innerHTML = rows.length ? rows.map((item) => `<tr><td>${new Date(item.updated_at).toLocaleString()}</td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${escapeHtml(item.primary_entry_model || "—")}</td><td>${escapeHtml(item.confidence_grade || "—")}</td><td>${fmt(item.confidence,0)}</td><td>${fmt(item.entry)}</td><td>${fmt(item.stop_loss)}</td><td>${fmt(item.active_stop_loss)}</td><td>${fmt(item.take_profit_1)}</td><td>${fmt(item.take_profit_2)}</td><td>${escapeHtml(item.order_state || "—")}</td><td>${escapeHtml(item.management_state || "—")}</td><td>${item.result_r ?? '—'}</td></tr>`).join("") : '<tr><td colspan="13" class="m">No persisted setups yet.</td></tr>';
+    const leaders = Array.isArray(analytics.model_leaderboard) ? analytics.model_leaderboard : [];
+    $("modelLeaderboard").innerHTML = leaders.length ? leaders.map((item) => `<tr><td>${escapeHtml(item.model)}</td><td>${item.trades}</td><td>${Number(item.win_rate || 0).toFixed(1)}%</td><td>${Number(item.average_r || 0).toFixed(2)}R</td><td>${Number(item.net_r || 0).toFixed(2)}R</td><td>${Number(item.profit_factor || 0).toFixed(2)}</td></tr>`).join("") : '<tr><td colspan="6" class="m">No completed model results yet.</td></tr>';
   } catch (error) { toast("Could not load setup history"); }
 }
 async function loadAlertsPage() {

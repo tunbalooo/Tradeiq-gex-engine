@@ -1,4 +1,4 @@
-# TradeIQ Multi-Market GEX Engine v2.2
+# TradeIQ Institutional Decision Platform v3.0
 
 TradeIQ is a FastAPI and browser-based futures decision-support dashboard for:
 
@@ -194,3 +194,49 @@ A `WATCHING` candidate receives immutable `watch_started_at` and `watch_expires_
 - `WATCHING` is presented as **MONITORING ONLY**. The monitored trigger is stored separately as `watch_trigger`; entry, stop and targets remain empty until `WAITING_FOR_LIMIT`.
 - If price touches the monitor trigger before confirmation, the state becomes `UNCONFIRMED_TOUCH`: no order and no fill are recorded.
 - `WAITING_FOR_LIMIT` is the first state that displays the locked limit, SL, TP1, TP2 and risk box. A later touch changes the state to `FILLED` while those levels remain fixed.
+
+
+## v2.5 Claude lifecycle explanations
+
+- Claude now acts as a lifecycle commentator for the deterministic TradeIQ engine rather than giving a generic market recap.
+- `WATCHING` explanations state why the engine is monitoring, which confirmations are present, which are missing, and what must occur before a limit plan can be armed.
+- `WAITING_FOR_LIMIT` explanations cover why the plan qualified, why the locked entry was selected, what the stop invalidates, and the supplied sources for TP1 and TP2.
+- `FILLED`, `TP1_HIT`, `TP2_HIT`, `STOPPED`, `EXPIRED`, `INVALIDATED`, and `UNCONFIRMED_TOUCH` each receive an automatic explanation based on the engine's recorded transition reason.
+- Lifecycle events are queued when they occur while Claude is already streaming, so a fast fill or cancellation is not silently missed.
+- Claude remains read-only and cannot change confidence, levels, setup states, session gating, or order handling.
+
+
+## v2.6 persistent setup memory and lifecycle timeline
+
+- TradeIQ restores the newest active `WATCHING`, `WAITING_FOR_LIMIT`, `FILLED`, or `TP1_HIT` setup from the database when the FastAPI service restarts. Railway deployments no longer silently erase the setup lifecycle.
+- The restored setup keeps its original setup ID, watched trigger, locked trade levels, expiry, fill state, transition reason, and last processed candle time. The first live engine cycle then advances the same object normally.
+- `GET /api/setups/{setup_id}/timeline` exposes the deterministic transition history in chronological order.
+- Desktop and mobile setup panels show a compact lifecycle memory timeline.
+- Claude receives the recent lifecycle timeline for historical context while the latest recorded transition remains authoritative. Claude is still read-only.
+
+
+## v3.0 institutional decision platform
+
+- Deterministic Decision Brain ranks twelve entry models and exposes a primary model plus qualified backups.
+- Institutional confidence is transparent across Trend, Structure, GEX, Liquidity, Momentum, Volume and Session categories.
+- GEX reference levels remain locked to the current option-position snapshot instead of re-centering on every tick.
+- TP1 can secure a partial position and move the runner stop to break-even while preserving the immutable initial stop.
+- Setup history includes model, grade, initial/active stop, management state, MFE, MAE and result.
+- Read-only model analytics are available at `GET /api/analytics/summary`.
+- Claude receives the exact model-selection and management lifecycle context but cannot alter it.
+
+New endpoints:
+
+```text
+GET /api/decision-brain
+GET /api/entry-models
+GET /api/analytics/summary
+```
+
+Current verification target:
+
+```text
+104 passed
+```
+
+See the four living specifications in the project root for the current product, trading engine, UI/UX and roadmap definitions.

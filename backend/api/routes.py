@@ -4,14 +4,17 @@ from fastapi.responses import StreamingResponse
 from backend.core.config import settings
 from backend.models.schemas import BacktestRequest, MarketSymbolRequest
 from backend.services.backtest_service import run_backtest
+from backend.services.analytics_service import analytics_service
 from backend.services.claude_analysis import claude_analysis_service
 from backend.services.dashboard_service import build_dashboard_meta
+from backend.services.decision_brain import decision_brain_service
 from backend.services.finnhub_news import finnhub_news_service
 from backend.services.finnhub_calendar import finnhub_calendar_service
 from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
 from backend.services.instruments import get_instrument, instrument_registry
 from backend.services.session_service import get_session_status
+from backend.services.setup_service import clear_fallback_gex_cache
 from backend.services.storage_service import storage_service
 from backend.services.timeframes import aggregate_candles
 from backend.services.trade_engine import trade_engine_service
@@ -120,12 +123,53 @@ def gex_summary():
 def confluence():
     setup = trade_engine_service.current_setup()
     if setup is None: raise HTTPException(503, "Trade engine is starting")
-    return {"score": setup.confidence, "components": setup.confidence_components, "maximums": setup.confidence_maximums, "signals": setup.signals, "rationale": setup.rationale, "cluster": {"score": setup.cluster_score, "low": setup.cluster_low, "high": setup.cluster_high, "gex_level": setup.cluster_gex_level, "gex_type": setup.cluster_gex_type, "zone_timeframe": setup.selected_zone_timeframe}}
+    return {
+        "score": setup.confidence,
+        "grade": setup.confidence_grade,
+        "institutional_components": setup.institutional_confidence_components,
+        "institutional_maximums": setup.institutional_confidence_maximums,
+        "components": setup.confidence_components,
+        "maximums": setup.confidence_maximums,
+        "signals": setup.signals,
+        "rationale": setup.rationale,
+        "primary_entry_model": setup.primary_entry_model,
+        "entry_models": setup.entry_model_scores,
+        "cluster": {"score": setup.cluster_score, "low": setup.cluster_low, "high": setup.cluster_high, "gex_level": setup.cluster_gex_level, "gex_type": setup.cluster_gex_type, "zone_timeframe": setup.selected_zone_timeframe},
+    }
+
+
+@router.get("/decision-brain")
+def decision_brain():
+    return decision_brain_service.snapshot(trade_engine_service.current_setup())
+
+
+@router.get("/entry-models")
+def entry_models():
+    setup = trade_engine_service.current_setup()
+    if setup is None:
+        raise HTTPException(503, "Trade engine is starting")
+    return {
+        "setup_id": setup.setup_id,
+        "primary": setup.primary_entry_model,
+        "primary_score": setup.primary_model_score,
+        "alternatives": setup.alternative_entry_models,
+        "models": setup.entry_model_scores,
+    }
+
+
+@router.get("/analytics/summary")
+def analytics_summary(limit: int = Query(1000, ge=1, le=5000)):
+    return analytics_service.summary(limit)
 
 
 @router.get("/setups/history")
 def setup_history(limit: int = Query(100, ge=1, le=500)):
     return storage_service.recent_setups(limit)
+
+
+@router.get("/setups/{setup_id}/timeline")
+def setup_timeline(setup_id: str, limit: int = Query(100, ge=1, le=500)):
+    return {"setup_id": setup_id, "events": storage_service.setup_timeline(setup_id, limit)}
 
 
 @router.get("/alerts")
@@ -137,7 +181,7 @@ def alerts(limit: int = Query(100, ge=1, le=500)):
 def positions():
     setup = trade_engine_service.current_setup()
     if setup and setup.order_state in {"FILLED", "TP1_HIT"}:
-        return [{"setup_id": setup.setup_id, "symbol": setup.symbol, "direction": setup.direction, "entry": setup.entry, "stop_loss": setup.stop_loss, "take_profit_1": setup.take_profit_1, "take_profit_2": setup.take_profit_2, "state": setup.order_state, "filled_at": setup.filled_at}]
+        return [{"setup_id": setup.setup_id, "symbol": setup.symbol, "direction": setup.direction, "entry": setup.entry, "stop_loss": setup.stop_loss, "active_stop_loss": setup.active_stop_loss, "take_profit_1": setup.take_profit_1, "take_profit_2": setup.take_profit_2, "state": setup.order_state, "management_state": setup.management_state, "primary_entry_model": setup.primary_entry_model, "filled_at": setup.filled_at}]
     return []
 
 
@@ -149,7 +193,7 @@ def backtest(request: BacktestRequest):
 @router.get("/settings")
 def read_settings():
     profile = instrument_registry.active
-    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "active_symbol": profile.symbol, "supported_symbols": ", ".join(item["symbol"] for item in instrument_registry.list_public()), "dataset": settings.databento_dataset, "futures_symbol": profile.futures_continuous, "options_parent": profile.options_parent, "gex_source": profile.gex_source_label, "tick_size": profile.tick_size, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled, "finnhub_economic_calendar": finnhub_calendar_service.status()}
+    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "active_symbol": profile.symbol, "supported_symbols": ", ".join(item["symbol"] for item in instrument_registry.list_public()), "dataset": settings.databento_dataset, "futures_symbol": profile.futures_continuous, "options_parent": profile.options_parent, "gex_source": profile.gex_source_label, "tick_size": profile.tick_size, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "entry_model_min_score": settings.entry_model_min_score, "move_stop_to_breakeven_after_tp1": settings.move_stop_to_breakeven_after_tp1, "partial_exit_percent": settings.partial_exit_percent, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled, "finnhub_economic_calendar": finnhub_calendar_service.status()}
 
 
 @router.get("/news")
@@ -200,7 +244,9 @@ async def ai_analysis_stream(force: bool = Query(False)):
 async def refresh_gex(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
     refreshed = await gex_service.refresh()
-    return {"refreshed": refreshed, "gex": gex_service.health()}
+    if not refreshed:
+        clear_fallback_gex_cache(market_data_service.symbol)
+    return {"refreshed": refreshed, "fallback_cache_cleared": not refreshed, "gex": gex_service.health()}
 
 
 @router.post("/setup/reset")

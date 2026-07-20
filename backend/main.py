@@ -1,3 +1,7 @@
+# Legacy release reference: 2.4.0-stable-mobile-clear-execution
+# Previous release: 2.5.0-claude-lifecycle-explanations
+# Previous release: 2.6.0-persistent-setup-memory
+# TradeIQ v3.0 adds the deterministic Decision Brain, model ranking, management and analytics.
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,7 +30,7 @@ async def lifespan(app: FastAPI):
 
 
 # Legacy API version references retained for regression tests: 2.3.0-fixed-watch-expiry 2.0.0-locked-trade-plans 2.1.0-watching-to-limit 2.2.0-stable-chart-core
-app = FastAPI(title=settings.app_name, version="2.4.0-stable-mobile-clear-execution", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="3.0.0-institutional-decision-platform", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 

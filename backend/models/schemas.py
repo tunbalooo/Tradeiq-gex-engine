@@ -50,6 +50,11 @@ class GexSummary(BaseModel):
     options_parent: str | None = None
     source_label: str | None = None
     is_parent_market: bool = False
+    dealer_bias: str = "NEUTRAL"
+    positive_gamma_percent: float = 0.0
+    negative_gamma_percent: float = 0.0
+    top_gamma_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    level_meanings: dict[str, str] = Field(default_factory=dict)
 
 
 class Zone(BaseModel):
@@ -118,6 +123,21 @@ class PerformanceSummary(BaseModel):
     simulated: bool = True
 
 
+
+
+class EntryModelScore(BaseModel):
+    key: str
+    name: str
+    direction: Literal["LONG", "SHORT", "NONE"]
+    score: float = Field(ge=0, le=100)
+    eligible: bool = False
+    priority: int = 50
+    trigger_price: float | None = None
+    invalidation_price: float | None = None
+    reason: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+
+
 class TradeSetup(BaseModel):
     setup_id: str
     symbol: str = "NQ"
@@ -128,6 +148,19 @@ class TradeSetup(BaseModel):
     confidence_components: dict[str, float]
     confidence_maximums: dict[str, float]
     signals: dict[str, Any]
+
+    # TradeIQ Decision Brain and deterministic model ranking.
+    primary_entry_model: str | None = None
+    primary_entry_model_key: str | None = None
+    primary_model_score: float = 0.0
+    entry_model_scores: list[EntryModelScore] = Field(default_factory=list)
+    alternative_entry_models: list[str] = Field(default_factory=list)
+    model_selection_reason: str | None = None
+    model_selected_at: datetime | None = None
+    model_switch_count: int = 0
+    confidence_grade: str = "AVOID"
+    institutional_confidence_components: dict[str, float] = Field(default_factory=dict)
+    institutional_confidence_maximums: dict[str, float] = Field(default_factory=dict)
 
     actionable: bool = False
     entry_valid: bool = False
@@ -141,6 +174,28 @@ class TradeSetup(BaseModel):
     filled_at: datetime | None = None
     closed_at: datetime | None = None
     outcome: str | None = None
+
+    # Professional management state. The original stop remains immutable while
+    # active_stop_loss can advance to break-even after TP1.
+    initial_stop_loss: float | None = None
+    active_stop_loss: float | None = None
+    management_state: str = "FLAT"
+    partial_exit_percent: float = 50.0
+    tp1_hit_at: datetime | None = None
+    breakeven_at: datetime | None = None
+    runner_active: bool = False
+    max_favorable_excursion_points: float = 0.0
+    max_adverse_excursion_points: float = 0.0
+    management_actions: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Latest deterministic lifecycle transition. Claude receives these fields so
+    # it can explain exactly why the engine is monitoring, arming, filling,
+    # cancelling, expiring, stopping, or taking profit without inventing a cause.
+    last_transition_from: str | None = None
+    last_transition_to: str | None = None
+    last_transition_reason: str | None = None
+    last_transition_at: datetime | None = None
+    last_transition_price: float | None = None
 
     entry: float | None = None
     stop_loss: float | None = None
@@ -186,6 +241,8 @@ class EngineSnapshot(BaseModel):
     last_processed_candle_time: datetime | None = None
     current_setup: TradeSetup | None = None
     last_error: str | None = None
+    restored_setup_id: str | None = None
+    restored_at: datetime | None = None
 
 
 class MarketSymbolRequest(BaseModel):

@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=24" />
+<link rel="stylesheet" href="/static/styles.css?v=30" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -179,8 +179,13 @@
                 <div class="m probability-sub" id="coreAlignment">Waiting for engine data</div></div>
             </div>
             <div class="setup-row"><span class="k">Direction</span><span class="v" id="setupDirection">—</span></div>
+            <div class="setup-row"><span class="k">Primary Entry Model</span><span class="v b" id="setupModel">—</span></div>
+            <div class="setup-row"><span class="k">Backup Models</span><span class="v m" id="setupBackups">—</span></div>
+            <div class="setup-row"><span class="k">Confidence Grade</span><span class="v" id="setupGrade">—</span></div>
             <div class="setup-row"><span class="k" id="entryLabel">Limit Entry</span><span class="v a" id="setupEntry">—</span></div>
-            <div class="setup-row"><span class="k">Stop Loss</span><span class="v r" id="setupStop">—</span></div>
+            <div class="setup-row"><span class="k">Initial Stop</span><span class="v r" id="setupStop">—</span></div>
+            <div class="setup-row"><span class="k">Active Stop</span><span class="v a" id="setupActiveStop">—</span></div>
+            <div class="setup-row"><span class="k">Management</span><span class="v" id="setupManagement">—</span></div>
             <div class="setup-row"><span class="k">Take Profit 1</span><span class="v g" id="setupTp1">—</span></div>
             <div class="setup-row"><span class="k">TP1 Source</span><span class="v m" id="setupTp1Source">—</span></div>
             <div class="setup-row"><span class="k">Take Profit 2</span><span class="v g" id="setupTp2">—</span></div>
@@ -190,6 +195,14 @@
             <div class="setup-row"><span class="k">Cluster</span><span class="v" id="setupCluster">—</span></div>
             <div class="setup-row"><span class="k">Session</span><span class="v" id="setupSession">—</span></div>
             <div class="setup-row"><span class="k" id="validLabel">Valid Until</span><span class="v" id="setupValid">—</span></div>
+            <div class="model-ranking-block">
+              <div class="eyebrow setup-timeline-title">Entry Model Ranking</div>
+              <div class="model-ranking" id="setupModelRanking"><div class="timeline-empty">No ranked models yet.</div></div>
+            </div>
+            <div class="setup-timeline-block">
+              <div class="eyebrow setup-timeline-title">Lifecycle Memory</div>
+              <div class="setup-timeline" id="setupTimeline"><div class="timeline-empty">No lifecycle events yet.</div></div>
+            </div>
           </div>
         </div>
 
@@ -197,6 +210,8 @@
           <div class="panel-h"><h3>GEX Summary</h3></div>
           <div class="panel-b">
             <div class="setup-row"><span class="k">Regime</span><span class="v" id="gexRegime">—</span></div>
+            <div class="setup-row"><span class="k">Dealer Bias</span><span class="v b" id="gexDealerBias">—</span></div>
+            <div class="setup-row"><span class="k">Gamma Balance</span><span class="v" id="gexBalance">—</span></div>
             <div class="setup-row"><span class="k">Gamma Flip</span><span class="v" id="gammaFlip">—</span></div>
             <div class="setup-row"><span class="k">Gamma Resistance / Call Wall</span><span class="v b" id="callWall">—</span></div>
             <div class="setup-row"><span class="k">Maximum Pain</span><span class="v p" id="maxPain">—</span></div>
@@ -303,8 +318,13 @@
                     </div>
                   </div>
                   <div class="chart-setup-row"><span>Direction</span><b id="chartSetupDirection">—</b></div>
+                  <div class="chart-setup-row"><span>Entry Model</span><b class="b" id="chartSetupModel">—</b></div>
+                  <div class="chart-setup-row"><span>Backup Models</span><b id="chartSetupBackups">—</b></div>
+                  <div class="chart-setup-row"><span>Grade</span><b id="chartSetupGrade">—</b></div>
                   <div class="chart-setup-row"><span id="chartEntryLabel">Limit Entry</span><b class="a" id="chartSetupEntry">—</b></div>
-                  <div class="chart-setup-row"><span>Stop Loss</span><b class="r" id="chartSetupStop">—</b></div>
+                  <div class="chart-setup-row"><span>Initial Stop</span><b class="r" id="chartSetupStop">—</b></div>
+                  <div class="chart-setup-row"><span>Active Stop</span><b class="a" id="chartSetupActiveStop">—</b></div>
+                  <div class="chart-setup-row"><span>Management</span><b id="chartSetupManagement">—</b></div>
                   <div class="chart-setup-row"><span>Take Profit 1</span><b class="g" id="chartSetupTp1">—</b></div>
                   <div class="chart-setup-row"><span>TP1 Source</span><b id="chartSetupTp1Source">—</b></div>
                   <div class="chart-setup-row"><span>Take Profit 2</span><b class="g" id="chartSetupTp2">—</b></div>
@@ -315,6 +335,14 @@
                   <div class="chart-setup-session">
                     <div><span>Session</span><b id="chartSetupSession">—</b></div>
                     <div><span id="chartValidLabel">Valid Until</span><b id="chartSetupValid">—</b></div>
+                  </div>
+                  <div class="model-ranking-block chart-model-ranking-block">
+                    <div class="eyebrow setup-timeline-title">Model Ranking</div>
+                    <div class="model-ranking" id="chartModelRanking"><div class="timeline-empty">No ranked models yet.</div></div>
+                  </div>
+                  <div class="setup-timeline-block chart-timeline-block">
+                    <div class="eyebrow setup-timeline-title">Lifecycle Memory</div>
+                    <div class="setup-timeline" id="chartSetupTimeline"><div class="timeline-empty">No lifecycle events yet.</div></div>
                   </div>
                   <div class="chart-preview-notice" id="chartPreviewNotice" hidden>
                     <b id="chartPreviewTitle">SCANNING — NO ACTIVE SETUP</b>
@@ -412,7 +440,10 @@
     </section>
 
     <section class="page" id="page-setups">
-      <div class="page-shell"><div class="panel page-panel"><div class="panel-h"><h3>Setup History</h3><button class="mini-btn" id="reloadSetups">Reload</button></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th>Time</th><th>Direction</th><th>Confidence</th><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th><th>State</th><th>Result R</th></tr></thead><tbody id="setupsTable"></tbody></table></div></div></div>
+      <div class="page-shell">
+        <div class="panel page-panel"><div class="panel-h"><h3>Setup History</h3><button class="mini-btn" id="reloadSetups">Reload</button></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th>Time</th><th>Direction</th><th>Model</th><th>Grade</th><th>Confidence</th><th>Entry</th><th>Initial SL</th><th>Active SL</th><th>TP1</th><th>TP2</th><th>State</th><th>Management</th><th>Result R</th></tr></thead><tbody id="setupsTable"></tbody></table></div></div>
+        <div class="panel page-panel"><div class="panel-h"><h3>Entry Model Performance</h3><span class="source-chip">READ ONLY</span></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th>Model</th><th>Trades</th><th>Win Rate</th><th>Average R</th><th>Net R</th><th>Profit Factor</th></tr></thead><tbody id="modelLeaderboard"><tr><td colspan="6" class="m">No completed model results yet.</td></tr></tbody></table><p class="note">Historical analytics never alter live model ranking or confidence.</p></div></div>
+      </div>
     </section>
 
     <section class="page" id="page-alerts">
@@ -457,7 +488,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=24"></script>
+<script src="/static/boot.js?v=30"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

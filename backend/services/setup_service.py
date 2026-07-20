@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
 from math import exp
+import threading
 from uuid import uuid4
 
 from backend.core.config import settings
 from backend.models.schemas import GexSummary, TradeSetup
 from backend.services.databento_gex import gex_service
+from backend.services.decision_brain import decision_brain_service
 from backend.services.market_data import market_data_service, rth_candles
 from backend.services.instruments import InstrumentProfile, instrument_registry
 from backend.services.timeframes import aggregate_candles
@@ -13,8 +15,55 @@ from engine.confluence_cluster import find_confluence_cluster
 from engine.fib_ote import calculate_fib_levels, ote_zone
 from engine.gex import OptionPosition, derive_gex_summary_from_positions
 from engine.market_structure import analyze_market_structure
+from engine.entry_models import ModelContext, rank_entry_models
+from engine.institutional_confidence import CATEGORY_WEIGHTS, calculate_institutional_confidence
 from engine.risk_engine import build_trade_levels
 from engine.supply_demand import detect_supply_demand
+
+
+_FALLBACK_GEX_LOCK = threading.RLock()
+_FALLBACK_GEX_CACHE: dict[str, tuple[datetime, GexSummary]] = {}
+
+
+def clear_fallback_gex_cache(symbol: str | None = None) -> None:
+    with _FALLBACK_GEX_LOCK:
+        if symbol is None:
+            _FALLBACK_GEX_CACHE.clear()
+        else:
+            _FALLBACK_GEX_CACHE.pop(symbol.upper(), None)
+
+
+def _stable_fallback_gex(current_price: float, profile: InstrumentProfile) -> GexSummary:
+    """Build a fallback GEX map once per refresh window instead of every tick."""
+    now = datetime.now(timezone.utc)
+    with _FALLBACK_GEX_LOCK:
+        cached = _FALLBACK_GEX_CACHE.get(profile.symbol)
+        if cached and (now - cached[0]).total_seconds() < max(60, settings.gex_refresh_seconds):
+            return cached[1].model_copy(deep=True)
+
+    positions = mock_option_chain(current_price, profile)
+    raw = derive_gex_summary_from_positions(
+        current_price,
+        positions,
+        flip_range_points=profile.gex_strike_range_points,
+        flip_step=profile.gex_flip_step,
+    )
+    raw.update({
+        "source": "simulated-fallback",
+        "updated_at": now,
+        "contract_count": len(positions),
+        "expiry_count": 1,
+        "is_estimate": True,
+        "source_symbol": profile.gex_source_symbol,
+        "applied_to_symbol": profile.symbol,
+        "options_parent": profile.options_parent,
+        "source_label": f"Fallback {profile.gex_source_label}",
+        "is_parent_market": profile.uses_parent_gex,
+    })
+    summary = GexSummary(**raw)
+    with _FALLBACK_GEX_LOCK:
+        _FALLBACK_GEX_CACHE[profile.symbol] = (now, summary)
+    return summary.model_copy(deep=True)
 
 
 def average_true_range(candles, period: int = 14) -> float:
@@ -70,6 +119,38 @@ def proximity_score(price: float, low: float, high: float, tolerance: float) -> 
     return max(0.0, 1.0 - min(abs(price - low), abs(price - high)) / max(tolerance, .25))
 
 
+def _enrich_gex(gex: GexSummary, current_price: float) -> GexSummary:
+    positive = sum(max(0.0, float(item.net_gex)) for item in gex.by_strike)
+    negative = sum(abs(min(0.0, float(item.net_gex))) for item in gex.by_strike)
+    total = positive + negative
+    positive_pct = round(positive / total * 100, 1) if total else 0.0
+    negative_pct = round(negative / total * 100, 1) if total else 0.0
+    if gex.regime == "POSITIVE":
+        dealer_bias = "SUPPORTIVE / MEAN REVERTING" if current_price >= gex.gamma_flip else "PIVOT TEST"
+    elif gex.regime == "NEGATIVE":
+        dealer_bias = "VOLATILITY EXPANSION"
+    else:
+        dealer_bias = "NEUTRAL / TRANSITION"
+    nodes = sorted(gex.by_strike, key=lambda item: abs(float(item.net_gex)), reverse=True)[:10]
+    return gex.model_copy(update={
+        "dealer_bias": dealer_bias,
+        "positive_gamma_percent": positive_pct,
+        "negative_gamma_percent": negative_pct,
+        "top_gamma_nodes": [
+            {"strike": item.strike, "net_gex": item.net_gex, "call_gex": item.call_gex, "put_gex": item.put_gex}
+            for item in nodes
+        ],
+        "level_meanings": {
+            "Gamma Flip": "Dealer pivot where hedging behaviour and market bias may change.",
+            "Call Wall": "Major call-gamma resistance and potential upside pin/rejection area.",
+            "Put Wall": "Major put-gamma support and potential downside pin/bounce area.",
+            "Max Pain": "Expiration pinning reference; context only, never an entry by itself.",
+            "Positive Gamma": "Dealers may dampen volatility and encourage mean reversion.",
+            "Negative Gamma": "Dealer hedging may amplify directional volatility.",
+        },
+    })
+
+
 def _direction_from_structure(structure: dict, current_price: float, gex: GexSummary) -> str:
     if structure["trend"] == "BULLISH":
         return "LONG"
@@ -98,27 +179,9 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
 
     gex = gex_service.get_summary(current_price)
     if gex is None:
-        positions = mock_option_chain(current_price, profile)
-        raw = derive_gex_summary_from_positions(
-            current_price,
-            positions,
-            flip_range_points=profile.gex_strike_range_points,
-            flip_step=profile.gex_flip_step,
-        )
-        raw.update({
-            "source": "simulated-fallback",
-            "updated_at": datetime.now(timezone.utc),
-            "contract_count": len(positions),
-            "expiry_count": 1,
-            "is_estimate": True,
-            "source_symbol": profile.gex_source_symbol,
-            "applied_to_symbol": profile.symbol,
-            "options_parent": profile.options_parent,
-            "source_label": f"Fallback {profile.gex_source_label}",
-            "is_parent_market": profile.uses_parent_gex,
-        })
-        gex = GexSummary(**raw)
+        gex = _stable_fallback_gex(current_price, profile)
 
+    gex = _enrich_gex(gex, current_price)
     direction = _direction_from_structure(structure, current_price, gex)
     swing_low, swing_high = structure["swing_low"], structure["swing_high"]
     if swing_high <= swing_low:
@@ -134,6 +197,11 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
     session_high, session_low = max(c.high for c in session), min(c.low for c in session)
     vwap = calculate_vwap(session)
     std_low, std_high = standard_deviation_levels(session, vwap)
+    previous_volumes = [float(c.volume) for c in candles_5m[-21:-1]]
+    average_volume = sum(previous_volumes) / len(previous_volumes) if previous_volumes else max(float(candles_5m[-1].volume), 1.0)
+    volume_ratio = float(candles_5m[-1].volume) / max(average_volume, 1.0)
+    volume_expansion_quality = max(0.0, min(1.0, (volume_ratio - 0.65) / 0.85))
+    session_quality = max(0.0, min(1.0, len(session) / 36.0))
 
     direction_sweep = structure["sell_side_sweep"] if direction == "LONG" else structure["buy_side_sweep"]
     direction_displacement = structure["bullish_displacement"] if direction == "LONG" else structure["bearish_displacement"]
@@ -184,7 +252,19 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         "session_volatility": volatility_quality,
         "risk_reward": risk_quality,
     }
-    confidence, components = calculate_confidence(flags)
+    legacy_confidence, components = calculate_confidence(flags)
+    structure_quality = 1.0 if ordered_sequence else .8 if direction_sweep and direction_displacement else .55 if direction_displacement or direction_fvg else .2 if trend_alignment else 0.0
+    gex_quality = max(0.0, min(1.0, (.55 if gex_alignment else 0.0) + cluster.score * .45))
+    institutional_evidence = {
+        "trend": 1.0 if trend_alignment else .25 if structure["trend"] != "NEUTRAL" else 0.0,
+        "structure": structure_quality,
+        "gex": gex_quality,
+        "liquidity": 1.0 if direction_sweep else .25 if structure["liquidity_sweep"] else 0.0,
+        "momentum": max(displacement_quality, volatility_quality * .65),
+        "volume": volume_expansion_quality,
+        "session": session_quality,
+    }
+    confidence, institutional_components, confidence_grade = calculate_institutional_confidence(institutional_evidence)
     nearest_wall = gex.call_wall if direction == "LONG" else gex.put_wall
     signals = {
         "trend_alignment": bool(trend_alignment), "gex_alignment": bool(gex_alignment),
@@ -198,6 +278,14 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         "valid_limit": bool(levels["entry_valid"]), "target_not_blocked": not levels["blocked_by_near_target"],
         "approaching_wall": abs(nearest_wall - current_price) <= atr * 5,
         "rth_session_bars": len(session),
+        "legacy_confluence_score": legacy_confidence,
+        "volume_ratio": round(volume_ratio, 3),
+        "volume_expansion": volume_expansion_quality >= .6,
+        "directional_fvg_low": structure.get("bullish_fvg_low") if direction == "LONG" else structure.get("bearish_fvg_low"),
+        "directional_fvg_high": structure.get("bullish_fvg_high") if direction == "LONG" else structure.get("bearish_fvg_high"),
+        "previous_liquidity_low": structure.get("previous_liquidity_low"),
+        "previous_liquidity_high": structure.get("previous_liquidity_high"),
+        "sweep_price": structure.get("sweep_price"),
     }
     mandatory = all([
         trend_alignment, gex_alignment, cluster.score >= settings.cluster_min_score,
@@ -222,11 +310,14 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
 
     status = "WAITING_FOR_LIMIT" if actionable else "DEVELOPING" if confidence >= 55 and levels["entry_valid"] else "SCANNING"
     now = datetime.now(timezone.utc)
-    return TradeSetup(
+    setup = TradeSetup(
         setup_id=f"preview-{uuid4()}", symbol=profile.symbol, timestamp=now,
         valid_until=now + timedelta(minutes=settings.setup_expiry_minutes), direction=direction,
         confidence=confidence, confidence_components=components,
         confidence_maximums={k: float(v) for k, v in DEFAULT_WEIGHTS.items()}, signals=signals,
+        confidence_grade=confidence_grade,
+        institutional_confidence_components=institutional_components,
+        institutional_confidence_maximums={k: float(v) for k, v in CATEGORY_WEIGHTS.items()},
         actionable=actionable, entry_valid=bool(levels["entry_valid"]),
         order_state="ARMED" if actionable else "PREVIEW_ONLY",
         entry=levels["entry"], stop_loss=levels["stop_loss"], take_profit_1=levels["take_profit_1"],
@@ -240,6 +331,16 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         selected_zone_high=selected_zone.high if selected_zone else None,
         selected_zone_timeframe=selected_zone.timeframe if selected_zone else None,
     )
+    model_context = ModelContext(
+        direction=direction, current_price=current_price, atr=atr, proposed_entry=levels["entry"],
+        vwap=vwap, gamma_flip=gex.gamma_flip,
+        selected_zone_low=selected_zone.low if selected_zone else None,
+        selected_zone_high=selected_zone.high if selected_zone else None,
+        ote_low=ote_low, ote_high=ote_high,
+        fvg_low=signals.get("directional_fvg_low"), fvg_high=signals.get("directional_fvg_high"),
+        signals=signals, structure=structure, volume_expansion=volume_expansion_quality, session_quality=session_quality,
+    )
+    return decision_brain_service.select(setup, rank_entry_models(model_context))
 
 
 def build_current_setup() -> TradeSetup:

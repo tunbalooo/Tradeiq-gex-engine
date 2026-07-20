@@ -410,3 +410,33 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
   .tv-chart-surface.full{min-height:320px}
   .chart-data-state{pointer-events:none}
 }
+
+
+/* v2.6 persistent setup lifecycle memory */
+.setup-timeline-block{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.setup-timeline-title{margin-bottom:8px}
+.setup-timeline{display:grid;gap:8px;max-height:230px;overflow:auto;padding-right:3px}
+.timeline-event{display:grid;grid-template-columns:10px 1fr;gap:8px;align-items:start;padding:7px 8px;border:1px solid var(--line);background:rgba(255,255,255,.015);border-radius:5px}
+.timeline-dot{width:7px;height:7px;border-radius:50%;margin-top:5px;background:var(--amber);box-shadow:0 0 0 3px rgba(245,185,59,.08)}
+.timeline-event.positive .timeline-dot{background:var(--green);box-shadow:0 0 0 3px rgba(38,208,124,.08)}
+.timeline-event.negative .timeline-dot{background:var(--red);box-shadow:0 0 0 3px rgba(255,77,94,.08)}
+.timeline-event b{display:block;font:600 10px/1.25 var(--mono);letter-spacing:.05em;color:var(--text)}
+.timeline-event small{display:block;margin-top:2px;font:500 9px/1.2 var(--mono);color:var(--muted)}
+.timeline-event p{margin:4px 0 0;font-size:10px;line-height:1.35;color:var(--muted)}
+.timeline-empty{padding:8px;border:1px dashed var(--line2);border-radius:5px;color:var(--muted);font-size:10px}
+.chart-timeline-block .setup-timeline{max-height:180px}
+@media(max-width:700px){.setup-timeline{max-height:210px}.timeline-event p{font-size:11px}.timeline-event b{font-size:11px}}
+
+/* TradeIQ v3.0 deterministic model-ranking and management UI */
+.model-ranking-block { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.model-ranking { display: grid; gap: 6px; }
+.model-rank { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; gap: 7px; align-items: center; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; background: rgba(255,255,255,.018); }
+.model-rank > span { color: var(--muted); font: 10px var(--mono); }
+.model-rank > b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.model-rank > strong { font: 11px var(--mono); }
+.model-rank > small { grid-column: 2 / 4; color: var(--muted); font-size: 9px; line-height: 1.35; }
+.model-rank.primary { border-color: rgba(38,208,124,.42); background: rgba(38,208,124,.07); }
+.model-rank.primary > strong, .model-rank.eligible > strong { color: var(--green); }
+.model-rank.developing > strong { color: var(--amber); }
+.chart-model-ranking-block { margin-top: 10px; }
+@media (max-width: 760px) { .model-rank { padding: 8px; } .model-rank > b { font-size: 12px; } }

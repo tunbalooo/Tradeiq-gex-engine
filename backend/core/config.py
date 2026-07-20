@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     nq_tick_size: float = 0.25  # deprecated: instrument registry supplies tick sizes
     event_sequence_max_bars: int = 4
     event_max_age_bars: int = 12
+    entry_model_min_score: float = 55.0
+    move_stop_to_breakeven_after_tp1: bool = True
+    partial_exit_percent: float = 50.0
 
     admin_token: str | None = None
     allow_public_admin: bool = False

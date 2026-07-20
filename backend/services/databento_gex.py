@@ -69,6 +69,9 @@ class DatabentoGexService:
         self._lock = threading.RLock()
         self._positions: list[OptionPosition] = []
         self._positions_key: str | None = None
+        self._summary_cache: GexSummary | None = None
+        self._summary_cache_key: str | None = None
+        self._summary_reference_price: float | None = None
         self.updated_at: datetime | None = None
         self.last_error: str | None = None
         self.refreshing = False
@@ -108,6 +111,9 @@ class DatabentoGexService:
             if self._positions_key != key:
                 self._positions = []
                 self._positions_key = None
+                self._summary_cache = None
+                self._summary_cache_key = None
+                self._summary_reference_price = None
                 self.updated_at = None
             self.last_error = None
         if settings.use_databento:
@@ -145,6 +151,9 @@ class DatabentoGexService:
             with self._lock:
                 self._positions = positions
                 self._positions_key = key
+                self._summary_cache = None
+                self._summary_cache_key = None
+                self._summary_reference_price = None
                 self.updated_at = datetime.now(timezone.utc)
                 self.last_error = None
             logger.info(
@@ -337,16 +346,27 @@ class DatabentoGexService:
         return positions
 
     def get_summary(self, futures_price: float) -> GexSummary | None:
+        """Return a session-stable GEX map for the current option-position snapshot.
+
+        Dealer levels are derived once after each fresh option-position refresh.
+        They do not re-center on every futures tick. This prevents the Gamma
+        Flip, Call Wall, Put Wall and major nodes from visually jumping while
+        the underlying options dataset has not changed.
+        """
         profile = self.profile
         key = _profile_key(profile)
         with self._lock:
             positions = list(self._positions) if self._positions_key == key else []
             updated_at = self.updated_at
+            cached = self._summary_cache if self._summary_cache_key == key else None
+            if cached is not None:
+                return cached.model_copy(deep=True)
 
         if not positions:
             return None
+        reference_price = float(futures_price)
         raw = derive_gex_summary_from_positions(
-            futures_price,
+            reference_price,
             positions,
             flip_range_points=profile.gex_strike_range_points,
             flip_step=profile.gex_flip_step,
@@ -365,7 +385,13 @@ class DatabentoGexService:
                 "is_parent_market": profile.uses_parent_gex,
             }
         )
-        return GexSummary(**raw)
+        summary = GexSummary(**raw)
+        with self._lock:
+            if self._positions_key == key:
+                self._summary_cache = summary
+                self._summary_cache_key = key
+                self._summary_reference_price = reference_price
+        return summary.model_copy(deep=True)
 
     def health(self) -> dict:
         profile = self.profile
@@ -384,6 +410,8 @@ class DatabentoGexService:
             "options_parent": profile.options_parent,
             "source_label": profile.gex_source_label,
             "is_parent_market": profile.uses_parent_gex,
+            "levels_locked": self._summary_cache_key == key and self._summary_cache is not None,
+            "reference_price": self._summary_reference_price,
         }
 
 

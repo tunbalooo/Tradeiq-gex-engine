@@ -11,6 +11,7 @@ from backend.core.config import settings
 from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
 from backend.services.session_service import get_session_status
+from backend.services.storage_service import storage_service
 from backend.services.trade_engine import trade_engine_service
 
 try:
@@ -21,32 +22,47 @@ except ImportError:  # pragma: no cover - surfaced by status endpoint
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """You are the read-only market analyst inside TradeIQ for NQ, MNQ, ES, MES, GC, and MGC.
-The deterministic TradeIQ engine is the only source of truth. Never change or invent confidence, entry, stop, targets,
-confluences, session state, actionability, order state, or GEX. Never provide hidden chain-of-thought or promise profits.
+SYSTEM_PROMPT = """You are the read-only lifecycle analyst inside TradeIQ for NQ, MNQ, ES, MES, GC, and MGC.
+The deterministic TradeIQ engine is the only source of truth. Never invent or change confidence, direction, entry, stop,
+targets, confluences, session state, actionability, order state, transition reason, or GEX. Never promise profits.
+
+Your main job is to explain WHY the engine is in its current lifecycle state and WHAT must happen next.
+Use setup.last_transition_* and lifecycle_event as the authoritative reason for a state change.
+Use lifecycle_timeline only as historical context. Never rewrite or contradict the latest deterministic transition.
 
 State rules:
-- PREVIEW_ONLY is not a forecast, scheduled trade, or guarantee that price will reach any level.
-- PREVIEW_ONLY is scanning context only.
-- WATCHING means MONITORING ONLY: the supplied watch_trigger is not an entry and no limit order is armed. Never tell the user to place an order in WATCHING.
-- WAITING_FOR_LIMIT is the first state with an executable engine plan; only then may you refer to entry, stop and targets as locked plan levels.
-- UNCONFIRMED_TOUCH means price reached the monitoring trigger before confirmation; explicitly say no trade was armed or filled.
-- When the market is closed, say the candidate uses the latest available closed data and must be recalculated after reopening.
-- During DATA_SYNCING, say the temporary preview must not be traded.
+- PREVIEW_ONLY is not a forecast, scheduled trade, or guarantee. Explain that no plan exists yet and name the strongest present and missing confirmations.
+- WATCHING/MONITORING: the watch_trigger is NOT an entry and no limit is armed. Explain precisely which confirmations are
+  present, which mandatory confirmations are still missing, and what would allow the engine to produce a locked limit plan.
+  If the transition is WATCHING → WATCHING, explain the exact primary-entry-model switch and identify the new backup path.
+- WAITING_FOR_LIMIT: explain why the plan qualified, why the entry area was selected, what invalidates the idea at the
+  supplied stop, and what market structures/sources justify TP1 and TP2. State that all levels are locked.
+- FILLED: explain that the locked limit was touched, then explain the supplied protective stop and both targets.
+- TP1_HIT: explain that TP1 was reached, the recorded partial percentage, whether the active stop moved to break-even,
+  and what remains for the runner. Distinguish the immutable initial stop from active_stop_loss.
+- TP2_HIT: explain why the plan is complete.
+- INVALIDATED, EXPIRED, UNCONFIRMED_TOUCH, or a transition back to PREVIEW_ONLY: explain the exact cancellation reason
+  from last_transition_reason. Never replace it with a generic explanation.
+- STOPPED: explain the supplied deterministic stop event without hindsight or blame. If outcome is
+  BREAKEVEN_AFTER_TP1, state that partial profit had already been secured before the runner exited at break-even.
+- Market closed or DATA_SYNCING: say execution is unavailable and do not imply a live order can be used.
 - Fallback GEX is an estimate. Fallback or simulated GEX is a reliability limitation only; it does not independently block order arming.
-- Estimated GEX is secondary context. Call it "estimated GEX", not "simulated feedback"; it does not independently block order arming.
-- Never say an order must wait for GEX to become live unless the supplied engine state explicitly requires it.
+- Never say an order must wait for GEX to become live unless the supplied deterministic engine state explicitly requires it.
 - The session gate and supplied actionable/order_state fields control execution permission.
-- Do not repeat entry, stop, TP1, or TP2 values already visible in the Trade Setup panel unless the ACTION line needs one level.
 
-Use this exact compact format, no more than 130 words:
-BIAS: direction · supplied confidence
-STATUS: one short sentence
+Do not repeat entry, stop, TP1, or TP2 in PREVIEW_ONLY or WATCHING. You MAY repeat them in WAITING_FOR_LIMIT, FILLED,
+or TP1_HIT because the user wants a lifecycle explanation of the full locked plan.
+
+The primary_entry_model and model_selection_reason are deterministic. Explain them, but never change their scores or rank.
+Legacy guidance: no more than 130 words.
+Use this exact compact format, no more than 150 words:
+EVENT: current lifecycle event in one sentence
+WHY: specific engine reason in one or two sentences
 CONFIRMED:
 - up to 3 short bullets
-MISSING:
+MISSING/NEXT:
 - up to 2 short bullets
-ACTION: one short sentence
+LEVELS: explain supplied trigger or locked entry/SL/TP values only when relevant
 RISK: one short sentence
 """
 
@@ -105,6 +121,39 @@ class ClaudeAnalysisService:
         if setup_data.get("gex"):
             setup_data["gex"]["levels"] = setup_data["gex"].get("levels", [])[:10]
 
+        lifecycle_timeline = storage_service.setup_timeline(setup.setup_id, limit=12)
+
+        lifecycle_event = {
+            "setup_id": setup_data.get("setup_id"),
+            "previous_state": setup_data.get("last_transition_from"),
+            "current_state": setup_data.get("order_state"),
+            "transition_to": setup_data.get("last_transition_to"),
+            "reason": setup_data.get("last_transition_reason"),
+            "occurred_at": setup_data.get("last_transition_at"),
+            "transition_price": setup_data.get("last_transition_price"),
+            "watch_trigger": setup_data.get("watch_trigger"),
+            "watch_expires_at": setup_data.get("watch_expires_at"),
+            "armed_at": setup_data.get("armed_at"),
+            "filled_at": setup_data.get("filled_at"),
+            "closed_at": setup_data.get("closed_at"),
+            "outcome": setup_data.get("outcome"),
+            "entry": setup_data.get("entry"),
+            "stop_loss": setup_data.get("stop_loss"),
+            "active_stop_loss": setup_data.get("active_stop_loss"),
+            "take_profit_1": setup_data.get("take_profit_1"),
+            "take_profit_2": setup_data.get("take_profit_2"),
+            "target_sources": setup_data.get("target_sources") or {},
+            "primary_entry_model": setup_data.get("primary_entry_model"),
+            "primary_model_score": setup_data.get("primary_model_score"),
+            "alternative_entry_models": setup_data.get("alternative_entry_models") or [],
+            "model_selection_reason": setup_data.get("model_selection_reason"),
+            "confidence_grade": setup_data.get("confidence_grade"),
+            "management_state": setup_data.get("management_state"),
+            "partial_exit_percent": setup_data.get("partial_exit_percent"),
+            "runner_active": setup_data.get("runner_active"),
+            "management_actions": setup_data.get("management_actions") or [],
+        }
+
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market": {
@@ -119,6 +168,8 @@ class ClaudeAnalysisService:
             },
             "session": session,
             "gex_health": gex_health,
+            "lifecycle_event": lifecycle_event,
+            "lifecycle_timeline": lifecycle_timeline,
             "execution_rules": {
                 "session_gate_controls_market_open_permission": True,
                 "fallback_gex_independently_blocks_arming": False,
@@ -133,8 +184,10 @@ class ClaudeAnalysisService:
         setup = snapshot["setup"]
         session = snapshot["session"]
         gex = setup.get("gex") or {}
+        lifecycle = snapshot.get("lifecycle_event") or {}
         important = {
             "symbol": snapshot.get("market", {}).get("symbol"),
+            "setup_id": setup.get("setup_id"),
             "direction": setup.get("direction"),
             "state": setup.get("order_state"),
             "actionable": setup.get("actionable"),
@@ -142,6 +195,10 @@ class ClaudeAnalysisService:
             "watch_trigger": setup.get("watch_trigger"),
             "entry": setup.get("entry"),
             "stop": setup.get("stop_loss"),
+            "active_stop": setup.get("active_stop_loss"),
+            "primary_model": setup.get("primary_entry_model"),
+            "primary_model_score": setup.get("primary_model_score"),
+            "management_state": setup.get("management_state"),
             "tp1": setup.get("take_profit_1"),
             "tp2": setup.get("take_profit_2"),
             "signals": setup.get("signals"),
@@ -149,6 +206,11 @@ class ClaudeAnalysisService:
             "gex_ready": snapshot["gex_health"].get("ready"),
             "session_open": session.get("is_open"),
             "session": session.get("session_name"),
+            "transition_from": lifecycle.get("previous_state"),
+            "transition_to": lifecycle.get("transition_to"),
+            "transition_at": lifecycle.get("occurred_at"),
+            "transition_reason": lifecycle.get("reason"),
+            "outcome": lifecycle.get("outcome"),
         }
         raw = json.dumps(important, sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
@@ -217,7 +279,11 @@ class ClaudeAnalysisService:
                     system=SYSTEM_PROMPT,
                     messages=[{
                         "role": "user",
-                        "content": "Analyze this current TradeIQ snapshot:\n" + json.dumps(snapshot, separators=(",", ":"), default=str),
+                        "content": (
+                            "Explain the current TradeIQ lifecycle event, why the engine is in this state, "
+                            "and what happens next. Use the deterministic transition reason exactly.\n"
+                            + json.dumps(snapshot, separators=(",", ":"), default=str)
+                        ),
                     }],
                 ) as stream:
                     async for text in stream.text_stream:
