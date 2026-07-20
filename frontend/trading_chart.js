@@ -584,6 +584,7 @@
 
   const instances = new Map();
   const desktopHistoryCache = new Map();
+  const desktopViewportCache = new Map();
   const pendingRenders = new Map();
   const renderTimers = new Map();
   const dashed = LC.LineStyle?.Dashed ?? 2;
@@ -605,12 +606,39 @@
         high: Number(candle.high),
         low: Number(candle.low),
         close: Number(candle.close),
+        volume: Math.max(0, Number(candle.volume || 0)),
       };
       if (!Object.values(item).slice(1).every(Number.isFinite)) return;
+      if (item.open <= 0 || item.close <= 0) return;
       if (item.high < item.low || item.high < Math.max(item.open, item.close) || item.low > Math.min(item.open, item.close)) return;
+      const reference = Math.max(Math.abs(item.open), Math.abs(item.close), 1e-9);
+      if ((item.high - item.low) / reference > 0.08) return;
       byTime.set(time, item);
     });
-    return latestCoherentSegment([...byTime.values()].sort((a, b) => a.time - b.time));
+
+    const ordered = [...byTime.values()].sort((a, b) => a.time - b.time);
+    if (ordered.length < 3) return latestCoherentSegment(ordered);
+    const clean = [ordered[0]];
+    const recentRanges = [Math.max(0, ordered[0].high - ordered[0].low)];
+    for (let index = 1; index < ordered.length - 1; index += 1) {
+      const previous = clean.at(-1);
+      const current = ordered[index];
+      const following = ordered[index + 1];
+      const reference = Math.max(Math.abs(previous.close), 1e-9);
+      const jump = Math.abs(current.open - previous.close) / reference;
+      const returnJump = Math.abs(following.open - current.close) / Math.max(Math.abs(current.close), 1e-9);
+      const candleRange = Math.max(0, current.high - current.low);
+      const body = Math.abs(current.close - current.open);
+      const typicalRange = median(recentRanges.slice(-30).filter((value) => value > 0)) || 0;
+      const giantWick = typicalRange > 0
+        && candleRange > Math.max(typicalRange * 18, reference * 0.012)
+        && body < Math.max(typicalRange * 5, candleRange * 0.35);
+      if (giantWick || (jump > MAX_SERIES_REGIME_GAP && returnJump > MAX_SERIES_REGIME_GAP)) continue;
+      clean.push(current);
+      recentRanges.push(candleRange);
+    }
+    clean.push(ordered.at(-1));
+    return latestCoherentSegment(clean);
   }
 
   function desktopHistoryKey(data) {
@@ -799,6 +827,7 @@
       },
     });
 
+    let autoscaleInstance = null;
     const candleSeries = chart.addSeries(LC.CandlestickSeries, {
       upColor: COLORS.green,
       downColor: COLORS.red,
@@ -807,7 +836,40 @@
       wickDownColor: COLORS.red,
       priceLineVisible: true,
       lastValueVisible: true,
+      conflationThresholdFactor: 0.5,
       priceFormat: { type: "price", precision: 2, minMove: 0.25 },
+      // Keep the candle scale driven by visible OHLC data, not distant GEX,
+      // Fib, supply/demand or target price lines. This is the equivalent of
+      // TradingView's "scale price chart only" behaviour and prevents 1m/2m
+      // candles from being crushed into a tiny band.
+      autoscaleInfoProvider: (original) => {
+        const fallback = original();
+        const instance = autoscaleInstance;
+        if (!instance?.autoScale || !instance.data?.length) return fallback;
+        const logical = chart.timeScale().getVisibleLogicalRange();
+        const from = logical ? Math.max(0, Math.floor(logical.from) - 2) : Math.max(0, instance.data.length - 140);
+        const to = logical ? Math.min(instance.data.length - 1, Math.ceil(logical.to) + 2) : instance.data.length - 1;
+        const visible = instance.data.slice(from, to + 1);
+        if (!visible.length) return fallback;
+        const highs = visible.map((item) => Number(item.high)).filter(Number.isFinite);
+        const lows = visible.map((item) => Number(item.low)).filter(Number.isFinite);
+        if (!highs.length || !lows.length) return fallback;
+        const high = Math.max(...highs);
+        const low = Math.min(...lows);
+        const ranges = visible.map((item) => Math.max(0, Number(item.high) - Number(item.low))).filter(Number.isFinite);
+        const typicalRange = median(ranges) || Number(instance.tickSize || 0.25) * 4;
+        const minimumSpan = Math.max(Number(instance.tickSize || 0.25) * 24, typicalRange * 7);
+        const rawSpan = Math.max(high - low, minimumSpan);
+        const centre = (high + low) / 2;
+        const padding = Math.max(rawSpan * 0.12, typicalRange * 2);
+        return {
+          priceRange: {
+            minValue: centre - rawSpan / 2 - padding,
+            maxValue: centre + rawSpan / 2 + padding,
+          },
+          margins: fallback?.margins,
+        };
+      },
     });
     const closeSeries = chart.addSeries(LC.LineSeries, {
       color: COLORS.blue,
@@ -870,15 +932,20 @@
       lastWidth: initialSize.width,
       lastHeight: initialSize.height,
     };
+    autoscaleInstance = instance;
 
     chart.subscribeCrosshairMove((param) => updateLegend(instance, param));
     chart.subscribeClick((param) => handleChartClick(instance, param));
-    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       const position = chart.timeScale().scrollPosition?.();
       instance.atRealtime = position == null || position <= 1.5;
+      if (instance.userInteracted && range && instance.timeframe != null && instance.symbol) {
+        desktopViewportCache.set(`${instance.symbol}:${instance.timeframe}:${instance.id}`, { from: range.from, to: range.to });
+      }
       scheduleOverlay(instance);
     });
     host.addEventListener("pointerdown", () => { instance.userInteracted = true; }, { passive: true });
+    host.addEventListener("wheel", () => { instance.userInteracted = true; }, { passive: true });
 
     const resizeObserver = new ResizeObserver(() => {
       if (resizeInstance(instance)) scheduleOverlay(instance);
@@ -1157,15 +1224,43 @@
     }
   }
 
+  function defaultVisibleBars(instance, timeframe) {
+    const tf = Number(timeframe || 1);
+    const mobile = instance.host.clientWidth < 700;
+    if (mobile) {
+      if (tf <= 2) return 68;
+      if (tf <= 5) return 78;
+      if (tf <= 15) return 90;
+      return 100;
+    }
+    if (instance.id === "chartLarge") {
+      if (tf <= 2) return 125;
+      if (tf <= 5) return 145;
+      return 165;
+    }
+    if (tf <= 2) return 95;
+    if (tf <= 5) return 108;
+    return 120;
+  }
+
   function applyData(instance, data) {
     const previous = instance.data;
     const sameTimeframe = instance.timeframe === data.timeframe;
     const sameSymbol = instance.symbol === data.symbol;
-    const savedRange = sameTimeframe && sameSymbol ? instance.chart.timeScale().getVisibleLogicalRange() : null;
+    const currentRange = instance.chart.timeScale().getVisibleLogicalRange();
+    if (currentRange && instance.timeframe != null && instance.symbol) {
+      desktopViewportCache.set(`${instance.symbol}:${instance.timeframe}:${instance.id}`, { from: currentRange.from, to: currentRange.to });
+    }
+    const savedRange = sameTimeframe && sameSymbol ? currentRange : null;
     const { incoming, resolved: candles } = resolveDesktopCandles(instance, data);
     const last = candles.at(-1);
     const oldLast = previous.at(-1);
-    const canIncrement = sameTimeframe && sameSymbol && oldLast && last && incoming.length > 0 && candles.length >= previous.length && candles.length <= previous.length + 1;
+    const canIncrement = Boolean(
+      sameTimeframe && sameSymbol && oldLast && last && incoming.length > 0
+      && last.time >= oldLast.time
+      && candles.length >= previous.length
+      && candles.length <= previous.length + 1
+    );
 
     if (canIncrement) {
       instance.candleSeries.update(last);
@@ -1198,11 +1293,17 @@
     instance.ema55.applyOptions({ visible: Boolean(data.overlays?.emas) });
 
     if (instance.firstRender || !sameTimeframe || !sameSymbol) {
-      instance.userInteracted = false;
       instance.firstRender = false;
+      const viewportKey = `${data.symbol}:${data.timeframe}:${instance.id}`;
+      const remembered = desktopViewportCache.get(viewportKey);
+      instance.userInteracted = Boolean(remembered);
       requestAnimationFrame(() => {
+        if (remembered) {
+          instance.chart.timeScale().setVisibleLogicalRange(remembered);
+          return;
+        }
         const count = candles.length;
-        const visibleBars = instance.id === "chartLarge" ? 170 : 115;
+        const visibleBars = defaultVisibleBars(instance, data.timeframe);
         instance.chart.timeScale().setVisibleLogicalRange({
           from: Math.max(-4, count - visibleBars),
           to: count + (instance.id === "chartLarge" ? 10 : 6),

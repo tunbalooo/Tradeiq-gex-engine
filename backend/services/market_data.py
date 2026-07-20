@@ -2,10 +2,11 @@ import asyncio
 import logging
 import random
 import threading
+from statistics import median
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from math import sin
+from math import isfinite, sin
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,38 @@ def _pretty_price(record: Any, field: str) -> float:
         return float(value)
     return float(getattr(record, field)) / NANO
 
+
+
+
+def _plausible_live_ohlc(
+    open_px: float,
+    high_px: float,
+    low_px: float,
+    close_px: float,
+    reference: float | None,
+    tick_size: float,
+) -> bool:
+    """Reject corrupt one-second records before they can deform minute candles.
+
+    Databento reconnects can occasionally replay stale records and any malformed
+    OHLC value is especially destructive on a 1m/2m chart because it expands the
+    whole price scale.  The guard is deliberately generous enough for real
+    futures volatility while still rejecting impossible jumps and giant wicks.
+    """
+    values = (open_px, high_px, low_px, close_px)
+    if not all(isfinite(float(value)) and float(value) > 0 for value in values):
+        return False
+    if high_px < max(open_px, close_px) or low_px > min(open_px, close_px) or high_px < low_px:
+        return False
+    if reference is None or not isfinite(reference) or reference <= 0:
+        return True
+
+    allowed_move = max(reference * 0.015, max(float(tick_size), 1e-9) * 500)
+    if abs(open_px - reference) > allowed_move:
+        return False
+    if max(abs(high_px - reference), abs(low_px - reference), abs(close_px - reference)) > allowed_move:
+        return False
+    return True
 
 def _record_time(record: Any) -> datetime:
     return datetime.fromtimestamp(int(getattr(record, "ts_event")) / NANO, tz=timezone.utc)
@@ -82,6 +115,7 @@ def _sanitize_candles(candles: list[Candle], max_jump_ratio: float = 0.12) -> li
         return ordered
 
     clean: list[Candle] = [ordered[0]]
+    recent_ranges: list[float] = [max(ordered[0].high - ordered[0].low, 0.0)]
     for index in range(1, len(ordered) - 1):
         previous = clean[-1]
         current = ordered[index]
@@ -89,10 +123,20 @@ def _sanitize_candles(candles: list[Candle], max_jump_ratio: float = 0.12) -> li
         reference = max(abs(previous.close), 1e-9)
         jump = abs(current.open - previous.close) / reference
         return_jump = abs(following.open - current.close) / max(abs(current.close), 1e-9)
-        # Drop a single spike that immediately reverses. Preserve sustained repricing.
-        if jump > max_jump_ratio and return_jump > max_jump_ratio:
+        candle_range = max(current.high - current.low, 0.0)
+        body = abs(current.close - current.open)
+        typical_range = median([value for value in recent_ranges[-30:] if value > 0]) if any(value > 0 for value in recent_ranges[-30:]) else 0.0
+        giant_wick = bool(
+            typical_range > 0
+            and candle_range > max(typical_range * 18, reference * 0.012)
+            and body < max(typical_range * 5, candle_range * 0.35)
+        )
+        # Drop isolated regime spikes and giant one-bar wicks. Preserve sustained
+        # repricing and legitimate large-bodied news candles.
+        if giant_wick or (jump > max_jump_ratio and return_jump > max_jump_ratio):
             continue
         clean.append(current)
+        recent_ranges.append(candle_range)
     clean.append(ordered[-1])
     return clean
 
@@ -656,19 +700,51 @@ class DatabentoMarketDataService:
             return
         minute = _record_time(record).replace(second=0, microsecond=0)
         open_px, high_px, low_px, close_px = (_pretty_price(record, field) for field in ("open", "high", "low", "close"))
-        volume = int(record.volume)
+        volume = max(0, int(record.volume))
         with self._lock:
             if generation != self._generation:
                 return
-            if self.candles and self.candles[-1].time == minute:
-                last = self.candles[-1]
+
+            latest = self.candles[-1] if self.candles else None
+            reference = latest.close if latest else None
+            if not _plausible_live_ohlc(open_px, high_px, low_px, close_px, reference, profile.tick_size):
+                logger.warning(
+                    "Rejected malformed %s live OHLC record at %s: O=%s H=%s L=%s C=%s",
+                    profile.symbol, minute.isoformat(), open_px, high_px, low_px, close_px,
+                )
+                return
+
+            target_index: int | None = None
+            if latest and minute <= latest.time:
+                # Reconnects may replay a recent second. Merge it into the existing
+                # minute instead of appending an out-of-order candle. Older replayed
+                # records are ignored so snapshots always remain strictly ordered.
+                for index in range(len(self.candles) - 1, max(-1, len(self.candles) - 6), -1):
+                    if self.candles[index].time == minute:
+                        target_index = index
+                        break
+                if target_index is None and minute < latest.time:
+                    return
+
+            if target_index is not None:
+                existing = self.candles[target_index]
                 candle = Candle(
                     time=minute,
-                    open=last.open,
-                    high=round(max(last.high, high_px), profile.price_precision),
-                    low=round(min(last.low, low_px), profile.price_precision),
+                    open=existing.open,
+                    high=round(max(existing.high, high_px), profile.price_precision),
+                    low=round(min(existing.low, low_px), profile.price_precision),
                     close=round(close_px, profile.price_precision),
-                    volume=last.volume + volume,
+                    volume=existing.volume + volume,
+                )
+                self.candles[target_index] = candle
+            elif latest and latest.time == minute:
+                candle = Candle(
+                    time=minute,
+                    open=latest.open,
+                    high=round(max(latest.high, high_px), profile.price_precision),
+                    low=round(min(latest.low, low_px), profile.price_precision),
+                    close=round(close_px, profile.price_precision),
+                    volume=latest.volume + volume,
                 )
                 self.candles[-1] = candle
             else:
@@ -681,8 +757,9 @@ class DatabentoMarketDataService:
                     volume=volume,
                 )
                 self.candles.append(candle)
+
             self._live_overlay[minute] = candle.model_copy(deep=True)
-            self.current_price = round(close_px, profile.price_precision)
+            self.current_price = candle.close
             self.connected = True
             if not self.history_cached:
                 self.history_source = "live-pending-history"

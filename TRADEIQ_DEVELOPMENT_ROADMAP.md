@@ -1,6 +1,6 @@
 # TradeIQ Development Roadmap
 
-**Current release:** 3.0.0-institutional-decision-platform
+**Current release:** 3.0.1-chart-candle-hotfix
 
 ## Completed
 
@@ -10,6 +10,7 @@
 - [x] v2.8 Stable GEX snapshot and dealer interpretation
 - [x] v2.9 Partial/runner management and break-even stop
 - [x] v3.0 Institutional confidence, analytics and integrated UI
+- [x] v3.0.1 Small-timeframe candle integrity, price-first autoscale and viewport persistence
 
 ## Next — v3.1 Quality and Data Depth
 

@@ -1,6 +1,6 @@
 # TradeIQ Master Specification
 
-**Product version:** 3.0.0-institutional-decision-platform  
+**Product version:** 3.0.1-chart-candle-hotfix  
 **Document version:** 3.0  
 **Status:** Living source of truth
 
@@ -33,7 +33,7 @@ Terminal alternatives:
 
 A `WATCHING → WATCHING` event records a deterministic switch to a stronger secondary entry model.
 
-## 4. Implemented v3.0 Modules
+## 4. Implemented v3.0–v3.0.1 Modules
 
 - Live/historical market data service.
 - GEX service with snapshot-stable dealer levels.
@@ -46,6 +46,15 @@ A `WATCHING → WATCHING` event records a deterministic switch to a stronger sec
 - TP1 partial, break-even runner and excursion tracking.
 - Read-only model analytics.
 - Responsive desktop/mobile web UI.
+
+
+### Chart and market-data integrity (v3.0.1)
+
+- Visible candle OHLC controls automatic price scaling; distant GEX, Fib, zone and trade levels no longer compress 1m/2m candles.
+- Historical and live candles are normalized, deduplicated and sorted before aggregation.
+- Replayed out-of-order Databento records are merged into their original minute or ignored instead of being appended out of sequence.
+- Corrupt OHLC records and isolated giant wicks are rejected before reaching the chart.
+- Each symbol/timeframe/chart combination retains its own viewport.
 
 ## 5. Entry Models
 

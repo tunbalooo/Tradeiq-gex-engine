@@ -1,4 +1,9 @@
-# TradeIQ Institutional Decision Platform v3.0
+# TradeIQ Institutional Decision Platform v3.0.1
+
+
+## v3.0.1 chart and candlestick hotfix
+
+This release fixes small-timeframe chart distortion by separating candle autoscaling from distant analytical levels, rejecting malformed/replayed market records, sorting and deduplicating bars before aggregation, and remembering each symbol/timeframe viewport.
 
 TradeIQ is a FastAPI and browser-based futures decision-support dashboard for:
 

@@ -1,6 +1,6 @@
 # TradeIQ UI/UX Specification
 
-**Version:** 3.0
+**Version:** 3.0.1
 
 ## Design Language
 
@@ -47,6 +47,10 @@ Display the five highest models. Clearly distinguish:
 - Active stop after TP1: separate amber break-even line.
 - Targets remain fixed.
 - GEX levels remain stable until refresh.
+- Automatic vertical scaling follows visible candle OHLC only; off-screen GEX/Fib/zone/target levels must not flatten candles.
+- 1m/2m defaults show fewer bars so candle bodies remain readable.
+- Symbol/timeframe viewports are remembered independently.
+- Invalid, duplicated or out-of-order bars must never be rendered.
 
 ## Mobile
 

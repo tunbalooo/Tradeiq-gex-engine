@@ -1015,25 +1015,81 @@ function renderAll(setup, meta, session = state.session) {
   maybeRunClaudeOnStateChange(previousSetup, setup);
 }
 
-function aggregateCandles(candles, minutes) {
-  if (minutes <= 1) return candles.slice();
-  const bucketMs = minutes * 60 * 1000;
-  const result = [];
-  let current = null;
-  for (const candle of candles) {
-    const bucket = Math.floor(new Date(candle.time).getTime() / bucketMs) * bucketMs;
-    if (!current || current.bucket !== bucket) {
-      if (current) result.push(current.candle);
-      current = { bucket, candle: { ...candle, time: new Date(bucket).toISOString() } };
-    } else {
-      current.candle.high = Math.max(current.candle.high, candle.high);
-      current.candle.low = Math.min(current.candle.low, candle.low);
-      current.candle.close = candle.close;
-      current.candle.volume += candle.volume;
-    }
+function normaliseMarketCandle(candle) {
+  const timestamp = new Date(candle?.time).getTime();
+  const open = Number(candle?.open);
+  const high = Number(candle?.high);
+  const low = Number(candle?.low);
+  const close = Number(candle?.close);
+  const volume = Math.max(0, Number(candle?.volume || 0));
+  if (![timestamp, open, high, low, close, volume].every(Number.isFinite)) return null;
+  if (open <= 0 || close <= 0 || high < low || high < Math.max(open, close) || low > Math.min(open, close)) return null;
+  // A one-minute futures candle spanning more than eight percent is corrupt
+  // for every currently supported TradeIQ market. Reject it before charting.
+  const reference = Math.max(Math.abs(open), Math.abs(close), 1e-9);
+  if ((high - low) / reference > 0.08) return null;
+  return { time: new Date(timestamp).toISOString(), open, high, low, close, volume };
+}
+
+function normaliseMarketCandles(candles = []) {
+  const byTime = new Map();
+  candles.forEach((raw) => {
+    const candle = normaliseMarketCandle(raw);
+    if (candle) byTime.set(new Date(candle.time).getTime(), candle);
+  });
+  const ordered = [...byTime.values()].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+  if (ordered.length < 3) return ordered;
+
+  const clean = [ordered[0]];
+  const recentRanges = [Math.max(0, ordered[0].high - ordered[0].low)];
+  for (let index = 1; index < ordered.length - 1; index += 1) {
+    const previous = clean.at(-1);
+    const current = ordered[index];
+    const following = ordered[index + 1];
+    const reference = Math.max(Math.abs(previous.close), 1e-9);
+    const jump = Math.abs(current.open - previous.close) / reference;
+    const returnJump = Math.abs(following.open - current.close) / Math.max(Math.abs(current.close), 1e-9);
+    const candleRange = Math.max(0, current.high - current.low);
+    const body = Math.abs(current.close - current.open);
+    const sample = recentRanges.slice(-30).filter((value) => value > 0).sort((a, b) => a - b);
+    const middle = Math.floor(sample.length / 2);
+    const typicalRange = sample.length ? (sample.length % 2 ? sample[middle] : (sample[middle - 1] + sample[middle]) / 2) : 0;
+    const giantWick = typicalRange > 0
+      && candleRange > Math.max(typicalRange * 18, reference * 0.012)
+      && body < Math.max(typicalRange * 5, candleRange * 0.35);
+    if (giantWick || (jump > 0.08 && returnJump > 0.08)) continue;
+    clean.push(current);
+    recentRanges.push(candleRange);
   }
-  if (current) result.push(current.candle);
-  return result;
+  clean.push(ordered.at(-1));
+  return clean.slice(-2400);
+}
+
+function upsertBaseCandle(rawCandle) {
+  const candle = normaliseMarketCandle(rawCandle);
+  if (!candle) return false;
+  state.baseCandles = normaliseMarketCandles([...state.baseCandles, candle]);
+  return true;
+}
+
+function aggregateCandles(candles, minutes) {
+  const ordered = normaliseMarketCandles(candles);
+  if (minutes <= 1) return ordered;
+  const bucketMs = minutes * 60 * 1000;
+  const buckets = new Map();
+  for (const candle of ordered) {
+    const bucket = Math.floor(new Date(candle.time).getTime() / bucketMs) * bucketMs;
+    const current = buckets.get(bucket);
+    if (!current) {
+      buckets.set(bucket, { ...candle, time: new Date(bucket).toISOString() });
+      continue;
+    }
+    current.high = Math.max(current.high, candle.high);
+    current.low = Math.min(current.low, candle.low);
+    current.close = candle.close;
+    current.volume += candle.volume;
+  }
+  return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, candle]) => candle);
 }
 function ema(candles, period) {
   if (!candles.length) return [];
@@ -1105,7 +1161,7 @@ async function initialLoad() {
       fetch("/api/market/snapshot?timeframe=1&limit=1400").then((response) => response.json()),
       fetch("/api/dashboard").then(async (response) => response.ok ? response.json() : null),
     ]);
-    state.baseCandles = snapshot.candles || [];
+    state.baseCandles = normaliseMarketCandles(snapshot.candles || []);
     applySnapshotMetadata(snapshot);
     const initialMarket = health.market || {};
     state.marketWarming = Boolean(initialMarket.warming || (health.data_source === "databento" && !initialMarket.history_cached) || snapshot.warming);
@@ -1139,7 +1195,7 @@ async function reloadSyncedHistory() {
       return response.json();
     });
     if (snapshot.symbol && snapshot.symbol !== activeSymbol()) return false;
-    state.baseCandles = snapshot.candles || [];
+    state.baseCandles = normaliseMarketCandles(snapshot.candles || []);
     applySnapshotMetadata(snapshot);
     applyInstrument(snapshot.instrument);
     renderHeader(snapshot);
@@ -1180,12 +1236,7 @@ function connectWebSocket() {
       applyInstrument(incomingInstrument);
     }
     const candle = data.candle;
-    if (candle) {
-      const last = state.baseCandles.at(-1);
-      if (last && new Date(last.time).getTime() === new Date(candle.time).getTime()) state.baseCandles[state.baseCandles.length - 1] = candle;
-      else state.baseCandles.push(candle);
-      if (state.baseCandles.length > 2400) state.baseCandles.shift();
-    }
+    if (candle) upsertBaseCandle(candle);
     if (data.setup && data.meta) renderAll(data.setup, data.meta, data.session);
     else renderSyncingState({ price: candle?.close }, data.session);
     if (wasWarming && !state.marketWarming) {
@@ -1235,7 +1286,7 @@ async function switchMarket(symbol) {
       fetch("/api/market/snapshot?timeframe=1&limit=1400").then((item) => item.json()),
       fetch("/api/dashboard").then(async (item) => item.ok ? item.json() : null),
     ]);
-    state.baseCandles = snapshot.candles || [];
+    state.baseCandles = normaliseMarketCandles(snapshot.candles || []);
     applySnapshotMetadata(snapshot);
     state.hoverIndex = null;
     state.claude.text = "";
