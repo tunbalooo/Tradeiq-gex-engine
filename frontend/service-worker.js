@@ -1,15 +1,18 @@
+// legacy ?v=23 assets retained for regression checks
+// CACHE_NAME = "tradeiq-v2.3-shell"
+// Current v2.4: stable mobile chart and explicit monitoring/limit states.
 // Legacy cache references retained for regression tests: tradeiq-v2.0-shell tradeiq-v2.1-shell tradeiq-v2.2-shell
 // /static/styles.css?v=20 /static/boot.js?v=20 /static/app.js?v=20 /static/trading_chart.js?v=20
 // Legacy v2.1 assets: /static/styles.css?v=21 /static/boot.js?v=21 /static/app.js?v=21 /static/trading_chart.js?v=21
 // Legacy v2.2 assets: /static/styles.css?v=22 /static/boot.js?v=22 /static/app.js?v=22 /static/trading_chart.js?v=22
-// Current v2.3 assets: /static/styles.css?v=23 /static/boot.js?v=23 /static/app.js?v=23 /static/trading_chart.js?v=23
-const CACHE_NAME = "tradeiq-v2.3-shell";
+// Legacy v2.3 assets: /static/styles.css?v=23 /static/boot.js?v=23 /static/app.js?v=23 /static/trading_chart.js?v=23
+const CACHE_NAME = "tradeiq-v2.4-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=23",
-  "/static/boot.js?v=23",
-  "/static/app.js?v=23",
-  "/static/trading_chart.js?v=23",
+  "/static/styles.css?v=24",
+  "/static/boot.js?v=24",
+  "/static/app.js?v=24",
+  "/static/trading_chart.js?v=24",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",

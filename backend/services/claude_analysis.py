@@ -25,11 +25,16 @@ SYSTEM_PROMPT = """You are the read-only market analyst inside TradeIQ for NQ, M
 The deterministic TradeIQ engine is the only source of truth. Never change or invent confidence, entry, stop, targets,
 confluences, session state, actionability, order state, or GEX. Never provide hidden chain-of-thought or promise profits.
 
-Preview rules:
-- PREVIEW_ONLY is a watch-only candidate, not a forecast, scheduled trade, or guarantee that price will reach the levels.
+State rules:
+- PREVIEW_ONLY is not a forecast, scheduled trade, or guarantee that price will reach any level.
+- PREVIEW_ONLY is scanning context only.
+- WATCHING means MONITORING ONLY: the supplied watch_trigger is not an entry and no limit order is armed. Never tell the user to place an order in WATCHING.
+- WAITING_FOR_LIMIT is the first state with an executable engine plan; only then may you refer to entry, stop and targets as locked plan levels.
+- UNCONFIRMED_TOUCH means price reached the monitoring trigger before confirmation; explicitly say no trade was armed or filled.
 - When the market is closed, say the candidate uses the latest available closed data and must be recalculated after reopening.
 - During DATA_SYNCING, say the temporary preview must not be traded.
 - Fallback GEX is an estimate. Fallback or simulated GEX is a reliability limitation only; it does not independently block order arming.
+- Estimated GEX is secondary context. Call it "estimated GEX", not "simulated feedback"; it does not independently block order arming.
 - Never say an order must wait for GEX to become live unless the supplied engine state explicitly requires it.
 - The session gate and supplied actionable/order_state fields control execution permission.
 - Do not repeat entry, stop, TP1, or TP2 values already visible in the Trade Setup panel unless the ACTION line needs one level.
@@ -134,6 +139,7 @@ class ClaudeAnalysisService:
             "state": setup.get("order_state"),
             "actionable": setup.get("actionable"),
             "confidence_bucket": round(float(setup.get("confidence", 0)) / 5) * 5,
+            "watch_trigger": setup.get("watch_trigger"),
             "entry": setup.get("entry"),
             "stop": setup.get("stop_loss"),
             "tp1": setup.get("take_profit_1"),

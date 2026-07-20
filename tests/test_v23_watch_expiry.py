@@ -36,7 +36,7 @@ def _candidate(**updates):
 
 
 def _candle(at: datetime) -> Candle:
-    return Candle(time=at, open=100, high=101, low=99, close=100, volume=1)
+    return Candle(time=at, open=104, high=105, low=103, close=104, volume=1)
 
 
 def test_watch_deadline_does_not_move_during_refresh(monkeypatch):
@@ -59,7 +59,8 @@ def test_watch_deadline_does_not_move_during_refresh(monkeypatch):
             _candle(clock["now"]),
         )
         assert watching.order_state == "WATCHING"
-        assert watching.entry == 100.0
+        assert watching.entry is None
+        assert watching.watch_trigger == 100.0
         assert watching.watch_started_at == start
         assert watching.watch_expires_at == original_expiry
         assert watching.valid_until == original_expiry

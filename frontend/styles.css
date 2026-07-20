@@ -401,3 +401,12 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 .tradeiq-pseudo-fullscreen .tv-chart-layout,.tradeiq-pseudo-fullscreen .tv-workstation,.tradeiq-pseudo-fullscreen .tv-chart-surface,.tradeiq-pseudo-fullscreen .tv-chart-host{height:100%!important;min-height:0!important}
 .tradeiq-pseudo-fullscreen .tv-chart-rail,.tradeiq-pseudo-fullscreen .tv-chart-setup{display:none!important}
 @media(max-width:900px){.chart-data-state{top:44px;font-size:9px}.tradeiq-pseudo-fullscreen .tradeiq-chart-bar{display:flex!important}.tradeiq-pseudo-fullscreen .chart-command-bar{display:flex!important}.tradeiq-pseudo-fullscreen .tv-chart-surface.full{height:calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 84px)!important}}
+
+
+/* v2.4: one official Lightweight Charts engine across desktop and mobile. */
+@media (max-width:900px){
+  .tv-chart-host{touch-action:none;overscroll-behavior:contain}
+  .tv-chart-host table{touch-action:none}
+  .tv-chart-surface.full{min-height:320px}
+  .chart-data-state{pointer-events:none}
+}

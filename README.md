@@ -185,3 +185,12 @@ Maximum Pain is calculated by minimizing aggregate option-holder intrinsic payou
 
 A `WATCHING` candidate receives immutable `watch_started_at` and `watch_expires_at` timestamps. Engine refreshes may update confidence and confluence context but cannot renew the watch. When the deadline passes without confirmation, the watch expires and the identical candidate remains suppressed until market structure produces a materially new setup.
 
+
+
+## v2.4 stable mobile chart and unambiguous execution states
+
+- iPhone, iPad and desktop now use the same official TradingView Lightweight Charts 5.2 engine. The custom mobile Canvas renderer remains only as an emergency CDN fallback.
+- Realtime bars use `series.update`; full-history replacement uses `setData` only when required. User zoom/pan is preserved across refreshes, and the chart no longer auto-scales to distant GEX levels.
+- `WATCHING` is presented as **MONITORING ONLY**. The monitored trigger is stored separately as `watch_trigger`; entry, stop and targets remain empty until `WAITING_FOR_LIMIT`.
+- If price touches the monitor trigger before confirmation, the state becomes `UNCONFIRMED_TOUCH`: no order and no fill are recorded.
+- `WAITING_FOR_LIMIT` is the first state that displays the locked limit, SL, TP1, TP2 and risk box. A later touch changes the state to `FILLED` while those levels remain fixed.

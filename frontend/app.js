@@ -39,8 +39,13 @@ function hasWatchingPlan(setup) {
     setup
     && setup.order_state === "WATCHING"
     && ["LONG", "SHORT"].includes(setup.direction)
-    && Number.isFinite(Number(setup.entry))
+    && Number.isFinite(Number(setup.watch_trigger))
   );
+}
+
+
+function watchTrigger(setup) {
+  return Number.isFinite(Number(setup?.watch_trigger)) ? Number(setup.watch_trigger) : null;
 }
 
 // Legacy v2.0 assertion reference: "Entry (locks when armed)"
@@ -530,7 +535,7 @@ function renderSession(session) {
 }
 
 function previewExplanation(setup, { syncing = false, marketClosed = false } = {}) {
-  if (hasWatchingPlan(setup)) return `Watching ${setup.direction.toLowerCase()} at ${fmt(setup.entry)}. The watch level is fixed; no order is armed. SL, TP and the risk box appear only after confirmation.`;
+  if (hasWatchingPlan(setup)) return `Monitoring ${setup.direction.toLowerCase()} near ${fmt(watchTrigger(setup))}. This trigger is not an entry and no limit order is armed. Wait for LIMIT READY before considering the plan.`;
   if (syncing) return "Temporary levels from local placeholder data while Databento history syncs. Do not trade this preview.";
   if (marketClosed) return "Watch-only candidate from the latest closed data. It can change or disappear when live trading resumes.";
   if (!setup.entry_valid) return "Candidate only: the proposed level is not currently a valid resting limit.";
@@ -552,11 +557,12 @@ function renderTradeSetup(setup) {
   const lockedPlan = hasLockedTradePlan(setup);
   const syncing = state.marketWarming || setup.status === "DATA_SYNCING";
   const marketClosed = state.session && !state.session.is_open;
-  const quality = watchingPlan ? `Watching ${setup.direction.charAt(0)}${setup.direction.slice(1).toLowerCase()}` :
+  const quality = watchingPlan ? `Monitoring ${setup.direction.charAt(0)}${setup.direction.slice(1).toLowerCase()}` :
     setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch Expired" : "Scanning") :
     setup.order_state === "WAITING_FOR_LIMIT" ? "Limit Armed" :
     setup.order_state === "FILLED" ? "Position Filled" :
     setup.order_state === "TP1_HIT" ? "TP1 Hit — Running" :
+    setup.order_state === "UNCONFIRMED_TOUCH" ? "No Trade — Trigger Touched Early" :
     setup.order_state.replaceAll("_", " ");
   $("probabilityLabel").textContent = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : quality;
   $("probabilityLabel").style.color = gaugeColor;
@@ -569,32 +575,34 @@ function renderTradeSetup(setup) {
     : setup.actionable
       ? `${aligned} / ${coreKeys.length} core confluences aligned — actionable`
       : watchingPlan
-        ? `${aligned} / ${coreKeys.length} aligned — watching for final confirmation`
+        ? `${aligned} / ${coreKeys.length} aligned — monitoring only, no order`
         : `${aligned} / ${coreKeys.length} core confluences aligned — scanning`;
 
   const label = watchingPlan
-    ? `WATCHING ${setup.direction} @ ${fmt(setup.entry)}`
+    ? `MONITORING ${setup.direction}`
     : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "WATCH EXPIRED" : "SCANNING") : `${setup.direction} ${setup.order_state.replaceAll("_", " ")}`;
   $("setupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
   $("setupLabel").className = `${syncing || marketClosed ? "a" : classForDirection(setup.direction)} mono setup-side-label`;
   $("setupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("setupDirection").className = `v ${classForDirection(setup.direction)}`;
-  $("entryLabel").textContent = watchingPlan ? "Watching Entry" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
-  $("setupEntry").textContent = watchingPlan || lockedPlan ? fmt(setup.entry) : "—";
+  $("entryLabel").textContent = watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
+  $("setupEntry").textContent = watchingPlan ? fmt(watchTrigger(setup)) : lockedPlan ? fmt(setup.entry) : "—";
   $("setupStop").textContent = lockedPlan ? fmt(setup.stop_loss) : "—";
   $("setupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("setupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("setupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
   $("setupTp2Source").textContent = lockedPlan ? (setup.target_sources?.tp2 || "—") : "—";
   $("setupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : watchingPlan ? `Watching ${setup.direction.toLowerCase()} at ${fmt(setup.entry)}` : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch expired — waiting for a new candidate" : "Scanning — no setup") : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
+  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : watchingPlan ? `Monitoring ${setup.direction.toLowerCase()} · do not place a limit yet` : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch expired — waiting for a new candidate" : "Scanning — no setup") :
+    setup.order_state === "UNCONFIRMED_TOUCH" ? "No trade — trigger was touched before confirmation" :
+    setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
   $("setupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
   $("setupCluster").className = `v ${setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
-  $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Watch Expires" : "Valid Until";
+  $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Monitoring Ends" : "Valid Until";
   $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
   renderChartTradeSetup(setup, {
     confidence,
@@ -629,15 +637,15 @@ function renderChartTradeSetup(setup, context) {
     : setup.actionable
       ? `${aligned} / ${coreCount} aligned — actionable`
       : watchingPlan
-        ? `${aligned} / ${coreCount} aligned — watching for final confirmation`
+        ? `${aligned} / ${coreCount} aligned — monitoring only, no order`
         : `${aligned} / ${coreCount} aligned — scanning`;
 
   $("chartSetupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
   $("chartSetupLabel").className = `${syncing ? "a" : marketClosed ? "r" : classForDirection(setup.direction)} mono`;
   $("chartSetupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
   $("chartSetupDirection").className = classForDirection(setup.direction);
-  $("chartEntryLabel").textContent = watchingPlan ? "Watching Entry" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
-  $("chartSetupEntry").textContent = watchingPlan || lockedPlan ? fmt(setup.entry) : "—";
+  $("chartEntryLabel").textContent = watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
+  $("chartSetupEntry").textContent = watchingPlan ? fmt(watchTrigger(setup)) : lockedPlan ? fmt(setup.entry) : "—";
   $("chartSetupStop").textContent = lockedPlan ? fmt(setup.stop_loss) : "—";
   $("chartSetupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
@@ -650,7 +658,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupCluster").className = setup.signals.gex_ote_zone_cluster ? "g" : "a";
   $("chartSetupSession").textContent = state.session?.display_name || "—";
   $("chartSetupSession").className = marketClosed ? "r" : "g";
-  $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Watch Expires" : "Valid Until";
+  $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Monitoring Ends" : "Valid Until";
   $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
   const previewNotice = $("chartPreviewNotice");
   if (previewNotice) {
@@ -660,7 +668,7 @@ function renderChartTradeSetup(setup, context) {
     previewNotice.classList.toggle("closed", Boolean(marketClosed));
     previewNotice.classList.toggle("watching", Boolean(watchingPlan));
     const title = $("chartPreviewTitle");
-    if (title) title.textContent = watchingPlan ? `WATCHING ${setup.direction} @ ${fmt(setup.entry)}` : "SCANNING — NO ACTIVE SETUP";
+    if (title) title.textContent = watchingPlan ? `MONITORING ${setup.direction}` : "SCANNING — NO ACTIVE SETUP";
     if (informational && $("chartPreviewReason")) $("chartPreviewReason").textContent = previewExplanation(setup, { syncing, marketClosed });
   }
 }
@@ -697,7 +705,7 @@ function renderGexSummary(setup) {
     $("mobileGexBadge").className = `source-chip ${estimated ? "estimated" : ""}`;
     $("mobileGexNeedle").style.left = `${needlePosition}%`;
     $("mobileGexNote").textContent = estimated
-      ? "Estimated fallback GEX: use the price levels as context, not as confirmed options positioning. It never changes the confidence score."
+      ? "Estimated GEX: use these levels as secondary context, not as confirmed options positioning. The estimate does not change the confidence score."
       : `Native parent-market gamma levels applied to ${activeSymbol()}. GEX remains informational and never changes the confidence score.`;
     window.setTimeout(() => drawGexStrikeChart($("mobileGexStrikeChart"), gex, true), 0);
   }

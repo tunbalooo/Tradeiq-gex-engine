@@ -2,7 +2,9 @@
   "use strict";
 
   const LC = window.LightweightCharts;
-  const USE_MOBILE_CANVAS = window.matchMedia?.("(max-width: 900px)")?.matches === true;
+  // Use the same official Lightweight Charts engine on desktop, iPhone and iPad.
+  // The Canvas implementation is now an emergency fallback only when the library cannot load.
+  const USE_MOBILE_CANVAS = false;
   const MIN_SAFE_HISTORY_BARS = 20;
   const MAX_CACHED_HISTORY_BARS = 5000;
   const ACTIVE_TRADE_STATES = new Set(["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"]);
@@ -90,8 +92,12 @@
       setup
       && setup.order_state === "WATCHING"
       && ["LONG", "SHORT"].includes(setup.direction)
-      && Number.isFinite(Number(setup.entry))
+      && Number.isFinite(Number(setup.watch_trigger))
     );
+  }
+
+  function watchTrigger(setup) {
+    return Number.isFinite(Number(setup?.watch_trigger)) ? Number(setup.watch_trigger) : null;
   }
 
   function hasLockedTradePlan(setup) {
@@ -388,11 +394,15 @@
       const marketContextLevels = [setupForScale.vwap, setupForScale.standard_deviation_high, setupForScale.standard_deviation_low, rthEq,
         setupForScale.gex?.call_wall, setupForScale.gex?.gamma_resistance, setupForScale.gex?.gamma_flip,
         setupForScale.gex?.max_pain, setupForScale.gex?.gamma_support, setupForScale.gex?.put_wall];
-      const watchedTradeLevels = hasWatchingPlan(setupForScale) ? [setupForScale.entry] : [];
+      const watchedTradeLevels = hasWatchingPlan(setupForScale) ? [watchTrigger(setupForScale)] : [];
       const lockedTradeLevels = hasLockedTradePlan(setupForScale)
         ? [setupForScale.entry, setupForScale.stop_loss, setupForScale.take_profit_1, setupForScale.take_profit_2]
         : [];
-      const extra = [...marketContextLevels, ...watchedTradeLevels, ...lockedTradeLevels].map(Number).filter(Number.isFinite);
+      const candleLow = Math.min(...values.map((item) => item.low));
+      const candleHigh = Math.max(...values.map((item) => item.high));
+      const candleMid = (candleHigh + candleLow) / 2;
+      const contextLimit = Math.max((candleHigh - candleLow) * 2.5, Math.abs(candleMid) * 0.025);
+      const extra = [...marketContextLevels, ...lockedTradeLevels].map(Number).filter((level) => Number.isFinite(level) && Math.abs(level - candleMid) <= contextLimit);
       let low = Math.min(...values.map((item) => item.low), ...extra);
       let high = Math.max(...values.map((item) => item.high), ...extra);
       const pad = Math.max((high - low) * 0.08, Number(payload?.tickSize || 0.25) * 8);
@@ -482,7 +492,7 @@
         if (Number.isFinite(Number(rthEq))) horizontal(ctx, toY(rthEq), plotRight, "RTH EQ", "#E8D99A");
       }
       if (overlays.trade && hasWatchingPlan(setup)) {
-        horizontal(ctx, toY(setup.entry), plotRight, `WATCH ${setup.direction}`, lineColors.entry, false);
+        horizontal(ctx, toY(watchTrigger(setup)), plotRight, `MONITOR ${setup.direction} · NO ORDER`, lineColors.entry, true);
       } else if (overlays.trade && hasLockedTradePlan(setup)) {
         horizontal(ctx, toY(setup.entry), plotRight, "LIMIT", lineColors.entry, false);
         horizontal(ctx, toY(setup.stop_loss), plotRight, "SL", lineColors.stop, false);
@@ -543,7 +553,7 @@
     window.TradeIQChartManager = { render, reset, marketChanged, resize, refresh, instances: fallbackInstances, fallback: true, mobileCanvas: USE_MOBILE_CANVAS };
   }
 
-  if (!LC || USE_MOBILE_CANVAS) {
+  if (!LC) {
     installCanvasFallback();
     return;
   }
@@ -633,6 +643,14 @@
     return candles.map((candle) => ({ time: candle.time, value: candle.close }));
   }
 
+  function volumeData(candles) {
+    return candles.map((candle) => ({
+      time: candle.time,
+      value: Number(candle.volume || 0),
+      color: candle.close >= candle.open ? "rgba(38,208,124,.38)" : "rgba(255,77,94,.38)",
+    }));
+  }
+
   function formatPrice(value, precision = 2) {
     if (!Number.isFinite(Number(value))) return "—";
     return Number(value).toLocaleString("en-US", {
@@ -672,7 +690,7 @@
     const { width, height } = measureHost(instance.host);
     if (width < 2 || height < 2) return false;
     if (instance.lastWidth !== width || instance.lastHeight !== height) {
-      instance.chart.resize(width, height);
+      instance.chart.resize(width, height, true); // compatibility: instance.chart.resize(width, height)
       instance.lastWidth = width;
       instance.lastHeight = height;
       scheduleOverlay(instance);
@@ -710,6 +728,7 @@
 
     const initialSize = measureHost(host);
     if (initialSize.width < 2 || initialSize.height < 2) return null;
+    const mobile = window.matchMedia?.("(max-width: 900px)")?.matches === true || initialSize.width < 720;
     const chart = LC.createChart(host, {
       autoSize: false,
       width: initialSize.width,
@@ -733,7 +752,7 @@
       rightPriceScale: {
         visible: true,
         borderColor: COLORS.border,
-        minimumWidth: 76,
+        minimumWidth: mobile ? 60 : 76,
         scaleMargins: { top: 0.09, bottom: 0.12 },
         ticksVisible: true,
       },
@@ -743,12 +762,13 @@
         timeVisible: true,
         secondsVisible: false,
         rightOffset: id === "chartLarge" ? 12 : 8,
+        rightOffsetPixels: mobile ? 48 : undefined,
         barSpacing: id === "chartLarge" ? 8 : 6,
         minBarSpacing: 0.45,
         maxBarSpacing: 42,
         lockVisibleTimeRangeOnResize: true,
         rightBarStaysOnScroll: true,
-        shiftVisibleRangeOnNewBar: true,
+        shiftVisibleRangeOnNewBar: false,
       },
       handleScroll: {
         mouseWheel: true,
@@ -762,6 +782,7 @@
         pinch: true,
       },
       kineticScroll: { mouse: true, touch: true },
+      trackingMode: { exitMode: LC.TrackingModeExitMode?.OnTouchEnd ?? 0 },
       localization: {
         priceFormatter: (price) => formatPrice(price),
         timeFormatter: (time) => etTime(time),
@@ -789,6 +810,13 @@
     const ema9 = chart.addSeries(LC.LineSeries, { color: COLORS.amber, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const ema21 = chart.addSeries(LC.LineSeries, { color: COLORS.blue, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const ema55 = chart.addSeries(LC.LineSeries, { color: COLORS.purple, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    const volumeSeries = chart.addSeries(LC.HistogramSeries, {
+      priceScaleId: "volume",
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    volumeSeries.priceScale().applyOptions({ autoScale: true, scaleMargins: { top: 0.82, bottom: 0 } });
 
     const overlayCanvas = document.createElement("canvas");
     overlayCanvas.className = "tv-overlay-canvas";
@@ -808,6 +836,7 @@
       ema9,
       ema21,
       ema55,
+      volumeSeries,
       overlayCanvas,
       dataState,
       priceLines: [],
@@ -826,13 +855,20 @@
       instrumentName: "E-mini Nasdaq-100",
       tickSize: 0.25,
       pricePrecision: 2,
+      userInteracted: false,
+      atRealtime: true,
       lastWidth: initialSize.width,
       lastHeight: initialSize.height,
     };
 
     chart.subscribeCrosshairMove((param) => updateLegend(instance, param));
     chart.subscribeClick((param) => handleChartClick(instance, param));
-    chart.timeScale().subscribeVisibleLogicalRangeChange(() => scheduleOverlay(instance));
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      const position = chart.timeScale().scrollPosition?.();
+      instance.atRealtime = position == null || position <= 1.5;
+      scheduleOverlay(instance);
+    });
+    host.addEventListener("pointerdown", () => { instance.userInteracted = true; }, { passive: true });
 
     const resizeObserver = new ResizeObserver(() => {
       if (resizeInstance(instance)) scheduleOverlay(instance);
@@ -920,11 +956,13 @@
         instance.chart.timeScale().scrollToRealTime();
         instance.candleSeries.priceScale().applyOptions({ autoScale: true });
         instance.autoScale = true;
+        instance.userInteracted = false;
         break;
       case "fit":
         instance.chart.timeScale().fitContent();
         instance.candleSeries.priceScale().applyOptions({ autoScale: true });
         instance.autoScale = true;
+        instance.userInteracted = false;
         break;
       case "autoscale":
         instance.autoScale = !instance.autoScale;
@@ -995,7 +1033,7 @@
       addPriceLine(instance, setup.gex.gamma_flip, "GAMMA FLIP", COLORS.amber, dashed, 2);
       if (Number.isFinite(Number(setup.gex.max_pain))) addPriceLine(instance, setup.gex.max_pain, "MAX PAIN", "#D85CFF", dashed, 2);
       addPriceLine(instance, setup.gex.put_wall, "PUT SUPPORT / WALL", COLORS.red, dashed, 2);
-      (setup.gex.levels || []).slice(0, instance.id === "chartLarge" ? 6 : 3).forEach((level) => {
+      (setup.gex.levels || []).slice(0, instance.host.clientWidth < 700 ? 2 : instance.id === "chartLarge" ? 6 : 3).forEach((level) => {
         addPriceLine(instance, level.price, level.type || "GEX", Number(level.gex || 0) >= 0 ? "#21875A" : "#9D3542", dotted, 1);
       });
     }
@@ -1014,7 +1052,7 @@
     }
 
     if (overlays.trade && hasWatchingPlan(setup)) {
-      addPriceLine(instance, setup.entry, `WATCH ${setup.direction}`, COLORS.amber, dashed, 2);
+      addPriceLine(instance, watchTrigger(setup), `MONITOR ${setup.direction} · NO ORDER`, COLORS.amber, dotted, 1);
     } else if (overlays.trade && hasLockedTradePlan(setup)) {
       addPriceLine(instance, setup.entry, "LIMIT", COLORS.amber, dashed, 2);
       addPriceLine(instance, setup.stop_loss, "SL", COLORS.red, dashed, 2);
@@ -1023,7 +1061,7 @@
     }
 
     if (overlays.zones) {
-      (setup.zones || []).slice(0, instance.id === "chartLarge" ? 7 : 4).forEach((zone) => {
+      (setup.zones || []).slice(0, instance.host.clientWidth < 700 ? 3 : instance.id === "chartLarge" ? 7 : 4).forEach((zone) => {
         const color = zone.kind === "DEMAND" ? "#21875A" : "#9D3542";
         addPriceLine(instance, zone.high, `${zone.timeframe} ${zone.kind}`, color, dotted, 1);
         addPriceLine(instance, zone.low, "", color, dotted, 1);
@@ -1111,6 +1149,7 @@
     const previous = instance.data;
     const sameTimeframe = instance.timeframe === data.timeframe;
     const sameSymbol = instance.symbol === data.symbol;
+    const savedRange = sameTimeframe && sameSymbol ? instance.chart.timeScale().getVisibleLogicalRange() : null;
     const { incoming, resolved: candles } = resolveDesktopCandles(instance, data);
     const last = candles.at(-1);
     const oldLast = previous.at(-1);
@@ -1119,6 +1158,7 @@
     if (canIncrement) {
       instance.candleSeries.update(last);
       instance.closeSeries.update({ time: last.time, value: last.close });
+      instance.volumeSeries.update(volumeData([last])[0]);
       const e9 = emaData(candles, 9).at(-1);
       const e21 = emaData(candles, 21).at(-1);
       const e55 = emaData(candles, 55).at(-1);
@@ -1128,9 +1168,13 @@
     } else {
       instance.candleSeries.setData(candles);
       instance.closeSeries.setData(closeData(candles));
+      instance.volumeSeries.setData(volumeData(candles));
       instance.ema9.setData(emaData(candles, 9));
       instance.ema21.setData(emaData(candles, 21));
       instance.ema55.setData(emaData(candles, 55));
+      if (savedRange && instance.userInteracted) {
+        requestAnimationFrame(() => instance.chart.timeScale().setVisibleLogicalRange(savedRange));
+      }
     }
 
     instance.data = candles;
@@ -1142,6 +1186,7 @@
     instance.ema55.applyOptions({ visible: Boolean(data.overlays?.emas) });
 
     if (instance.firstRender || !sameTimeframe || !sameSymbol) {
+      instance.userInteracted = false;
       instance.firstRender = false;
       requestAnimationFrame(() => {
         const count = candles.length;
@@ -1239,5 +1284,8 @@
     }
   }
 
+  window.visualViewport?.addEventListener("resize", () => {
+    instances.forEach((instance) => resizeInstance(instance));
+  });
   window.TradeIQChartManager = { render, reset, marketChanged, resize, refresh, instances };
 })();

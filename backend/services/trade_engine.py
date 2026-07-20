@@ -13,7 +13,7 @@ from backend.services.setup_service import build_candidate_setup
 from backend.services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
-TERMINAL = {"TP2_HIT", "STOPPED", "EXPIRED", "INVALIDATED"}
+TERMINAL = {"TP2_HIT", "STOPPED", "EXPIRED", "INVALIDATED", "UNCONFIRMED_TOUCH"}
 WATCH_MIN_CONFIDENCE = 55.0
 
 
@@ -68,7 +68,7 @@ class TradeEngineService:
         self._expired_watch = {
             "symbol": watching.symbol,
             "direction": watching.direction,
-            "entry": self._finite_number(watching.entry),
+            "entry": self._finite_number(watching.watch_trigger if watching.watch_trigger is not None else watching.entry),
             "cluster_low": self._finite_number(watching.cluster_low),
             "cluster_high": self._finite_number(watching.cluster_high),
             "zone_timeframe": watching.selected_zone_timeframe,
@@ -185,22 +185,35 @@ class TradeEngineService:
         now = self._utcnow()
         watch_expires_at = now + timedelta(minutes=settings.setup_expiry_minutes)
         self._expired_watch = None
+        trigger = self._finite_number(candidate.entry)
         watching = candidate.model_copy(deep=True, update={
             "setup_id": setup_id or str(uuid4()),
             "timestamp": timestamp or now,
             "valid_until": watch_expires_at,
             "watch_started_at": now,
             "watch_expires_at": watch_expires_at,
+            "watch_trigger": trigger,
             "order_state": "WATCHING",
-            "status": f"WATCHING_{candidate.direction}",
+            "status": f"MONITORING_{candidate.direction}",
             "actionable": False,
             "armed_at": None,
             "armed_candle_time": None,
+            # A monitoring state is deliberately not an executable plan. Keeping
+            # entry/SL/TP empty prevents the UI or a downstream integration from
+            # treating the trigger as a resting limit before confirmation.
+            "entry": None,
+            "stop_loss": None,
+            "take_profit_1": None,
+            "take_profit_2": None,
+            "risk_reward": None,
+            "tp1_r": None,
+            "tp2_r": None,
+            "target_sources": {},
             "last_processed_candle_time": candle.time,
         })
         storage_service.transition(
-            watching, "PREVIEW_ONLY", "WATCHING", watching.entry, candle.time,
-            f"TradeIQ is watching a {watching.direction.lower()} candidate at {watching.entry:,.2f}; no order is armed.",
+            watching, "PREVIEW_ONLY", "WATCHING", trigger, candle.time,
+            f"TradeIQ is monitoring a {watching.direction.lower()} candidate near {trigger:,.2f}; this is not a limit order.",
             "warning",
         )
         return watching
@@ -278,6 +291,19 @@ class TradeEngineService:
                 watch_expires_at=watch_expires_at,
             )
 
+        # A monitored trigger is not a resting order. If price reaches it before
+        # the deterministic engine confirms the full plan, record an unconfirmed
+        # touch rather than pretending that a fill occurred or showing stale TP/SL.
+        trigger = self._finite_number(watching.watch_trigger)
+        new_closed_candle = watching.last_processed_candle_time is None or candle.time > watching.last_processed_candle_time
+        if new_closed_candle and trigger is not None and candle.low <= trigger <= candle.high:
+            self._remember_expired_watch(watching)
+            return self._transition(
+                watching, "UNCONFIRMED_TOUCH", candle,
+                "Price touched the monitoring trigger before the setup was confirmed. No order was armed and no fill is recorded.",
+                actionable=False, closed_at=now, outcome="UNCONFIRMED_TOUCH",
+            )
+
         if not same_direction or not self._is_watch_candidate(candidate):
             replacement = self._evaluate_candidate(candidate, candle)
             if replacement.order_state == "PREVIEW_ONLY":
@@ -292,11 +318,12 @@ class TradeEngineService:
         # confidence and confluence diagnostics are refreshed while confirmation develops.
         refreshed = self._refresh_context(watching, candidate)
         return refreshed.model_copy(update={
-            "status": f"WATCHING_{watching.direction}",
+            "status": f"MONITORING_{watching.direction}",
             "order_state": "WATCHING",
             "actionable": False,
             "watch_started_at": watching.watch_started_at or watching.timestamp,
             "watch_expires_at": watch_expires_at,
+            "watch_trigger": watching.watch_trigger,
             "valid_until": watch_expires_at,
             "last_processed_candle_time": candle.time,
         })
@@ -335,14 +362,16 @@ class TradeEngineService:
         state = active.order_state
         if state == "WAITING_FOR_LIMIT" and now >= active.valid_until:
             return self._transition(active, "EXPIRED", candle, "The resting limit was not filled before expiry.", actionable=False, closed_at=now, outcome="EXPIRED")
-        if state == "WAITING_FOR_LIMIT" and candidate.direction != active.direction and candidate.confidence >= settings.setup_actionable_score:
-            return self._transition(active, "INVALIDATED", candle, "A strong opposite-direction setup invalidated the unfilled plan.", actionable=False, closed_at=now, outcome="OPPOSITE_SETUP")
-        if state == "WAITING_FOR_LIMIT" and (candidate.confidence < 50 or not candidate.signals.get("gex_alignment") or candidate.cluster_score < .35):
-            return self._transition(active, "INVALIDATED", candle, "The original confluence cluster was lost before entry.", actionable=False, closed_at=now, outcome="CONFLUENCE_LOST")
-
         if state == "WAITING_FOR_LIMIT":
             touched_entry = candle.low <= active.entry <= candle.high
+            # A locked resting limit is evaluated before fresh context can cancel it.
+            # This prevents the exact fill candle from being mislabeled INVALIDATED
+            # merely because confidence/GEX/cluster values changed after price arrived.
             if not touched_entry:
+                if candidate.direction != active.direction and candidate.confidence >= settings.setup_actionable_score:
+                    return self._transition(active, "INVALIDATED", candle, "A strong opposite-direction setup invalidated the unfilled plan.", actionable=False, closed_at=now, outcome="OPPOSITE_SETUP")
+                if candidate.confidence < 50 or not candidate.signals.get("gex_alignment") or candidate.cluster_score < .35:
+                    return self._transition(active, "INVALIDATED", candle, "The original confluence cluster was lost before entry.", actionable=False, closed_at=now, outcome="CONFLUENCE_LOST")
                 return active.model_copy(update={"last_processed_candle_time": candle.time})
             stop_touched = candle.low <= active.stop_loss <= candle.high
             if stop_touched:
@@ -374,7 +403,7 @@ class TradeEngineService:
             return setup.tp2_r or setup.risk_reward or 2.0
         if setup.order_state == "STOPPED":
             return -1.0
-        if setup.order_state == "EXPIRED" or setup.order_state == "INVALIDATED":
+        if setup.order_state in {"EXPIRED", "INVALIDATED", "UNCONFIRMED_TOUCH"}:
             return 0.0
         return None
 

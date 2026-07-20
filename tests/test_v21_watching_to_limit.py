@@ -40,8 +40,9 @@ def test_watching_entry_stays_fixed_until_confirmation(monkeypatch):
     refreshed = service._advance_watching(watching, _candidate(entry=103.0, confidence=66.0), candle)
 
     assert refreshed.order_state == "WATCHING"
-    assert refreshed.status == "WATCHING_LONG"
-    assert refreshed.entry == 100.0
+    assert refreshed.status == "MONITORING_LONG"
+    assert refreshed.entry is None
+    assert refreshed.watch_trigger == 100.0
     assert refreshed.confidence == 66.0
 
 
@@ -70,9 +71,9 @@ def test_watching_promotes_to_locked_limit(monkeypatch):
 def test_frontend_shows_watch_line_but_hides_risk_plan():
     assert "function hasWatchingPlan(setup)" in APP
     assert "function hasWatchingPlan(setup)" in CHART
-    assert "WATCHING ${setup.direction} @ ${fmt(setup.entry)}" in APP
-    assert "Watching Entry" in APP
-    assert "WATCH ${setup.direction}" in CHART
+    assert "MONITORING ${setup.direction}" in APP
+    assert "Watch Trigger · Not an Order" in APP
+    assert "MONITOR ${setup.direction} · NO ORDER" in CHART
     assert "else if (overlays.trade && hasLockedTradePlan(setup))" in CHART
     assert "if (overlays.trade && hasLockedTradePlan(setup))" in CHART
 
