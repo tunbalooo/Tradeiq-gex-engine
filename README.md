@@ -179,3 +179,9 @@ The GEX display now mirrors the requested institutional level layout:
 - VWAP and standard-deviation context
 
 Maximum Pain is calculated by minimizing aggregate option-holder intrinsic payout across candidate settlement strikes. It is never fabricated from fallback net-GEX values.
+
+
+## Watch expiry integrity (v2.3)
+
+A `WATCHING` candidate receives immutable `watch_started_at` and `watch_expires_at` timestamps. Engine refreshes may update confidence and confluence context but cannot renew the watch. When the deadline passes without confirmation, the watch expires and the identical candidate remains suppressed until market structure produces a materially new setup.
+

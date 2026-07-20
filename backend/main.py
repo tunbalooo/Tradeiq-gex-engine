@@ -25,8 +25,8 @@ async def lifespan(app: FastAPI):
         await trade_engine_service.stop(); await gex_service.stop(); await market_data_service.stop()
 
 
-# Legacy API version references retained for regression tests: 2.0.0-locked-trade-plans 2.1.0-watching-to-limit
-app = FastAPI(title=settings.app_name, version="2.2.0-stable-chart-core", lifespan=lifespan)
+# Legacy API version references retained for regression tests: 2.0.0-locked-trade-plans 2.1.0-watching-to-limit 2.2.0-stable-chart-core
+app = FastAPI(title=settings.app_name, version="2.3.0-fixed-watch-expiry", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 

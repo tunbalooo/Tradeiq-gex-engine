@@ -132,6 +132,8 @@ class TradeSetup(BaseModel):
     actionable: bool = False
     entry_valid: bool = False
     order_state: str = "PREVIEW_ONLY"
+    watch_started_at: datetime | None = None
+    watch_expires_at: datetime | None = None
     armed_at: datetime | None = None
     armed_candle_time: datetime | None = None
     last_processed_candle_time: datetime | None = None

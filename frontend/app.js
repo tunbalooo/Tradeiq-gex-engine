@@ -553,7 +553,7 @@ function renderTradeSetup(setup) {
   const syncing = state.marketWarming || setup.status === "DATA_SYNCING";
   const marketClosed = state.session && !state.session.is_open;
   const quality = watchingPlan ? `Watching ${setup.direction.charAt(0)}${setup.direction.slice(1).toLowerCase()}` :
-    setup.order_state === "PREVIEW_ONLY" ? "Scanning" :
+    setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch Expired" : "Scanning") :
     setup.order_state === "WAITING_FOR_LIMIT" ? "Limit Armed" :
     setup.order_state === "FILLED" ? "Position Filled" :
     setup.order_state === "TP1_HIT" ? "TP1 Hit — Running" :
@@ -574,7 +574,7 @@ function renderTradeSetup(setup) {
 
   const label = watchingPlan
     ? `WATCHING ${setup.direction} @ ${fmt(setup.entry)}`
-    : setup.order_state === "PREVIEW_ONLY" ? "SCANNING" : `${setup.direction} ${setup.order_state.replaceAll("_", " ")}`;
+    : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "WATCH EXPIRED" : "SCANNING") : `${setup.direction} ${setup.order_state.replaceAll("_", " ")}`;
   $("setupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
   $("setupLabel").className = `${syncing || marketClosed ? "a" : classForDirection(setup.direction)} mono setup-side-label`;
   $("setupDirection").textContent = `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}`;
@@ -587,7 +587,7 @@ function renderTradeSetup(setup) {
   $("setupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
   $("setupTp2Source").textContent = lockedPlan ? (setup.target_sources?.tp2 || "—") : "—";
   $("setupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : watchingPlan ? `Watching ${setup.direction.toLowerCase()} at ${fmt(setup.entry)}` : setup.order_state === "PREVIEW_ONLY" ? "Scanning — no setup" : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
+  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : watchingPlan ? `Watching ${setup.direction.toLowerCase()} at ${fmt(setup.entry)}` : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch expired — waiting for a new candidate" : "Scanning — no setup") : setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
   $("setupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
@@ -595,7 +595,7 @@ function renderTradeSetup(setup) {
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
   $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Watch Expires" : "Valid Until";
-  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
   renderChartTradeSetup(setup, {
     confidence,
     gaugeColor,
@@ -651,7 +651,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupSession").textContent = state.session?.display_name || "—";
   $("chartSetupSession").className = marketClosed ? "r" : "g";
   $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Watch Expires" : "Valid Until";
-  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
   const previewNotice = $("chartPreviewNotice");
   if (previewNotice) {
     const informational = setup.order_state === "PREVIEW_ONLY" || watchingPlan;

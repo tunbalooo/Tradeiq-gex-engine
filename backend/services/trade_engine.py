@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from backend.core.config import settings
 from backend.models.schemas import EngineSnapshot, TradeSetup
+from backend.services.instruments import get_instrument
 from backend.services.market_data import market_data_service
 from backend.services.session_service import get_session_status
 from backend.services.setup_service import build_candidate_setup
@@ -26,6 +27,10 @@ class TradeEngineService:
         self._last_processed_candle_time: datetime | None = None
         self._last_error: str | None = None
         self._running = False
+        # Prevent an expired watch from being recreated every engine cycle.
+        # The suppression is cleared only after the market presents a materially
+        # different candidate (direction/entry/cluster) or loses watch eligibility.
+        self._expired_watch: dict[str, object] | None = None
 
     async def start(self) -> None:
         if self._task is None:
@@ -47,6 +52,70 @@ class TradeEngineService:
             await asyncio.sleep(max(1, settings.engine_cycle_seconds))
             await self.run_once()
 
+    def _utcnow(self) -> datetime:
+        """Single clock seam so expiry behaviour is deterministic in tests."""
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _finite_number(value) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number == number and abs(number) != float("inf") else None
+
+    def _remember_expired_watch(self, watching: TradeSetup) -> None:
+        self._expired_watch = {
+            "symbol": watching.symbol,
+            "direction": watching.direction,
+            "entry": self._finite_number(watching.entry),
+            "cluster_low": self._finite_number(watching.cluster_low),
+            "cluster_high": self._finite_number(watching.cluster_high),
+            "zone_timeframe": watching.selected_zone_timeframe,
+            "expired_at": self._utcnow(),
+            "setup_id": watching.setup_id,
+        }
+
+    def _same_as_expired_watch(self, candidate: TradeSetup) -> bool:
+        expired = self._expired_watch
+        if not expired:
+            return False
+        if candidate.symbol != expired.get("symbol") or candidate.direction != expired.get("direction"):
+            self._expired_watch = None
+            return False
+        if not self._is_watch_candidate(candidate):
+            # The old idea fully disappeared. A later reappearance can be treated
+            # as a new watch instead of an endlessly renewed copy.
+            self._expired_watch = None
+            return False
+
+        profile = get_instrument(candidate.symbol)
+        atr = max(float(candidate.atr or 0.0), profile.tick_size)
+        entry_tolerance = max(profile.tick_size * 4, atr * 0.15)
+        old_entry = self._finite_number(expired.get("entry"))
+        new_entry = self._finite_number(candidate.entry)
+        if old_entry is None or new_entry is None or abs(new_entry - old_entry) > entry_tolerance:
+            self._expired_watch = None
+            return False
+
+        old_low = self._finite_number(expired.get("cluster_low"))
+        old_high = self._finite_number(expired.get("cluster_high"))
+        new_low = self._finite_number(candidate.cluster_low)
+        new_high = self._finite_number(candidate.cluster_high)
+        if all(value is not None for value in (old_low, old_high, new_low, new_high)):
+            cluster_tolerance = max(profile.tick_size * 8, atr * 0.25)
+            old_mid = (old_low + old_high) / 2
+            new_mid = (new_low + new_high) / 2
+            if abs(new_mid - old_mid) > cluster_tolerance:
+                self._expired_watch = None
+                return False
+
+        old_tf = expired.get("zone_timeframe")
+        if old_tf and candidate.selected_zone_timeframe and old_tf != candidate.selected_zone_timeframe:
+            self._expired_watch = None
+            return False
+        return True
+
     async def run_once(self) -> TradeSetup | None:
         try:
             candidate = await asyncio.to_thread(build_candidate_setup)
@@ -56,7 +125,7 @@ class TradeEngineService:
             # Use the most recent closed one-minute candle. The newest bar may still be updating.
             closed = candles[-2] if len(candles) >= 2 else candles[-1]
             with self._lock:
-                self._last_cycle_at = datetime.now(timezone.utc)
+                self._last_cycle_at = self._utcnow()
                 self._last_error = None
                 if self._current is None or self._current.order_state in TERMINAL:
                     self._current = self._evaluate_candidate(candidate, closed)
@@ -113,11 +182,15 @@ class TradeEngineService:
         })
 
     def _start_watching(self, candidate: TradeSetup, candle, *, setup_id: str | None = None, timestamp: datetime | None = None) -> TradeSetup:
-        now = datetime.now(timezone.utc)
+        now = self._utcnow()
+        watch_expires_at = now + timedelta(minutes=settings.setup_expiry_minutes)
+        self._expired_watch = None
         watching = candidate.model_copy(deep=True, update={
             "setup_id": setup_id or str(uuid4()),
             "timestamp": timestamp or now,
-            "valid_until": now + timedelta(minutes=settings.setup_expiry_minutes),
+            "valid_until": watch_expires_at,
+            "watch_started_at": now,
+            "watch_expires_at": watch_expires_at,
             "order_state": "WATCHING",
             "status": f"WATCHING_{candidate.direction}",
             "actionable": False,
@@ -132,12 +205,18 @@ class TradeEngineService:
         )
         return watching
 
-    def _arm_candidate(self, candidate: TradeSetup, candle, *, previous_state: str = "PREVIEW_ONLY", setup_id: str | None = None, timestamp: datetime | None = None) -> TradeSetup:
-        now = datetime.now(timezone.utc)
+    def _arm_candidate(
+        self, candidate: TradeSetup, candle, *, previous_state: str = "PREVIEW_ONLY",
+        setup_id: str | None = None, timestamp: datetime | None = None,
+        watch_started_at: datetime | None = None, watch_expires_at: datetime | None = None,
+    ) -> TradeSetup:
+        now = self._utcnow()
         armed = candidate.model_copy(deep=True, update={
             "setup_id": setup_id or str(uuid4()),
             "timestamp": timestamp or now,
             "valid_until": now + timedelta(minutes=settings.setup_expiry_minutes),
+            "watch_started_at": watch_started_at,
+            "watch_expires_at": watch_expires_at,
             "order_state": "WAITING_FOR_LIMIT",
             "status": "WAITING_FOR_LIMIT",
             "actionable": True,
@@ -156,6 +235,8 @@ class TradeEngineService:
         can_trade, gate_status = self._market_gate()
         if not can_trade:
             return self._preview(candidate, gate_status)
+        if self._same_as_expired_watch(candidate):
+            return self._preview(candidate, "WATCH_EXPIRED")
         if candidate.actionable:
             return self._arm_candidate(candidate, candle)
         if self._is_watch_candidate(candidate):
@@ -177,14 +258,27 @@ class TradeEngineService:
             })
 
         same_direction = candidate.direction == watching.direction
+        now = self._utcnow()
+        watch_expires_at = watching.watch_expires_at or watching.valid_until
+        # Expiry is checked before confirmation. A candidate cannot be armed after
+        # its original watch deadline merely because the next engine cycle arrived late.
+        if now >= watch_expires_at:
+            self._remember_expired_watch(watching)
+            return self._transition(
+                watching, "EXPIRED", candle,
+                "The watched candidate expired without final confirmation. A new watch requires a materially new setup.",
+                actionable=False, closed_at=now, outcome="WATCH_EXPIRED",
+            )
+
         if candidate.actionable and same_direction:
             return self._arm_candidate(
                 candidate, candle, previous_state="WATCHING",
                 setup_id=watching.setup_id, timestamp=watching.timestamp,
+                watch_started_at=watching.watch_started_at or watching.timestamp,
+                watch_expires_at=watch_expires_at,
             )
 
-        now = datetime.now(timezone.utc)
-        if not same_direction or not self._is_watch_candidate(candidate) or now >= watching.valid_until:
+        if not same_direction or not self._is_watch_candidate(candidate):
             replacement = self._evaluate_candidate(candidate, candle)
             if replacement.order_state == "PREVIEW_ONLY":
                 storage_service.transition(
@@ -201,6 +295,9 @@ class TradeEngineService:
             "status": f"WATCHING_{watching.direction}",
             "order_state": "WATCHING",
             "actionable": False,
+            "watch_started_at": watching.watch_started_at or watching.timestamp,
+            "watch_expires_at": watch_expires_at,
+            "valid_until": watch_expires_at,
             "last_processed_candle_time": candle.time,
         })
 
@@ -223,7 +320,7 @@ class TradeEngineService:
 
     def _transition(self, setup: TradeSetup, new_state: str, candle, detail: str, **updates) -> TradeSetup:
         previous = setup.order_state
-        now = datetime.now(timezone.utc)
+        now = self._utcnow()
         payload = {"order_state": new_state, "status": new_state, "last_processed_candle_time": candle.time, **updates}
         updated = setup.model_copy(update=payload)
         severity = "positive" if new_state in {"FILLED", "TP1_HIT", "TP2_HIT"} else "negative" if new_state == "STOPPED" else "warning"
@@ -234,7 +331,7 @@ class TradeEngineService:
         # Never use the candle that existed before or at the instant the plan was armed.
         if active.armed_candle_time and candle.time <= active.armed_candle_time:
             return active.model_copy(update={"last_processed_candle_time": candle.time})
-        now = datetime.now(timezone.utc)
+        now = self._utcnow()
         state = active.order_state
         if state == "WAITING_FOR_LIMIT" and now >= active.valid_until:
             return self._transition(active, "EXPIRED", candle, "The resting limit was not filled before expiry.", actionable=False, closed_at=now, outcome="EXPIRED")
@@ -289,6 +386,7 @@ class TradeEngineService:
         with self._lock:
             self._current = None
             self._last_processed_candle_time = None
+            self._expired_watch = None
 
     def reset_for_symbol(self, symbol: str) -> None:
         with self._lock:
@@ -296,6 +394,7 @@ class TradeEngineService:
             self._last_terminal = None
             self._last_processed_candle_time = None
             self._last_error = None
+            self._expired_watch = None
 
     def snapshot(self) -> EngineSnapshot:
         with self._lock:
