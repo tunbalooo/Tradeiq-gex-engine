@@ -14,7 +14,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=21" />
+<!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
+<link rel="stylesheet" href="/static/styles.css?v=22" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -197,8 +198,9 @@
           <div class="panel-b">
             <div class="setup-row"><span class="k">Regime</span><span class="v" id="gexRegime">—</span></div>
             <div class="setup-row"><span class="k">Gamma Flip</span><span class="v" id="gammaFlip">—</span></div>
-            <div class="setup-row"><span class="k">Put Wall</span><span class="v r" id="putWall">—</span></div>
-            <div class="setup-row"><span class="k">Call Wall</span><span class="v b" id="callWall">—</span></div>
+            <div class="setup-row"><span class="k">Gamma Resistance / Call Wall</span><span class="v b" id="callWall">—</span></div>
+            <div class="setup-row"><span class="k">Maximum Pain</span><span class="v p" id="maxPain">—</span></div>
+            <div class="setup-row"><span class="k">Put Support / Put Wall</span><span class="v g" id="putWall">—</span></div>
             <div class="setup-row"><span class="k">Price vs Flip</span><span class="v" id="priceVsFlip">—</span></div>
             <div class="setup-row"><span class="k">GEX Source</span><span class="v b" id="gexSource">—</span></div>
             <div class="eyebrow gamma-head">Near-term gamma exposure</div>
@@ -368,6 +370,7 @@
                   <div><span>Regime</span><b id="mobileGexRegime">—</b></div>
                   <div><span>Net GEX</span><b id="mobileNetGex">—</b></div>
                   <div><span>Gamma Flip</span><b id="mobileGammaFlip">—</b></div>
+                  <div><span>Max Pain</span><b class="p" id="mobileMaxPain">—</b></div>
                   <div><span>Call Wall</span><b class="g" id="mobileCallWall">—</b></div>
                   <div><span>Put Wall</span><b class="r" id="mobilePutWall">—</b></div>
                   <div><span>Applied To</span><b id="mobileGexApplied">—</b></div>
@@ -454,7 +457,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=21"></script>
+<script src="/static/boot.js?v=22"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

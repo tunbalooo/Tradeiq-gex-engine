@@ -52,6 +52,61 @@ def available_dataset_end(client: Any, dataset: str, schema: str, requested: dat
     return min(requested, datetime.now(timezone.utc) - timedelta(minutes=15))
 
 
+def _valid_candle(candle: Candle) -> bool:
+    values = (candle.open, candle.high, candle.low, candle.close)
+    return (
+        all(isinstance(value, (int, float)) for value in values)
+        and all(float("-inf") < float(value) < float("inf") for value in values)
+        and candle.high >= max(candle.open, candle.close)
+        and candle.low <= min(candle.open, candle.close)
+        and candle.high >= candle.low
+        and candle.open > 0
+        and candle.close > 0
+    )
+
+
+def _sanitize_candles(candles: list[Candle], max_jump_ratio: float = 0.12) -> list[Candle]:
+    """Return ordered, unique OHLC bars while dropping impossible isolated jumps.
+
+    A continuous futures series can legitimately gap across sessions, but a 12%
+    one-bar jump followed immediately by a return is almost always a mixed symbol
+    or malformed record. The history/live continuity guard below handles whole
+    series mismatches separately.
+    """
+    unique: dict[datetime, Candle] = {}
+    for candle in candles:
+        if _valid_candle(candle):
+            unique[candle.time] = candle.model_copy(deep=True)
+    ordered = sorted(unique.values(), key=lambda item: item.time)
+    if len(ordered) < 3:
+        return ordered
+
+    clean: list[Candle] = [ordered[0]]
+    for index in range(1, len(ordered) - 1):
+        previous = clean[-1]
+        current = ordered[index]
+        following = ordered[index + 1]
+        reference = max(abs(previous.close), 1e-9)
+        jump = abs(current.open - previous.close) / reference
+        return_jump = abs(following.open - current.close) / max(abs(current.close), 1e-9)
+        # Drop a single spike that immediately reverses. Preserve sustained repricing.
+        if jump > max_jump_ratio and return_jump > max_jump_ratio:
+            continue
+        clean.append(current)
+    clean.append(ordered[-1])
+    return clean
+
+
+def _series_gap_ratio(history: list[Candle], live: list[Candle]) -> float | None:
+    if not history or not live:
+        return None
+    history_reference = sum(item.close for item in history[-min(20, len(history)):]) / min(20, len(history))
+    live_reference = sum(item.close for item in live[:min(5, len(live)):]) / min(5, len(live))
+    if history_reference <= 0:
+        return None
+    return abs(live_reference - history_reference) / history_reference
+
+
 def rth_candles(
     candles: list[Candle],
     now: datetime | None = None,
@@ -253,6 +308,11 @@ class SimulatedMarketDataService:
             "futures_symbol": self.instrument.futures_continuous,
             "raw_symbol": None,
             "candle_count": len(self.candles),
+            "warming": False,
+            "history_cached": True,
+            "history_ready": True,
+            "history_source": "simulated",
+            "data_quality": "SIMULATED",
             "instrument": self.instrument.public_dict(),
         }
 
@@ -279,6 +339,8 @@ class DatabentoMarketDataService:
         self.raw_symbol: str | None = None
         self.warming = False
         self.history_cached = False
+        self.history_source = "none"
+        self.data_quality = "WAITING_FOR_HISTORY"
         self._live_client = None
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -352,13 +414,15 @@ class DatabentoMarketDataService:
                 self.candles.extend(candle.model_copy(deep=True) for candle in cache.candles[-self.max_candles:])
                 self.current_price = cache.current_price
                 self.history_cached = True
+                self.history_source = "databento-cache"
+                self.data_quality = "READY"
             else:
-                # A deterministic preview makes the UI responsive on the first visit
-                # to a market. It is replaced by real history as soon as backfill ends.
-                preview = SimulatedMarketDataService(max_candles=self.max_candles, profile=profile)
-                self.candles.extend(preview.snapshot())
-                self.current_price = preview.current_price
+                # Never mix synthetic preview prices with real Databento ticks.
+                # The chart shows a clear syncing state until real bars arrive.
+                self.current_price = 0.0
                 self.history_cached = False
+                self.history_source = "live-pending-history"
+                self.data_quality = "WAITING_FOR_HISTORY"
             self.warming = not cache_is_fresh
 
         if wait_for_history:
@@ -431,6 +495,7 @@ class DatabentoMarketDataService:
             await asyncio.sleep(max(0.0, settings.databento_prewarm_delay_seconds))
 
     def _store_history(self, profile: InstrumentProfile, loaded: list[Candle]) -> None:
+        loaded = _sanitize_candles(loaded)
         if not loaded:
             return
         self._history_cache[profile.symbol] = _MarketHistoryCache(
@@ -451,17 +516,41 @@ class DatabentoMarketDataService:
                 return
             if generation is not None and generation != self._generation:
                 return
+            loaded = _sanitize_candles(loaded)
+            live_values = _sanitize_candles(list(self._live_overlay.values()))
+            gap_ratio = _series_gap_ratio(loaded, live_values)
+            if gap_ratio is not None and gap_ratio > 0.08:
+                # Contract/provenance mismatch: never stitch two different price regimes.
+                # Keep only verified live bars while the next historical refresh retries.
+                values = live_values[-self.max_candles:]
+                if values:
+                    self.candles.clear()
+                    self.candles.extend(values)
+                    self.current_price = values[-1].close
+                self.history_cached = False
+                self.history_source = "live-only-mismatch"
+                self.data_quality = "CONTRACT_MISMATCH"
+                self.warming = True
+                self.last_error = (
+                    f"Rejected {profile.symbol} history/live merge: price regimes differed by "
+                    f"{gap_ratio * 100:.1f}%."
+                )
+                logger.error(self.last_error)
+                return
+
             merged = {candle.time: candle.model_copy(deep=True) for candle in loaded}
             # Preserve real live bars received while the historical request was running.
             for candle_time, candle in self._live_overlay.items():
                 merged[candle_time] = candle.model_copy(deep=True)
-            values = sorted(merged.values(), key=lambda candle: candle.time)[-self.max_candles:]
+            values = _sanitize_candles(sorted(merged.values(), key=lambda candle: candle.time))[-self.max_candles:]
             if not values:
                 return
             self.candles.clear()
             self.candles.extend(values)
             self.current_price = values[-1].close
             self.history_cached = True
+            self.history_source = "databento"
+            self.data_quality = "READY"
             self.warming = False
             self.last_error = None
             self._history_cache[profile.symbol] = _MarketHistoryCache(
@@ -522,7 +611,7 @@ class DatabentoMarketDataService:
             for record in store
             if all(hasattr(record, field) for field in ("open", "high", "low", "close", "volume"))
         ]
-        loaded.sort(key=lambda candle: candle.time)
+        loaded = _sanitize_candles(loaded)
         if not loaded:
             raise RuntimeError(f"Databento returned no {profile.symbol} historical bars for {profile.futures_continuous}.")
         return loaded[-settings.databento_history_limit:]
@@ -595,6 +684,9 @@ class DatabentoMarketDataService:
             self._live_overlay[minute] = candle.model_copy(deep=True)
             self.current_price = round(close_px, profile.price_precision)
             self.connected = True
+            if not self.history_cached:
+                self.history_source = "live-pending-history"
+                self.data_quality = "LIVE_ONLY"
             self.last_error = None
 
     def latest_candle(self) -> Candle:
@@ -642,6 +734,9 @@ class DatabentoMarketDataService:
             "candle_count": len(self.candles),
             "warming": self.warming,
             "history_cached": self.history_cached,
+            "history_ready": bool(self.history_cached and len(self.candles) >= 50),
+            "history_source": self.history_source,
+            "data_quality": self.data_quality,
             "cache_age_seconds": round(cache_age, 1) if cache_age is not None else None,
             "cached_symbols": sorted(self._history_cache),
             "instrument": self.instrument.public_dict(),

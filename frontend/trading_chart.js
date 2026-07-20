@@ -6,6 +6,84 @@
   const MIN_SAFE_HISTORY_BARS = 20;
   const MAX_CACHED_HISTORY_BARS = 5000;
   const ACTIVE_TRADE_STATES = new Set(["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"]);
+  const MAX_SERIES_REGIME_GAP = 0.08;
+
+  function median(values = []) {
+    const clean = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    if (!clean.length) return null;
+    const middle = Math.floor(clean.length / 2);
+    return clean.length % 2 ? clean[middle] : (clean[middle - 1] + clean[middle]) / 2;
+  }
+
+  function priceRegime(candles = [], count = 20) {
+    return median(candles.slice(-count).map((item) => item.close));
+  }
+
+  function regimeGap(left = [], right = []) {
+    const a = priceRegime(left);
+    const b = priceRegime(right, 5);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0) return 0;
+    return Math.abs(b - a) / a;
+  }
+
+  function latestCoherentSegment(candles = [], maxGap = MAX_SERIES_REGIME_GAP) {
+    if (candles.length < 2) return candles;
+    let start = 0;
+    for (let index = 1; index < candles.length; index += 1) {
+      const previous = Number(candles[index - 1]?.close);
+      const current = Number(candles[index]?.open);
+      if (!Number.isFinite(previous) || !Number.isFinite(current) || previous <= 0) continue;
+      if (Math.abs(current - previous) / previous > maxGap) start = index;
+    }
+    return candles.slice(start);
+  }
+
+  function nyParts(value) {
+    const raw = typeof value === "number" && value < 1e12 ? value * 1000 : value;
+    const date = raw instanceof Date ? raw : new Date(raw);
+    if (Number.isNaN(date.getTime())) return null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(date);
+    const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return { dateKey: `${map.year}-${map.month}-${map.day}`, minutes: Number(map.hour) * 60 + Number(map.minute) };
+  }
+
+  function rthEquilibrium(candles = [], symbol = "NQ") {
+    if (!candles.length) return null;
+    const latest = nyParts(candles.at(-1)?.time);
+    if (!latest) return null;
+    const gold = ["GC", "MGC"].includes(String(symbol || "").toUpperCase());
+    const start = gold ? 8 * 60 + 20 : 9 * 60 + 30;
+    const end = gold ? 13 * 60 + 30 : 16 * 60;
+    const session = candles.filter((item) => {
+      const parts = nyParts(item.time);
+      return parts && parts.dateKey === latest.dateKey && parts.minutes >= start && parts.minutes < end;
+    });
+    if (!session.length) return null;
+    const high = Math.max(...session.map((item) => Number(item.high)).filter(Number.isFinite));
+    const low = Math.min(...session.map((item) => Number(item.low)).filter(Number.isFinite));
+    return Number.isFinite(high) && Number.isFinite(low) ? (high + low) / 2 : null;
+  }
+
+  function toggleFullscreenRoot(root) {
+    if (!root) return;
+    if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
+    if (root.classList.contains("tradeiq-pseudo-fullscreen")) {
+      root.classList.remove("tradeiq-pseudo-fullscreen");
+      document.body.classList.remove("tradeiq-fullscreen-lock");
+      window.dispatchEvent(new Event("resize"));
+      return;
+    }
+    const fallback = () => {
+      root.classList.add("tradeiq-pseudo-fullscreen");
+      document.body.classList.add("tradeiq-fullscreen-lock");
+      window.dispatchEvent(new Event("resize"));
+    };
+    if (typeof root.requestFullscreen === "function") root.requestFullscreen().catch(fallback);
+    else fallback();
+  }
 
   function hasWatchingPlan(setup) {
     return Boolean(
@@ -91,7 +169,7 @@
           volume: Number.isFinite(Number(item?.volume)) ? Number(item.volume) : 0,
         });
       });
-      return [...byTime.values()].sort((a, b) => fallbackTime(a.time) - fallbackTime(b.time));
+      return latestCoherentSegment([...byTime.values()].sort((a, b) => fallbackTime(a.time) - fallbackTime(b.time)));
     }
 
     function mergeFallbackCandles(base = [], incoming = []) {
@@ -100,8 +178,8 @@
         const timestamp = fallbackTime(item?.time);
         if (timestamp != null) byTime.set(timestamp, item);
       });
-      return [...byTime.values()]
-        .sort((a, b) => fallbackTime(a.time) - fallbackTime(b.time))
+      return latestCoherentSegment([...byTime.values()]
+        .sort((a, b) => fallbackTime(a.time) - fallbackTime(b.time)))
         .slice(-MAX_CACHED_HISTORY_BARS);
     }
 
@@ -112,9 +190,11 @@
       const current = instance.payload && fallbackHistoryKey(instance.payload) === key
         ? normaliseFallbackCandles(instance.payload.candles || []) : [];
       const seed = cached.length >= current.length ? cached : current;
-      const resolved = mergeFallbackCandles(seed, incoming);
-      instance.historyRecovered = incoming.length > 0 && incoming.length < MIN_SAFE_HISTORY_BARS && seed.length >= MIN_SAFE_HISTORY_BARS;
-      if (resolved.length) fallbackHistoryCache.set(key, resolved);
+      const mismatch = seed.length && incoming.length && regimeGap(seed, incoming) > MAX_SERIES_REGIME_GAP;
+      const resolved = mismatch ? incoming : mergeFallbackCandles(seed, incoming);
+      instance.contractMismatch = Boolean(mismatch);
+      instance.historyRecovered = !mismatch && incoming.length > 0 && incoming.length < MIN_SAFE_HISTORY_BARS && seed.length >= MIN_SAFE_HISTORY_BARS;
+      if (resolved.length && (!mismatch || Boolean(data?.historyReady))) fallbackHistoryCache.set(key, resolved);
       return resolved;
     }
 
@@ -156,7 +236,7 @@
           if (action === "line") instance.chartStyle = "line";
           if (action === "fullscreen") {
             const root = instance.host.closest(".tv-full-panel") || instance.host.closest(".tv-workstation") || instance.host;
-            if (document.fullscreenElement) document.exitFullscreen?.(); else root.requestFullscreen?.();
+            toggleFullscreenRoot(root);
           }
           drawFallback(instance);
         });
@@ -295,7 +375,7 @@
         ctx.fillStyle = "#7788A3";
         ctx.font = "500 12px ui-monospace, monospace";
         ctx.textAlign = "center";
-        ctx.fillText("Waiting for market candles…", width / 2, height / 2);
+        ctx.fillText(payload?.dataQuality === "CONTRACT_MISMATCH" ? "Contract mismatch rejected — waiting for coherent history…" : "Syncing real market history…", width / 2, height / 2);
         return;
       }
 
@@ -304,8 +384,10 @@
       const start = Math.max(0, end - visibleCount);
       const values = candles.slice(start, end);
       const setupForScale = payload?.setup || {};
-      const marketContextLevels = [setupForScale.vwap, setupForScale.standard_deviation_high, setupForScale.standard_deviation_low,
-        setupForScale.gex?.call_wall, setupForScale.gex?.gamma_flip, setupForScale.gex?.put_wall];
+      const rthEq = rthEquilibrium(values, payload?.symbol);
+      const marketContextLevels = [setupForScale.vwap, setupForScale.standard_deviation_high, setupForScale.standard_deviation_low, rthEq,
+        setupForScale.gex?.call_wall, setupForScale.gex?.gamma_resistance, setupForScale.gex?.gamma_flip,
+        setupForScale.gex?.max_pain, setupForScale.gex?.gamma_support, setupForScale.gex?.put_wall];
       const watchedTradeLevels = hasWatchingPlan(setupForScale) ? [setupForScale.entry] : [];
       const lockedTradeLevels = hasLockedTradePlan(setupForScale)
         ? [setupForScale.entry, setupForScale.stop_loss, setupForScale.take_profit_1, setupForScale.take_profit_2]
@@ -387,11 +469,18 @@
       });
 
       if (overlays.gex && setup.gex) {
-        horizontal(ctx, toY(setup.gex.call_wall), plotRight, "CALL", lineColors.gex);
-        horizontal(ctx, toY(setup.gex.gamma_flip), plotRight, "γ FLIP", lineColors.entry);
-        horizontal(ctx, toY(setup.gex.put_wall), plotRight, "PUT", lineColors.stop);
+        horizontal(ctx, toY(setup.gex.call_wall), plotRight, "GAMMA RES / CALL WALL", lineColors.gex);
+        if (Number.isFinite(Number(setup.gex.gamma_resistance)) && Math.abs(Number(setup.gex.gamma_resistance) - Number(setup.gex.call_wall)) > Number(payload?.tickSize || .25) * 2)
+          horizontal(ctx, toY(setup.gex.gamma_resistance), plotRight, "GAMMA RESISTANCE", "#A98BFF");
+        horizontal(ctx, toY(setup.gex.gamma_flip), plotRight, "GAMMA FLIP", lineColors.entry);
+        if (Number.isFinite(Number(setup.gex.max_pain))) horizontal(ctx, toY(setup.gex.max_pain), plotRight, "MAX PAIN", "#D85CFF");
+        horizontal(ctx, toY(setup.gex.put_wall), plotRight, "PUT SUPPORT / WALL", lineColors.stop);
+        (setup.gex.levels || []).slice(0, 4).forEach((level) => horizontal(ctx, toY(level.price), plotRight, level.type || "GEX", Number(level.gex || 0) >= 0 ? "#21875A" : "#9D3542"));
       }
-      if (overlays.vwap) horizontal(ctx, toY(setup.vwap), plotRight, "VWAP", lineColors.vwap, false);
+      if (overlays.vwap) {
+        horizontal(ctx, toY(setup.vwap), plotRight, "VWAP", lineColors.vwap, false);
+        if (Number.isFinite(Number(rthEq))) horizontal(ctx, toY(rthEq), plotRight, "RTH EQ", "#E8D99A");
+      }
       if (overlays.trade && hasWatchingPlan(setup)) {
         horizontal(ctx, toY(setup.entry), plotRight, `WATCH ${setup.direction}`, lineColors.entry, false);
       } else if (overlays.trade && hasLockedTradePlan(setup)) {
@@ -408,6 +497,14 @@
       if (legend && last) {
         const positive = last.close >= last.open;
         legend.innerHTML = `<b>${payload?.displaySymbol || payload?.symbol || "FUTURES"}</b><span>O ${last.open.toFixed(payload?.pricePrecision ?? 2)}</span><span>H ${last.high.toFixed(payload?.pricePrecision ?? 2)}</span><span>L ${last.low.toFixed(payload?.pricePrecision ?? 2)}</span><span class="${positive ? "g" : "r"}">C ${last.close.toFixed(payload?.pricePrecision ?? 2)}</span>`;
+      }
+      if (!payload?.historyReady || instance.contractMismatch || candles.length < MIN_SAFE_HISTORY_BARS) {
+        const label = instance.contractMismatch || payload?.dataQuality === "CONTRACT_MISMATCH"
+          ? "PRICE REGIME RESET · LIVE ONLY"
+          : `HISTORY SYNCING · ${candles.length} BAR${candles.length === 1 ? "" : "S"}`;
+        ctx.fillStyle = "rgba(8,15,23,.88)"; ctx.fillRect(10, 12, Math.min(plotRight - 20, 230), 26);
+        ctx.strokeStyle = instance.contractMismatch ? "#FF4D5E" : "#F5B93B"; ctx.strokeRect(10.5, 12.5, Math.min(plotRight - 21, 229), 25);
+        ctx.fillStyle = instance.contractMismatch ? "#FF4D5E" : "#F5B93B"; ctx.font = "700 10px ui-monospace, monospace"; ctx.fillText(label, 20, 29);
       }
     }
 
@@ -493,7 +590,7 @@
       if (item.high < item.low || item.high < Math.max(item.open, item.close) || item.low > Math.min(item.open, item.close)) return;
       byTime.set(time, item);
     });
-    return [...byTime.values()].sort((a, b) => a.time - b.time);
+    return latestCoherentSegment([...byTime.values()].sort((a, b) => a.time - b.time));
   }
 
   function desktopHistoryKey(data) {
@@ -505,7 +602,7 @@
     [...base, ...incoming].forEach((item) => {
       if (item && Number.isFinite(Number(item.time))) byTime.set(Number(item.time), item);
     });
-    return [...byTime.values()].sort((a, b) => a.time - b.time).slice(-MAX_CACHED_HISTORY_BARS);
+    return latestCoherentSegment([...byTime.values()].sort((a, b) => a.time - b.time)).slice(-MAX_CACHED_HISTORY_BARS);
   }
 
   function resolveDesktopCandles(instance, data) {
@@ -514,9 +611,11 @@
     const cached = desktopHistoryCache.get(key) || [];
     const current = instance.symbol === data.symbol && instance.timeframe === data.timeframe ? instance.data : [];
     const seed = cached.length >= current.length ? cached : current;
-    const resolved = mergeDesktopCandles(seed, incoming);
-    instance.historyRecovered = incoming.length > 0 && incoming.length < MIN_SAFE_HISTORY_BARS && seed.length >= MIN_SAFE_HISTORY_BARS;
-    if (resolved.length) desktopHistoryCache.set(key, resolved);
+    const mismatch = seed.length && incoming.length && regimeGap(seed, incoming) > MAX_SERIES_REGIME_GAP;
+    const resolved = mismatch ? incoming : mergeDesktopCandles(seed, incoming);
+    instance.contractMismatch = Boolean(mismatch);
+    instance.historyRecovered = !mismatch && incoming.length > 0 && incoming.length < MIN_SAFE_HISTORY_BARS && seed.length >= MIN_SAFE_HISTORY_BARS;
+    if (resolved.length && (!mismatch || Boolean(data?.historyReady))) desktopHistoryCache.set(key, resolved);
     return { incoming, resolved };
   }
 
@@ -695,6 +794,10 @@
     overlayCanvas.className = "tv-overlay-canvas";
     overlayCanvas.setAttribute("aria-hidden", "true");
     host.appendChild(overlayCanvas);
+    const dataState = document.createElement("div");
+    dataState.className = "chart-data-state";
+    dataState.hidden = true;
+    host.appendChild(dataState);
 
     const instance = {
       id,
@@ -706,6 +809,7 @@
       ema21,
       ema55,
       overlayCanvas,
+      dataState,
       priceLines: [],
       userPriceLines: [],
       data: [],
@@ -859,8 +963,7 @@
 
   function toggleFullscreen(instance) {
     const root = instance.id === "chartLarge" ? (instance.host.closest(".tv-full-panel") || instance.host.closest(".tv-workstation")) : (instance.host.closest(".chart-panel") || instance.host);
-    if (document.fullscreenElement) document.exitFullscreen?.();
-    else root.requestFullscreen?.();
+    toggleFullscreenRoot(root);
   }
 
   function clearSystemPriceLines(instance) {
@@ -886,9 +989,12 @@
     if (!setup) return;
 
     if (overlays.gex && setup.gex) {
-      addPriceLine(instance, setup.gex.call_wall, "CALL WALL", COLORS.blue, dashed, 2);
-      addPriceLine(instance, setup.gex.gamma_flip, "γ FLIP", COLORS.amber, dashed, 2);
-      addPriceLine(instance, setup.gex.put_wall, "PUT WALL", COLORS.red, dashed, 2);
+      addPriceLine(instance, setup.gex.call_wall, "GAMMA RES / CALL WALL", COLORS.blue, dashed, 2);
+      if (Number.isFinite(Number(setup.gex.gamma_resistance)) && Math.abs(Number(setup.gex.gamma_resistance) - Number(setup.gex.call_wall)) > instance.tickSize * 2)
+        addPriceLine(instance, setup.gex.gamma_resistance, "GAMMA RESISTANCE", COLORS.purple, dotted, 1);
+      addPriceLine(instance, setup.gex.gamma_flip, "GAMMA FLIP", COLORS.amber, dashed, 2);
+      if (Number.isFinite(Number(setup.gex.max_pain))) addPriceLine(instance, setup.gex.max_pain, "MAX PAIN", "#D85CFF", dashed, 2);
+      addPriceLine(instance, setup.gex.put_wall, "PUT SUPPORT / WALL", COLORS.red, dashed, 2);
       (setup.gex.levels || []).slice(0, instance.id === "chartLarge" ? 6 : 3).forEach((level) => {
         addPriceLine(instance, level.price, level.type || "GEX", Number(level.gex || 0) >= 0 ? "#21875A" : "#9D3542", dotted, 1);
       });
@@ -904,6 +1010,7 @@
       addPriceLine(instance, setup.vwap, "VWAP", COLORS.vwap, dotted, 1);
       addPriceLine(instance, setup.standard_deviation_high, "+1σ", COLORS.muted, dotted, 1);
       addPriceLine(instance, setup.standard_deviation_low, "-1σ", COLORS.muted, dotted, 1);
+      addPriceLine(instance, instance.rthEq, "RTH EQ", "#E8D99A", dotted, 1);
     }
 
     if (overlays.trade && hasWatchingPlan(setup)) {
@@ -948,6 +1055,22 @@
     if (!setup) return;
     const chartWidth = Math.max(0, width - 77);
     const coordinate = (price) => instance.candleSeries.priceToCoordinate(Number(price));
+
+    if (overlays.gex && setup.gex) {
+      const half = Math.max(Number(instance.tickSize || .25) * 3, Number(setup.atr || 0) * .08);
+      [
+        [setup.gex.call_wall, "rgba(72,163,255,.10)"],
+        [setup.gex.max_pain, "rgba(216,92,255,.08)"],
+        [setup.gex.put_wall, "rgba(38,208,124,.09)"],
+      ].forEach(([level, color]) => {
+        if (!Number.isFinite(Number(level))) return;
+        const top = coordinate(Number(level) + half);
+        const bottom = coordinate(Number(level) - half);
+        if (top == null || bottom == null) return;
+        ctx.fillStyle = color;
+        ctx.fillRect(0, Math.min(top, bottom), chartWidth, Math.abs(bottom - top));
+      });
+    }
 
     if (overlays.zones) {
       (setup.zones || []).slice(0, instance.id === "chartLarge" ? 9 : 5).forEach((zone) => {
@@ -1011,6 +1134,7 @@
     }
 
     instance.data = candles;
+    instance.rthEq = rthEquilibrium(candles, data.symbol);
     instance.timeframe = data.timeframe;
     instance.symbol = data.symbol;
     instance.ema9.applyOptions({ visible: Boolean(data.overlays?.emas) });
@@ -1062,11 +1186,20 @@
     rebuildPriceLines(instance);
     scheduleOverlay(instance);
     updateLegend(instance, null);
+    if (instance.dataState) {
+      const sparse = instance.data.length < MIN_SAFE_HISTORY_BARS;
+      const mismatch = instance.contractMismatch || data.dataQuality === "CONTRACT_MISMATCH";
+      instance.dataState.hidden = Boolean(data.historyReady && !sparse && !mismatch);
+      instance.dataState.classList.toggle("error", mismatch);
+      instance.dataState.textContent = mismatch
+        ? "PRICE REGIME RESET — MIXED CONTRACT DATA REJECTED"
+        : `SYNCING COHERENT ${data.symbol || "FUTURES"} HISTORY · ${instance.data.length} BAR${instance.data.length === 1 ? "" : "S"}`;
+    }
 
     const caption = document.getElementById(`${id}Status`);
     if (caption) {
       const tf = Number(data.timeframe) >= 60 ? `${Number(data.timeframe) / 60}h` : `${data.timeframe}m`;
-      caption.textContent = `${instance.instrumentName} · ${tf} · ${data.dataSource || "CONNECTING"}${instance.historyRecovered ? " · HISTORY RESTORED" : ""}`;
+      caption.textContent = `${instance.instrumentName} · ${tf} · ${data.dataSource || "CONNECTING"}${data.rawSymbol ? ` · ${data.rawSymbol}` : ""}${instance.historyRecovered ? " · HISTORY RESTORED" : ""}${instance.contractMismatch ? " · REGIME RESET" : ""}`;
     }
   }
 

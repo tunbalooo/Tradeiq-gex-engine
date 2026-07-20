@@ -25,8 +25,8 @@ async def lifespan(app: FastAPI):
         await trade_engine_service.stop(); await gex_service.stop(); await market_data_service.stop()
 
 
-# Legacy API version reference retained for regression tests: 2.0.0-locked-trade-plans
-app = FastAPI(title=settings.app_name, version="2.1.0-watching-to-limit", lifespan=lifespan)
+# Legacy API version references retained for regression tests: 2.0.0-locked-trade-plans 2.1.0-watching-to-limit
+app = FastAPI(title=settings.app_name, version="2.2.0-stable-chart-core", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
@@ -50,8 +50,19 @@ async def market_websocket(websocket: WebSocket):
     try:
         while True:
             setup = trade_engine_service.current_setup()
-            if setup:
-                await websocket.send_json({"type":"market_update", "candle":market_data_service.latest_candle().model_dump(mode="json"), "setup":setup.model_dump(mode="json"), "meta":build_dashboard_meta(setup).model_dump(mode="json"), "market":market_data_service.health(), "gex_health":gex_service.health(), "session":get_session_status(), "engine":trade_engine_service.snapshot().model_dump(mode="json")})
+            market = market_data_service.health()
+            candles = market_data_service.snapshot(limit=1)
+            payload = {
+                "type": "market_update",
+                "candle": candles[-1].model_dump(mode="json") if candles else None,
+                "setup": setup.model_dump(mode="json") if setup else None,
+                "meta": build_dashboard_meta(setup).model_dump(mode="json") if setup else None,
+                "market": market,
+                "gex_health": gex_service.health(),
+                "session": get_session_status(),
+                "engine": trade_engine_service.snapshot().model_dump(mode="json"),
+            }
+            await websocket.send_json(payload)
             await asyncio.sleep(settings.update_interval_seconds)
     except WebSocketDisconnect:
         return

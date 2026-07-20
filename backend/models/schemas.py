@@ -37,6 +37,9 @@ class GexSummary(BaseModel):
     by_strike: list[GexStrike] = Field(default_factory=list)
     call_wall_gex: float | None = None
     put_wall_gex: float | None = None
+    max_pain: float | None = None
+    gamma_resistance: float | None = None
+    gamma_support: float | None = None
     source: str = "simulated"
     updated_at: datetime | None = None
     contract_count: int = 0

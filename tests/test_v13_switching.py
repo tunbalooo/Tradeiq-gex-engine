@@ -8,13 +8,15 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
 
-def test_databento_symbol_switch_returns_preview_without_waiting_for_history(monkeypatch):
+def test_databento_symbol_switch_never_injects_synthetic_prices_into_live_chart(monkeypatch):
     service = DatabentoMarketDataService(max_candles=2400)
     monkeypatch.setattr(service, "_schedule_history_refresh", lambda profile, generation=None: None)
     result = asyncio.run(service.switch_symbol("ES"))
     assert result["symbol"] == "ES"
     assert result["warming"] is True
-    assert result["candle_count"] > 1000
+    assert result["candle_count"] == 0
+    assert result["history_source"] == "live-pending-history"
+    assert result["data_quality"] == "WAITING_FOR_HISTORY"
 
 
 def test_frontend_defers_automatic_claude_until_history_is_ready():

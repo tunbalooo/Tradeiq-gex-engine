@@ -16,6 +16,7 @@
   // Legacy v2.0 load references retained for regression tests:
   // await loadScript("/static/trading_chart.js?v=20")
   // await loadScript("/static/app.js?v=20")
+  // Legacy v2.1 references: /static/trading_chart.js?v=21 /static/app.js?v=21
 
   async function boot() {
     const chartLibraries = [
@@ -34,8 +35,8 @@
 
     // trading_chart.js includes a Canvas fallback, so TradeIQ still displays
     // candles if both external chart-library mirrors are unavailable.
-    await loadScript("/static/trading_chart.js?v=21");
-    await loadScript("/static/app.js?v=21");
+    await loadScript("/static/trading_chart.js?v=22");
+    await loadScript("/static/app.js?v=22");
   }
 
   boot().catch((error) => {

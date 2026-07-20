@@ -1,4 +1,4 @@
-# TradeIQ Multi-Market GEX Engine v1.5
+# TradeIQ Multi-Market GEX Engine v2.2
 
 TradeIQ is a FastAPI and browser-based futures decision-support dashboard for:
 
@@ -31,7 +31,7 @@ A `PREVIEW_ONLY` setup is a watch-only candidate generated from the latest avail
 
 ## Fast market switching
 
-TradeIQ no longer blocks the instrument selector while a full Databento history request finishes. On a first visit to a market, the interface switches immediately into **DATABENTO SYNC** mode, shows a clearly labelled local preview, and backfills real history in the background. Automatic Claude analysis and order arming remain disabled until the real/cached history is ready.
+TradeIQ no longer blocks the instrument selector while a full Databento history request finishes. On a first visit to a market, the interface switches immediately into **DATABENTO SYNC** mode and waits for real Databento candles. It no longer injects simulated preview prices into a live chart. Automatic Claude analysis, indicators that require full history, and order arming remain disabled until coherent real/cached history is ready.
 
 After a market has loaded once, its candles are retained in an in-memory cache for 30 minutes, so switching back is normally sub-second. Finnhub's general-news feed is also downloaded once and filtered locally for NQ, ES, and Gold instead of making a separate network request for each symbol.
 
@@ -160,3 +160,22 @@ TradeIQ separates a continuously recalculated **candidate** from an **armed setu
 ## v2.1 Watching lifecycle
 
 A developing setup now enters `WATCHING` before an order is armed. TradeIQ shows the fixed watched direction and entry, such as `WATCHING LONG @ 28,750.25`, but hides SL, targets and the risk box. After all mandatory confirmations pass, it transitions to `WAITING_FOR_LIMIT` and locks the complete trade plan.
+
+
+## v2.2 stable chart core and reference levels
+
+TradeIQ now enforces one coherent futures price regime per chart. Simulated preview history is never stitched to live Databento ticks. Historical bars are validated, deduplicated and compared with the live stream before they are merged. When a contract/provenance mismatch is detected, the mixed history is rejected and the chart displays a clear live-only syncing state rather than drawing a giant wick or connecting two unrelated price ranges.
+
+The market snapshot API now exposes `history_ready`, `history_source`, `data_quality`, `raw_symbol`, and `futures_symbol`. Desktop and mobile charts use those fields to keep trade levels and indicators hidden while history is incomplete. iPhone fullscreen also has a CSS viewport fallback when Safari declines the native Fullscreen API.
+
+The GEX display now mirrors the requested institutional level layout:
+
+- Gamma Resistance / Call Wall
+- Gamma Flip
+- Maximum Pain, only when real option open-interest data is available
+- Put Support / Put Wall
+- Ranked Strong +GEX and Strong -GEX levels
+- RTH Equilibrium
+- VWAP and standard-deviation context
+
+Maximum Pain is calculated by minimizing aggregate option-holder intrinsic payout across candidate settlement strikes. It is never fabricated from fallback net-GEX values.

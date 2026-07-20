@@ -64,6 +64,10 @@ const state = {
   instrument: null,
   switchingSymbol: false,
   marketWarming: false,
+  historyReady: false,
+  historySource: "unknown",
+  dataQuality: "UNKNOWN",
+  rawSymbol: null,
   socket: null,
   overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
   claude: { enabled: false, auto: true, busy: false, source: null, text: "", model: "—", lastStartedAt: 0 },
@@ -78,7 +82,18 @@ function instrumentName() { return state.instrument?.name || "Futures market"; }
 function pricePrecision() { return Number.isInteger(state.instrument?.price_precision) ? state.instrument.price_precision : 2; }
 function tickSize() { return Number(state.instrument?.tick_size || 0.25); }
 function timeframeLabel() { return state.timeframe >= 60 ? `${state.timeframe / 60}h` : `${state.timeframe}m`; }
-function chartFeedLabel() { return `${instrumentName()} · ${timeframeLabel()} · ${state.dataSource}`; }
+function chartFeedLabel() {
+  const quality = state.dataQuality && state.dataQuality !== "READY" ? ` · ${state.dataQuality.replaceAll("_", " ")}` : "";
+  return `${instrumentName()} · ${timeframeLabel()} · ${state.dataSource}${quality}`;
+}
+
+function applySnapshotMetadata(snapshot = {}) {
+  state.historyReady = Boolean(snapshot.history_ready ?? snapshot.history_cached);
+  state.historySource = snapshot.history_source || state.historySource || "unknown";
+  state.dataQuality = snapshot.data_quality || (state.historyReady ? "READY" : "WAITING_FOR_HISTORY");
+  state.rawSymbol = snapshot.raw_symbol || state.rawSymbol || null;
+  state.marketWarming = Boolean(snapshot.warming || (snapshot.data_source === "databento" && !state.historyReady));
+}
 
 function applyInstrument(instrument) {
   if (!instrument) return;
@@ -450,10 +465,11 @@ function renderOverview(items = []) {
 function renderGexTable(setup) {
   const gex = setup.gex;
   const rows = [
-    { type: "Call Wall", price: gex.call_wall, gex: gex.call_wall_gex, strength: 5, cls: "b" },
-    ...gex.levels.slice(0, 6).map((level) => ({ ...level, cls: (level.gex || 0) >= 0 ? "g" : "r" })),
+    { type: "Gamma Resistance / Call Wall", price: gex.call_wall, gex: gex.call_wall_gex, strength: 5, cls: "b" },
+    ...(Number.isFinite(Number(gex.max_pain)) ? [{ type: "Maximum Pain", price: gex.max_pain, gex: null, strength: 0, cls: "p" }] : []),
     { type: "Gamma Flip", price: gex.gamma_flip, gex: null, strength: 0, cls: "a" },
-    { type: "Put Wall", price: gex.put_wall, gex: gex.put_wall_gex, strength: 5, cls: "r" },
+    ...gex.levels.slice(0, 5).map((level) => ({ ...level, cls: (level.gex || 0) >= 0 ? "g" : "r" })),
+    { type: "Put Support / Put Wall", price: gex.put_wall, gex: gex.put_wall_gex, strength: 5, cls: "g" },
   ];
   const seen = new Set();
   const deduped = rows.filter((row) => {
@@ -655,6 +671,7 @@ function renderGexSummary(setup) {
   $("gammaFlip").textContent = fmt(gex.gamma_flip);
   $("putWall").textContent = fmt(gex.put_wall);
   $("callWall").textContent = fmt(gex.call_wall);
+  if ($("maxPain")) $("maxPain").textContent = Number.isFinite(Number(gex.max_pain)) ? fmt(gex.max_pain) : "Native OI required";
   const price = state.baseCandles.at(-1)?.close ?? 0;
   const above = price >= gex.gamma_flip;
   $("priceVsFlip").textContent = above ? "Above Flip" : "Below Flip";
@@ -671,6 +688,7 @@ function renderGexSummary(setup) {
     $("mobileGexRegime").className = gex.regime === "POSITIVE" ? "g" : gex.regime === "NEGATIVE" ? "r" : "a";
     $("mobileNetGex").textContent = fmtGex(gex.net_gex);
     $("mobileGammaFlip").textContent = fmt(gex.gamma_flip);
+    if ($("mobileMaxPain")) $("mobileMaxPain").textContent = Number.isFinite(Number(gex.max_pain)) ? fmt(gex.max_pain) : "—";
     $("mobileCallWall").textContent = fmt(gex.call_wall);
     $("mobilePutWall").textContent = fmt(gex.put_wall);
     $("mobileGexApplied").textContent = activeSymbol();
@@ -800,7 +818,40 @@ function renderPerformance(performance) {
   drawEquity(performance.equity_curve);
 }
 
+function renderSyncingState(snapshot = {}, session = state.session) {
+  state.setup = null;
+  if (session) renderSession(session);
+  renderHeader(snapshot);
+  const syncingText = state.dataQuality === "CONTRACT_MISMATCH"
+    ? "CONTRACT MISMATCH — LIVE BARS ONLY"
+    : state.dataQuality === "LIVE_ONLY"
+      ? "LIVE BARS — HISTORY SYNCING"
+      : "DATABENTO HISTORY SYNCING";
+  if ($("setupLabel")) { $("setupLabel").textContent = "SYNCING"; $("setupLabel").className = "a mono setup-side-label"; }
+  if ($("probabilityLabel")) $("probabilityLabel").textContent = "Data Syncing";
+  if ($("coreAlignment")) $("coreAlignment").textContent = "Trade setup calculations are paused until coherent real history is ready.";
+  ["setupEntry", "setupStop", "setupTp1", "setupTp2", "setupRr", "setupCluster"].forEach((id) => { if ($(id)) $(id).textContent = "—"; });
+  if ($("setupDirection")) $("setupDirection").textContent = "—";
+  if ($("setupStatus")) { $("setupStatus").textContent = syncingText; $("setupStatus").className = "v a"; }
+  if ($("setupValid")) $("setupValid").textContent = `${state.baseCandles.length} real bar${state.baseCandles.length === 1 ? "" : "s"}`;
+  if ($("chartSetupLabel")) { $("chartSetupLabel").textContent = "DATA SYNCING"; $("chartSetupLabel").className = "a mono"; }
+  if ($("chartSetupStatus")) { $("chartSetupStatus").textContent = syncingText; $("chartSetupStatus").className = "a"; }
+  ["chartSetupEntry", "chartSetupStop", "chartSetupTp1", "chartSetupTp2", "chartSetupRr", "chartSetupCluster"].forEach((id) => { if ($(id)) $(id).textContent = "—"; });
+  if ($("chartPreviewNotice")) {
+    $("chartPreviewNotice").hidden = false;
+    $("chartPreviewNotice").classList.add("syncing");
+    if ($("chartPreviewTitle")) $("chartPreviewTitle").textContent = syncingText;
+    if ($("chartPreviewReason")) $("chartPreviewReason").textContent = "TradeIQ rejected mixed or incomplete price history. Indicators and trade levels stay hidden until one coherent contract series is available.";
+  }
+  drawChart();
+  if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
+}
+
 function renderAll(setup, meta, session = state.session) {
+  if (!setup || !meta) {
+    renderSyncingState({}, session);
+    return;
+  }
   const previousSetup = state.setup;
   state.setup = setup;
   state.meta = meta;
@@ -888,6 +939,11 @@ function drawChart(chartId = "chart") {
     instrumentName: instrumentName(),
     tickSize: tickSize(),
     pricePrecision: pricePrecision(),
+    historyReady: state.historyReady,
+    historySource: state.historySource,
+    dataQuality: state.dataQuality,
+    rawSymbol: state.rawSymbol,
+    marketWarming: state.marketWarming,
   });
 }
 
@@ -908,17 +964,23 @@ async function initialLoad() {
     const [health, snapshot, dashboard] = await Promise.all([
       fetch("/api/health").then((response) => response.ok ? response.json() : Promise.reject(new Error("Health request failed"))),
       fetch("/api/market/snapshot?timeframe=1&limit=1400").then((response) => response.json()),
-      fetch("/api/dashboard").then((response) => response.json()),
+      fetch("/api/dashboard").then(async (response) => response.ok ? response.json() : null),
     ]);
-    state.baseCandles = snapshot.candles;
+    state.baseCandles = snapshot.candles || [];
+    applySnapshotMetadata(snapshot);
     const initialMarket = health.market || {};
-    state.marketWarming = Boolean(initialMarket.warming || (health.data_source === "databento" && !initialMarket.history_cached));
+    state.marketWarming = Boolean(initialMarket.warming || (health.data_source === "databento" && !initialMarket.history_cached) || snapshot.warming);
+    state.historyReady = Boolean(snapshot.history_ready ?? initialMarket.history_ready ?? initialMarket.history_cached);
+    state.historySource = snapshot.history_source || initialMarket.history_source || state.historySource;
+    state.dataQuality = snapshot.data_quality || initialMarket.data_quality || state.dataQuality;
+    state.rawSymbol = snapshot.raw_symbol || initialMarket.raw_symbol || null;
     state.dataSource = health.data_source === "databento"
       ? (initialMarket.last_error && !initialMarket.history_cached ? "DATABENTO ERROR" : state.marketWarming ? "DATABENTO SYNC" : "DATABENTO LIVE")
       : health.mode.toUpperCase();
     applyInstrument(snapshot.instrument || health.instrument || health.market?.instrument);
     $("modeLabel").textContent = state.dataSource;
-    renderAll(dashboard.setup, dashboard.meta, dashboard.session || health.session);
+    if (dashboard?.setup && dashboard?.meta) renderAll(dashboard.setup, dashboard.meta, dashboard.session || health.session);
+    else renderSyncingState(snapshot, health.session);
     $("chartCaption").textContent = chartFeedLabel();
     renderHeader(snapshot);
     setConnection(true);
@@ -939,6 +1001,7 @@ async function reloadSyncedHistory() {
     });
     if (snapshot.symbol && snapshot.symbol !== activeSymbol()) return false;
     state.baseCandles = snapshot.candles || [];
+    applySnapshotMetadata(snapshot);
     applyInstrument(snapshot.instrument);
     renderHeader(snapshot);
     window.TradeIQChartManager?.marketChanged?.("chart");
@@ -964,6 +1027,10 @@ function connectWebSocket() {
     const data = JSON.parse(event.data);
     const wasWarming = state.marketWarming;
     state.marketWarming = Boolean(data.market?.warming || (data.market?.data_source === "databento" && !data.market?.history_cached));
+    state.historyReady = Boolean(data.market?.history_ready ?? data.market?.history_cached);
+    state.historySource = data.market?.history_source || state.historySource;
+    state.dataQuality = data.market?.data_quality || state.dataQuality;
+    state.rawSymbol = data.market?.raw_symbol || state.rawSymbol;
     if (data.market?.data_source === "databento") {
       state.dataSource = data.market?.last_error && !data.market?.history_cached ? "DATABENTO ERROR" : state.marketWarming ? "DATABENTO SYNC" : "DATABENTO LIVE";
       if ($("modeLabel")) $("modeLabel").textContent = state.dataSource;
@@ -974,11 +1041,14 @@ function connectWebSocket() {
       applyInstrument(incomingInstrument);
     }
     const candle = data.candle;
-    const last = state.baseCandles.at(-1);
-    if (last && new Date(last.time).getTime() === new Date(candle.time).getTime()) state.baseCandles[state.baseCandles.length - 1] = candle;
-    else state.baseCandles.push(candle);
-    if (state.baseCandles.length > 2400) state.baseCandles.shift();
-    renderAll(data.setup, data.meta, data.session);
+    if (candle) {
+      const last = state.baseCandles.at(-1);
+      if (last && new Date(last.time).getTime() === new Date(candle.time).getTime()) state.baseCandles[state.baseCandles.length - 1] = candle;
+      else state.baseCandles.push(candle);
+      if (state.baseCandles.length > 2400) state.baseCandles.shift();
+    }
+    if (data.setup && data.meta) renderAll(data.setup, data.meta, data.session);
+    else renderSyncingState({ price: candle?.close }, data.session);
     if (wasWarming && !state.marketWarming) {
       await reloadSyncedHistory();
       if (state.currentPage === "chart" && state.claude.enabled && state.claude.auto && !state.claude.busy) {
@@ -1024,13 +1094,15 @@ async function switchMarket(symbol) {
     if ($("modeLabel")) $("modeLabel").textContent = state.dataSource;
     const [snapshot, dashboard] = await Promise.all([
       fetch("/api/market/snapshot?timeframe=1&limit=1400").then((item) => item.json()),
-      fetch("/api/dashboard").then((item) => item.json()),
+      fetch("/api/dashboard").then(async (item) => item.ok ? item.json() : null),
     ]);
     state.baseCandles = snapshot.candles || [];
+    applySnapshotMetadata(snapshot);
     state.hoverIndex = null;
     state.claude.text = "";
     applyInstrument(snapshot.instrument || selected.instrument);
-    renderAll(dashboard.setup, dashboard.meta, dashboard.session || selected.session);
+    if (dashboard?.setup && dashboard?.meta) renderAll(dashboard.setup, dashboard.meta, dashboard.session || selected.session);
+    else renderSyncingState(snapshot, selected.session);
     renderHeader(snapshot);
     window.TradeIQChartManager?.marketChanged?.("chart");
     window.TradeIQChartManager?.marketChanged?.("chartLarge");
@@ -1170,13 +1242,17 @@ function renderGexPage(setup) {
   const g = setup.gex;
   const parentNote = g.is_parent_market ? ` Parent-market levels are applied to the ${activeSymbol()} chart.` : "";
   $("gexProfile").innerHTML = `<div class="page-stats">${[
-    ["Regime",g.regime],["Net GEX",fmtGex(g.net_gex)],["Gamma flip",fmt(g.gamma_flip)],["Call wall",fmt(g.call_wall)],["Put wall",fmt(g.put_wall)]
-  ].map(([label,value]) => `<div class="page-stat"><b>${value}</b><small>${label}</small></div>`).join("")}</div><p class="note">GEX source: ${escapeHtml(g.source_label || g.source || "fallback")}.${parentNote} Dealer-side sign remains an estimate.</p>`;
+    ["Regime",g.regime],["Net GEX",fmtGex(g.net_gex)],["Gamma flip",fmt(g.gamma_flip)],
+    ["Gamma resistance",fmt(g.gamma_resistance ?? g.call_wall)],
+    ["Maximum pain",Number.isFinite(Number(g.max_pain)) ? fmt(g.max_pain) : "Native OI required"],
+    ["Put support",fmt(g.gamma_support ?? g.put_wall)]
+  ].map(([label,value]) => `<div class="page-stat"><b>${value}</b><small>${label}</small></div>`).join("")}</div><p class="note">GEX source: ${escapeHtml(g.source_label || g.source || "fallback")}.${parentNote} Maximum pain is shown only when open-interest data is available; no level is fabricated.</p>`;
   const levels = [
-    {type:"CALL WALL",price:g.call_wall,gex:g.call_wall_gex,strength:5},
-    ...(g.levels || []).slice(0,12),
+    {type:"GAMMA RESISTANCE / CALL WALL",price:g.call_wall,gex:g.call_wall_gex,strength:5},
+    ...(Number.isFinite(Number(g.max_pain)) ? [{type:"MAXIMUM PAIN",price:g.max_pain,gex:null,strength:0}] : []),
     {type:"GAMMA FLIP",price:g.gamma_flip,gex:null,strength:0},
-    {type:"PUT WALL",price:g.put_wall,gex:g.put_wall_gex,strength:5},
+    ...(g.levels || []).slice(0,12),
+    {type:"PUT SUPPORT / PUT WALL",price:g.put_wall,gex:g.put_wall_gex,strength:5},
   ];
   $("gexPageTable").innerHTML = levels.map((level) => `<tr><td class="${Number(level.gex||0)>=0?'g':'r'}">${level.type || 'LEVEL'}</td><td>${fmt(level.price)}</td><td>${level.gex == null?'—':fmtGex(level.gex)}</td><td class="a">${level.strength?stars(level.strength):'—'}</td></tr>`).join("");
   if ($("gexStrikeSource")) $("gexStrikeSource").textContent = g.is_estimate ? "ESTIMATED" : "NATIVE";

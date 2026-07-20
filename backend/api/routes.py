@@ -70,9 +70,28 @@ async def select_market_symbol(request: MarketSymbolRequest):
 
 @router.get("/market/snapshot")
 def market_snapshot(timeframe: int = Query(1, ge=1, le=240), limit: int = Query(1000, ge=50, le=2400)):
-    candles = aggregate_candles(market_data_service.snapshot(limit=limit), timeframe)
+    raw_candles = market_data_service.snapshot(limit=limit)
+    candles = aggregate_candles(raw_candles, timeframe)
     change, percent = market_data_service.price_change()
-    return {"symbol": market_data_service.symbol, "instrument": market_data_service.health().get("instrument"), "price": market_data_service.current_price, "change": change, "change_percent": percent, "timeframe_minutes": timeframe, "data_source": market_data_service.data_source, "candles": candles}
+    health = market_data_service.health()
+    return {
+        "symbol": market_data_service.symbol,
+        "instrument": health.get("instrument"),
+        "price": market_data_service.current_price if raw_candles else None,
+        "change": change,
+        "change_percent": percent,
+        "timeframe_minutes": timeframe,
+        "data_source": market_data_service.data_source,
+        "raw_symbol": health.get("raw_symbol"),
+        "futures_symbol": health.get("futures_symbol"),
+        "history_ready": health.get("history_ready", bool(raw_candles)),
+        "history_cached": health.get("history_cached", bool(raw_candles)),
+        "history_source": health.get("history_source", market_data_service.data_source),
+        "data_quality": health.get("data_quality", "READY"),
+        "warming": health.get("warming", False),
+        "candle_count": len(candles),
+        "candles": candles,
+    }
 
 
 @router.get("/dashboard")

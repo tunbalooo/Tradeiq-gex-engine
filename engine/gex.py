@@ -122,6 +122,28 @@ def calculate_gamma_flip(
     return spots[min(range(len(spots)), key=lambda index: abs(values[index]))]
 
 
+def calculate_max_pain(positions: list[OptionPosition]) -> float | None:
+    """Estimate options max pain from strike/open-interest payout minimisation."""
+    strikes = sorted({float(position.strike) for position in positions if position.open_interest > 0})
+    if not strikes:
+        return None
+    best_strike: float | None = None
+    best_payout = float("inf")
+    for settlement in strikes:
+        payout = 0.0
+        for position in positions:
+            oi = max(int(position.open_interest), 0)
+            if position.option_type.upper() == "CALL":
+                intrinsic = max(settlement - position.strike, 0.0)
+            else:
+                intrinsic = max(position.strike - settlement, 0.0)
+            payout += intrinsic * oi * max(position.contract_multiplier, 1)
+        if payout < best_payout:
+            best_payout = payout
+            best_strike = settlement
+    return best_strike
+
+
 def _strength(value: float, total_abs: float) -> int:
     return min(5, max(1, round(abs(value) / max(total_abs / 5, 1e-9))))
 
@@ -141,6 +163,9 @@ def derive_gex_summary_from_positions(
             "net_gex": 0.0,
             "call_wall_gex": 0.0,
             "put_wall_gex": 0.0,
+            "max_pain": None,
+            "gamma_resistance": futures_price,
+            "gamma_support": futures_price,
             "levels": [],
             "by_strike": [],
         }
@@ -159,6 +184,11 @@ def derive_gex_summary_from_positions(
         range_points=flip_range_points,
         step=max(float(flip_step), 0.01),
     )
+    max_pain = calculate_max_pain(positions)
+    positive_above = [strike for strike, values in components.items() if strike >= futures_price and values["net"] > 0]
+    positive_below = [strike for strike, values in components.items() if strike <= futures_price and values["net"] > 0]
+    gamma_resistance = max(positive_above, key=lambda strike: components[strike]["net"], default=call_wall)
+    gamma_support = max(positive_below, key=lambda strike: components[strike]["net"], default=put_wall)
 
     total_abs = sum(abs(values["net"]) for values in components.values()) or 1.0
     ranked = sorted(
@@ -193,6 +223,9 @@ def derive_gex_summary_from_positions(
         "net_gex": float(net_gex),
         "call_wall_gex": float(call_wall_gex),
         "put_wall_gex": float(put_wall_gex),
+        "max_pain": float(max_pain) if max_pain is not None else None,
+        "gamma_resistance": float(gamma_resistance),
+        "gamma_support": float(gamma_support),
         "levels": levels,
         "by_strike": by_strike,
     }
@@ -209,6 +242,9 @@ def derive_gex_summary(futures_price: float, strike_gex: dict[float, float]) -> 
             "net_gex": 0.0,
             "call_wall_gex": 0.0,
             "put_wall_gex": 0.0,
+            "max_pain": None,
+            "gamma_resistance": futures_price,
+            "gamma_support": futures_price,
             "levels": [],
             "by_strike": [],
         }
@@ -255,6 +291,9 @@ def derive_gex_summary(futures_price: float, strike_gex: dict[float, float]) -> 
         "net_gex": float(net_gex),
         "call_wall_gex": float(strike_gex[call_wall]),
         "put_wall_gex": float(strike_gex[put_wall]),
+        "max_pain": None,
+        "gamma_resistance": float(call_wall),
+        "gamma_support": float(put_wall),
         "levels": levels,
         "by_strike": by_strike,
     }
