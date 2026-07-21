@@ -1,4 +1,4 @@
-"""Central deterministic coordinator for TradeIQ v3.0.2.
+"""Central deterministic coordinator for TradeIQ v3.0.3.
 
 The Decision Brain selects the strongest entry model and applies model-specific
 confirmation gates. Claude remains read-only. A universal liquidity-sequence
@@ -19,6 +19,7 @@ MODEL_CONFIRMATIONS: dict[str, tuple[tuple[str, ...], ...]] = {
     "LIQUIDITY_SWEEP_MSS": (("liquidity_sweep",), ("displacement",), ("ordered_sequence",)),
     "SUPPLY_DEMAND_RETEST": (("supply_demand",), ("trend_alignment",), ("gex_ote_zone_cluster", "gex_alignment")),
     "OTE_RETRACEMENT": (("ote_overlap",), ("trend_alignment",), ("gex_ote_zone_cluster", "supply_demand"), ("displacement", "ordered_sequence")),
+    "FIB_PULLBACK_CONTINUATION": (("fib_pullback_touched",), ("fib_pullback_rejection",), ("fib_pullback_entry_fresh",), ("trend_alignment",)),
     "GAMMA_FLIP_RECLAIM": (("gex_alignment",), ("trend_alignment",), ("displacement",), ("vwap_alignment",)),
     "FVG_RETEST": (("directional_fvg",), ("displacement",), ("trend_alignment",)),
     "ORDER_BLOCK_RETEST": (("supply_demand",), ("displacement",), ("trend_alignment",)),

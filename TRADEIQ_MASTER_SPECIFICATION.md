@@ -1,7 +1,7 @@
 # TradeIQ Master Specification
 
-**Product version:** 3.0.2-entry-chart-stability  
-**Document version:** 3.0.2  
+**Product version:** 3.0.3-fib-pullback-watch-execution  
+**Document version:** 3.0.3  
 **Status:** Living source of truth
 
 ## 1. Product Purpose
@@ -23,7 +23,7 @@ It is not a broker, profit guarantee or autonomous AI trader.
 
 ## 3. Lifecycle
 
-`PREVIEW_ONLY → WATCHING → WAITING_FOR_LIMIT → FILLED → TP1_HIT → TP2_HIT/STOPPED`
+`PREVIEW_ONLY → WATCHING[WAITING_FOR_PRICE → TRIGGER_TOUCHED] → WAITING_FOR_LIMIT → FILLED → TP1_HIT → TP2_HIT/STOPPED`
 
 Terminal alternatives:
 
@@ -33,7 +33,7 @@ Terminal alternatives:
 
 A `WATCHING → WATCHING` event records a deterministic switch to a stronger secondary entry model.
 
-## 4. Implemented v3.0–v3.0.2 Modules
+## 4. Implemented v3.0–v3.0.3 Modules
 
 - Live/historical market data service.
 - GEX service with snapshot-stable dealer levels.
@@ -41,7 +41,7 @@ A `WATCHING → WATCHING` event records a deterministic switch to a stronger sec
 - OTE and risk engines.
 - Persistent setup memory and lifecycle timeline.
 - Claude lifecycle explanation queue.
-- Decision Brain and 12-model ranking.
+- Decision Brain and 13-model ranking.
 - Institutional confidence categories.
 - TP1 partial, break-even runner and excursion tracking.
 - Read-only model analytics.
@@ -66,20 +66,33 @@ A `WATCHING → WATCHING` event records a deterministic switch to a stronger sec
 - Setup History exposes meaningful lifecycle objects rather than every transient preview.
 - Clean Chart mode is the default and preserves the important institutional context without burying candles.
 
+### Fib pullback and watch execution (v3.0.3)
+
+- Fib Pullback Continuation is a separate model from anticipatory OTE.
+- A directional impulse defines a 50%–61.8% monitoring zone.
+- A completed rejection/reclaim candle is required before execution can arm.
+- The executable limit uses the confirmation candle's 50% body midpoint.
+- Structural pullback failure, not an arbitrary Fib ratio, defines invalidation.
+- A live touch of a watch line immediately changes the visible phase to `TRIGGER_TOUCHED` while remaining explicitly **not an order**.
+- The engine opens a finite confirmation window, then arms, invalidates or records `UNCONFIRMED_TOUCH` with an exact reason.
+- Completed candles drive model confirmation; the newest live candle drives touches, fills, stops and targets.
+- Observation snapshots prevent pre-watch, pre-arm, pre-fill or pre-break-even price extremes from being treated as later events while still detecting new same-candle crossings.
+
 ## 5. Entry Models
 
 1. Liquidity Sweep + Structure Shift
 2. Supply/Demand Retest
 3. OTE Retracement
-4. Gamma Flip Reclaim
-5. Fair Value Gap Retest
-6. Order Block Retest
-7. EMA Pullback
-8. VWAP Reclaim
-9. Break & Retest
-10. Trend Continuation
-11. Inverse FVG
-12. SMT Divergence
+4. Fib Pullback Continuation
+5. Gamma Flip Reclaim
+6. Fair Value Gap Retest
+7. Order Block Retest
+8. EMA Pullback
+9. VWAP Reclaim
+10. Break & Retest
+11. Trend Continuation
+12. Inverse FVG
+13. SMT Divergence
 
 Each model returns a transparent score, eligibility, trigger, invalidation, evidence and missing data. Unsupported evidence remains missing rather than simulated.
 

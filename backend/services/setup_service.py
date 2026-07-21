@@ -13,6 +13,7 @@ from backend.services.timeframes import aggregate_candles
 from engine.confidence import DEFAULT_WEIGHTS, calculate_confidence
 from engine.confluence_cluster import find_confluence_cluster
 from engine.fib_ote import calculate_fib_levels, ote_zone
+from engine.fib_pullback_continuation import analyze_fib_pullback_continuation
 from engine.gex import OptionPosition, derive_gex_summary_from_positions
 from engine.market_structure import analyze_market_structure
 from engine.entry_models import ModelContext, rank_entry_models
@@ -208,6 +209,10 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
     direction_fvg = structure["bullish_fvg"] if direction == "LONG" else structure["bearish_fvg"]
     ordered_sequence = structure["bullish_sequence"] if direction == "LONG" else structure["bearish_sequence"]
     trend_alignment = structure["bullish_ema_aligned"] if direction == "LONG" else structure["bearish_ema_aligned"]
+    fib_pullback = analyze_fib_pullback_continuation(
+        base_candles, direction=direction, swing_low=swing_low, swing_high=swing_high,
+        current_price=current_price, atr=atr, tick_size=profile.tick_size,
+    )
 
     levels = build_trade_levels(
         direction=direction, current_price=current_price, ote_low=ote_low, ote_high=ote_high,
@@ -286,6 +291,18 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         "previous_liquidity_low": structure.get("previous_liquidity_low"),
         "previous_liquidity_high": structure.get("previous_liquidity_high"),
         "sweep_price": structure.get("sweep_price"),
+        "fib_pullback_zone": True,
+        "fib_pullback_zone_low": fib_pullback.zone_low,
+        "fib_pullback_zone_high": fib_pullback.zone_high,
+        "fib_pullback_watch_price": fib_pullback.watch_price,
+        "fib_pullback_invalidation": fib_pullback.invalidation_price,
+        "fib_pullback_impulse_quality": fib_pullback.impulse_quality,
+        "fib_pullback_touched": fib_pullback.touched,
+        "fib_pullback_rejection": fib_pullback.rejection,
+        "fib_pullback_confirmed": fib_pullback.confirmed,
+        "fib_pullback_confirmation_entry": fib_pullback.confirmation_entry,
+        "fib_pullback_entry_fresh": fib_pullback.entry_fresh,
+        "fib_pullback_confirmation_candle_time": fib_pullback.confirmation_candle_time.isoformat() if fib_pullback.confirmation_candle_time else None,
     }
     # Rank the institutional entry models before locking a price plan. The top
     # model supplies its own trigger and structural invalidation. This prevents
@@ -297,7 +314,11 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         selected_zone_high=selected_zone.high if selected_zone else None,
         ote_low=ote_low, ote_high=ote_high,
         fvg_low=signals.get("directional_fvg_low"), fvg_high=signals.get("directional_fvg_high"),
-        signals=signals, structure=structure, volume_expansion=volume_expansion_quality, session_quality=session_quality,
+        signals=signals, structure=structure,
+        fib_pullback_low=fib_pullback.zone_low, fib_pullback_high=fib_pullback.zone_high,
+        fib_pullback_confirmation_entry=fib_pullback.confirmation_entry,
+        fib_pullback_invalidation=fib_pullback.invalidation_price,
+        volume_expansion=volume_expansion_quality, session_quality=session_quality,
     )
     preliminary_ranking = rank_entry_models(preliminary_context)
     preliminary_primary = next((item for item in preliminary_ranking if item.eligible), preliminary_ranking[0] if preliminary_ranking else None)
@@ -333,6 +354,11 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         rationale.append(f"OTE, {zone_name}, and {cluster.gex_type or 'GEX'} cluster around {cluster.low:,.2f}–{cluster.high:,.2f}.")
     if preliminary_primary:
         rationale.append(f"{preliminary_primary.name} is the current primary entry model at {preliminary_primary.score:.1f}%.")
+    if preliminary_primary and preliminary_primary.key == "FIB_PULLBACK_CONTINUATION":
+        rationale.append(
+            f"The 50%–61.8% continuation zone is {fib_pullback.zone_low:,.2f}–{fib_pullback.zone_high:,.2f}; "
+            + ("a closed rejection has confirmed a body-midpoint limit." if fib_pullback.confirmed else "it remains a watch location until a closed rejection confirms execution.")
+        )
     if levels["blocked_by_near_target"]: rationale.append("A nearby market level blocks sufficient reward; preview only.")
     if not levels["entry_valid"]: rationale.append("The selected model trigger is not a valid resting limit relative to current price.")
     if levels["target_sources"]: rationale.append(f"TP1 uses {levels['target_sources']['tp1']}; TP2 uses {levels['target_sources']['tp2']}.")
@@ -368,7 +394,11 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         selected_zone_high=selected_zone.high if selected_zone else None,
         ote_low=ote_low, ote_high=ote_high,
         fvg_low=signals.get("directional_fvg_low"), fvg_high=signals.get("directional_fvg_high"),
-        signals=signals, structure=structure, volume_expansion=volume_expansion_quality, session_quality=session_quality,
+        signals=signals, structure=structure,
+        fib_pullback_low=fib_pullback.zone_low, fib_pullback_high=fib_pullback.zone_high,
+        fib_pullback_confirmation_entry=fib_pullback.confirmation_entry,
+        fib_pullback_invalidation=fib_pullback.invalidation_price,
+        volume_expansion=volume_expansion_quality, session_quality=session_quality,
     )
     return decision_brain_service.select(setup, rank_entry_models(model_context))
 

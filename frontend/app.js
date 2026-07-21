@@ -29,6 +29,9 @@ const SIGNAL_LABELS = {
   std_dev_confluence: "Standard-deviation confluence",
   vwap_alignment: "Price aligned with VWAP",
   approaching_wall: "Approaching directional GEX wall",
+  fib_pullback_touched: "50%–61.8% pullback zone touched",
+  fib_pullback_rejection: "Fib pullback rejection confirmed",
+  fib_pullback_entry_fresh: "Confirmation entry remains fresh",
 };
 const COLORS = {
   green: "#26D07C", red: "#FF4D5E", amber: "#F5B93B", blue: "#48A3FF",
@@ -48,6 +51,10 @@ function hasWatchingPlan(setup) {
 
 function watchTrigger(setup) {
   return Number.isFinite(Number(setup?.watch_trigger)) ? Number(setup.watch_trigger) : null;
+}
+
+function watchTriggerTouched(setup) {
+  return Boolean(hasWatchingPlan(setup) && setup.watch_phase === "TRIGGER_TOUCHED");
 }
 
 // Legacy v2.0 assertion reference: "Entry (locks when armed)"
@@ -637,6 +644,7 @@ function renderSession(session) {
 }
 
 function previewExplanation(setup, { syncing = false, marketClosed = false } = {}) {
+  if (watchTriggerTouched(setup)) return `Price touched the ${setup.direction.toLowerCase()} watch level at ${fmt(watchTrigger(setup))}. No order was filled. TradeIQ is waiting for a closed rejection or displacement confirmation before it can lock a limit plan.`;
   if (hasWatchingPlan(setup)) return `Monitoring ${setup.direction.toLowerCase()} near ${fmt(watchTrigger(setup))}. This trigger is not an entry and no limit order is armed. Wait for LIMIT READY before considering the plan.`;
   if (syncing) return "Temporary levels from local placeholder data while Databento history syncs. Do not trade this preview.";
   if (marketClosed) return "Watch-only candidate from the latest closed data. It can change or disappear when live trading resumes.";
@@ -667,10 +675,11 @@ function renderTradeSetup(setup) {
 
   const activeStates = [...ACTIVE_TRADE_STATES];
   const watchingPlan = hasWatchingPlan(setup);
+  const triggerTouched = watchTriggerTouched(setup);
   const lockedPlan = hasLockedTradePlan(setup);
   const syncing = state.marketWarming || setup.status === "DATA_SYNCING";
   const marketClosed = state.session && !state.session.is_open;
-  const quality = watchingPlan ? `Monitoring ${setup.direction.charAt(0)}${setup.direction.slice(1).toLowerCase()}` :
+  const quality = triggerTouched ? `Confirming ${setup.direction.charAt(0)}${setup.direction.slice(1).toLowerCase()}` : watchingPlan ? `Monitoring ${setup.direction.charAt(0)}${setup.direction.slice(1).toLowerCase()}` :
     setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch Expired" : "Scanning") :
     setup.order_state === "WAITING_FOR_LIMIT" ? "Limit Armed" :
     setup.order_state === "FILLED" ? "Position Filled" :
@@ -687,11 +696,15 @@ function renderTradeSetup(setup) {
     ? `${aligned} / ${coreKeys.length} core confluences aligned — score preserved, no new order`
     : setup.actionable
       ? `${aligned} / ${coreKeys.length} core confluences aligned — actionable`
+      : triggerTouched
+        ? `${aligned} / ${coreKeys.length} aligned — level touched, confirmation pending`
       : watchingPlan
         ? `${aligned} / ${coreKeys.length} aligned — monitoring only, no order`
         : `${aligned} / ${coreKeys.length} core confluences aligned — scanning`;
 
-  const label = watchingPlan
+  const label = triggerTouched
+    ? `CONFIRMING ${setup.direction}`
+    : watchingPlan
     ? `MONITORING ${setup.direction}`
     : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "WATCH EXPIRED" : "SCANNING") : `${setup.direction} ${setup.order_state.replaceAll("_", " ")}`;
   $("setupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
@@ -702,17 +715,20 @@ function renderTradeSetup(setup) {
   $("setupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 3).join(" · ") || "—";
   $("setupGrade").textContent = setup.confidence_grade || "—";
   $("setupGrade").className = `v ${confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r"}`;
-  $("entryLabel").textContent = watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
+  $("entryLabel").textContent = triggerTouched ? "Watch Touched · Awaiting Confirmation" : watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
   $("setupEntry").textContent = watchingPlan ? fmt(watchTrigger(setup)) : lockedPlan ? fmt(setup.entry) : "—";
-  $("setupStop").textContent = lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
+  if ($("stopLabel")) $("stopLabel").textContent = watchingPlan ? "Structural Invalidation" : "Initial Stop";
+  $("setupStop").textContent = watchingPlan && Number.isFinite(Number(setup.watch_invalidation))
+    ? fmt(setup.watch_invalidation)
+    : lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
   $("setupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
-  $("setupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : "—";
+  $("setupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : triggerTouched ? "CONFIRMATION WINDOW" : watchingPlan ? "WAITING FOR PRICE" : "—";
   $("setupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("setupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("setupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
   $("setupTp2Source").textContent = lockedPlan ? (setup.target_sources?.tp2 || "—") : "—";
   $("setupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : watchingPlan ? `Monitoring ${setup.direction.toLowerCase()} · do not place a limit yet` : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch expired — waiting for a new candidate" : "Scanning — no setup") :
+  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : triggerTouched ? `Watch level touched · waiting for closed confirmation · no order armed` : watchingPlan ? `Monitoring ${setup.direction.toLowerCase()} · do not place a limit yet` : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch expired — waiting for a new candidate" : "Scanning — no setup") :
     setup.order_state === "UNCONFIRMED_TOUCH" ? "No trade — trigger was touched before confirmation" :
     setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
@@ -721,8 +737,8 @@ function renderTradeSetup(setup) {
   $("setupCluster").className = `v ${setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
-  $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Monitoring Ends" : "Valid Until";
-  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : triggerTouched ? "Confirmation Ends" : watchingPlan ? "Monitoring Ends" : "Valid Until";
+  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(triggerTouched ? (setup.watch_confirmation_expires_at || setup.watch_expires_at || setup.valid_until) : watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
   renderModelRanking(setup, "setupModelRanking");
   renderChartTradeSetup(setup, {
     confidence,
@@ -736,13 +752,14 @@ function renderTradeSetup(setup) {
     statusText,
     activeStates,
     watchingPlan,
+    triggerTouched,
     lockedPlan,
   });
 }
 
 function renderChartTradeSetup(setup, context) {
   if (!$("chartSetupPanel")) return;
-  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, coreCount, label, statusText, activeStates, watchingPlan, lockedPlan } = context;
+  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, coreCount, label, statusText, activeStates, watchingPlan, triggerTouched, lockedPlan } = context;
   const ring = $("chartConfidenceRing");
   ring.style.setProperty("--chart-confidence", `${confidence * 3.6}deg`);
   ring.style.setProperty("--chart-confidence-color", gaugeColor);
@@ -756,6 +773,8 @@ function renderChartTradeSetup(setup, context) {
     ? `${aligned} / ${coreCount} core confluences aligned — score preserved`
     : setup.actionable
       ? `${aligned} / ${coreCount} aligned — actionable`
+      : triggerTouched
+        ? `${aligned} / ${coreCount} aligned — level touched, confirmation pending`
       : watchingPlan
         ? `${aligned} / ${coreCount} aligned — monitoring only, no order`
         : `${aligned} / ${coreCount} aligned — scanning`;
@@ -768,11 +787,14 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 2).join(" · ") || "—";
   $("chartSetupGrade").textContent = setup.confidence_grade || "—";
   $("chartSetupGrade").className = confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r";
-  $("chartEntryLabel").textContent = watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
+  $("chartEntryLabel").textContent = triggerTouched ? "Watch Touched · Awaiting Confirmation" : watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
   $("chartSetupEntry").textContent = watchingPlan ? fmt(watchTrigger(setup)) : lockedPlan ? fmt(setup.entry) : "—";
-  $("chartSetupStop").textContent = lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
+  if ($("chartStopLabel")) $("chartStopLabel").textContent = watchingPlan ? "Structural Invalidation" : "Initial Stop";
+  $("chartSetupStop").textContent = watchingPlan && Number.isFinite(Number(setup.watch_invalidation))
+    ? fmt(setup.watch_invalidation)
+    : lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
   $("chartSetupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
-  $("chartSetupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : "—";
+  $("chartSetupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : triggerTouched ? "CONFIRMATION WINDOW" : watchingPlan ? "WAITING FOR PRICE" : "—";
   $("chartSetupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
@@ -785,8 +807,8 @@ function renderChartTradeSetup(setup, context) {
   renderModelRanking(setup, "chartModelRanking");
   $("chartSetupSession").textContent = state.session?.display_name || "—";
   $("chartSetupSession").className = marketClosed ? "r" : "g";
-  $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : watchingPlan ? "Monitoring Ends" : "Valid Until";
-  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : triggerTouched ? "Confirmation Ends" : watchingPlan ? "Monitoring Ends" : "Valid Until";
+  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(triggerTouched ? (setup.watch_confirmation_expires_at || setup.watch_expires_at || setup.valid_until) : watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
   const previewNotice = $("chartPreviewNotice");
   if (previewNotice) {
     const informational = setup.order_state === "PREVIEW_ONLY" || watchingPlan;
@@ -795,7 +817,7 @@ function renderChartTradeSetup(setup, context) {
     previewNotice.classList.toggle("closed", Boolean(marketClosed));
     previewNotice.classList.toggle("watching", Boolean(watchingPlan));
     const title = $("chartPreviewTitle");
-    if (title) title.textContent = watchingPlan ? `MONITORING ${setup.direction}` : "SCANNING — NO ACTIVE SETUP";
+    if (title) title.textContent = triggerTouched ? `TRIGGER TOUCHED — CONFIRMING ${setup.direction}` : watchingPlan ? `MONITORING ${setup.direction}` : "SCANNING — NO ACTIVE SETUP";
     if (informational && $("chartPreviewReason")) $("chartPreviewReason").textContent = previewExplanation(setup, { syncing, marketClosed });
   }
 }

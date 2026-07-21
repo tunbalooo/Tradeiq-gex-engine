@@ -168,10 +168,27 @@ class TradeSetup(BaseModel):
     watch_started_at: datetime | None = None
     watch_expires_at: datetime | None = None
     watch_trigger: float | None = None
+    watch_invalidation: float | None = None
+    watch_phase: str = "WAITING_FOR_PRICE"
+    watch_touch_at: datetime | None = None
+    watch_touch_price: float | None = None
+    watch_touch_candle_time: datetime | None = None
+    watch_confirmation_expires_at: datetime | None = None
+    watch_touch_count: int = 0
+    watch_observed_candle_time: datetime | None = None
+    watch_observed_low: float | None = None
+    watch_observed_high: float | None = None
+    watch_observed_close: float | None = None
     armed_at: datetime | None = None
     armed_candle_time: datetime | None = None
     last_processed_candle_time: datetime | None = None
     filled_at: datetime | None = None
+    filled_candle_time: datetime | None = None
+    active_stop_effective_candle_time: datetime | None = None
+    execution_observed_candle_time: datetime | None = None
+    execution_observed_low: float | None = None
+    execution_observed_high: float | None = None
+    execution_observed_close: float | None = None
     closed_at: datetime | None = None
     outcome: str | None = None
 

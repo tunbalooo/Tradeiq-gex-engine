@@ -41,6 +41,7 @@ def test_watching_entry_stays_fixed_until_confirmation(monkeypatch):
 
     assert refreshed.order_state == "WATCHING"
     assert refreshed.status == "MONITORING_LONG"
+    assert refreshed.watch_phase == "WAITING_FOR_PRICE"
     assert refreshed.entry is None
     assert refreshed.watch_trigger == 100.0
     assert refreshed.confidence == 66.0

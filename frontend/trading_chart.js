@@ -100,6 +100,10 @@
     return Number.isFinite(Number(setup?.watch_trigger)) ? Number(setup.watch_trigger) : null;
   }
 
+  function watchTriggerTouched(setup) {
+    return Boolean(hasWatchingPlan(setup) && setup.watch_phase === "TRIGGER_TOUCHED");
+  }
+
   function initialStop(setup) {
     return Number.isFinite(Number(setup?.initial_stop_loss)) ? Number(setup.initial_stop_loss) : Number(setup?.stop_loss);
   }
@@ -500,7 +504,7 @@
         if (Number.isFinite(Number(rthEq))) horizontal(ctx, toY(rthEq), plotRight, "RTH EQ", "#E8D99A");
       }
       if (overlays.trade && hasWatchingPlan(setup)) {
-        horizontal(ctx, toY(watchTrigger(setup)), plotRight, `MONITOR ${setup.direction} · NO ORDER`, lineColors.entry, true);
+        horizontal(ctx, toY(watchTrigger(setup)), plotRight, watchTriggerTouched(setup) ? `TOUCHED · CONFIRM ${setup.direction}` : `MONITOR ${setup.direction} · NO ORDER`, lineColors.entry, true);
       } else if (overlays.trade && hasLockedTradePlan(setup)) {
         horizontal(ctx, toY(setup.entry), plotRight, "LIMIT", lineColors.entry, false);
         horizontal(ctx, toY(initialStop(setup)), plotRight, "INITIAL SL", lineColors.stop, false);
@@ -1161,7 +1165,7 @@
     // Trade lifecycle levels receive label priority. Context levels that sit on
     // top of them remain visible as lines but suppress duplicate right-axis tags.
     if (overlays.trade && hasWatchingPlan(setup)) {
-      addPriceLine(instance, watchTrigger(setup), `MONITOR ${setup.direction} · NO ORDER`, COLORS.amber, dotted, 1);
+      addPriceLine(instance, watchTrigger(setup), watchTriggerTouched(setup) ? `TOUCHED · CONFIRM ${setup.direction}` : `MONITOR ${setup.direction} · NO ORDER`, watchTriggerTouched(setup) ? COLORS.blue : COLORS.amber, dotted, watchTriggerTouched(setup) ? 2 : 1);
     } else if (overlays.trade && hasLockedTradePlan(setup)) {
       addPriceLine(instance, setup.entry, "LIMIT", COLORS.amber, dashed, 2);
       addPriceLine(instance, initialStop(setup), "INITIAL SL", COLORS.red, dashed, 2);
@@ -1186,12 +1190,25 @@
     }
 
     if (overlays.fib) {
-      const fibs = cleanMode
-        ? (setup.fib_levels || []).filter((level) => [0.618, 0.705, 0.786].some((ratio) => Math.abs(Number(level.ratio) - ratio) < .003))
-        : (setup.fib_levels || []);
-      fibs.forEach((level) => {
-        addPriceLine(instance, level.price, level.label || String(level.ratio), Math.abs(Number(level.ratio) - 0.705) < 0.002 ? COLORS.amber : "#49576A", dotted, 1, Math.abs(Number(level.ratio) - 0.705) < 0.002);
-      });
+      const fibContinuation = setup.primary_entry_model_key === "FIB_PULLBACK_CONTINUATION";
+      if (fibContinuation) {
+        const zoneLow = Number(setup.signals?.fib_pullback_zone_low);
+        const zoneHigh = Number(setup.signals?.fib_pullback_zone_high);
+        const fib50 = setup.direction === "LONG" ? zoneHigh : zoneLow;
+        const fib618 = setup.direction === "LONG" ? zoneLow : zoneHigh;
+        addPriceLine(instance, fib50, "FIB 50%", COLORS.amber, dotted, 2, true);
+        addPriceLine(instance, fib618, "FIB 61.8%", COLORS.amber, dotted, 2, true);
+      } else {
+        const cleanRatios = [0.618, 0.705, 0.786];
+        const fibs = cleanMode
+          ? (setup.fib_levels || []).filter((level) => cleanRatios.some((ratio) => Math.abs(Number(level.ratio) - ratio) < .003))
+          : (setup.fib_levels || []);
+        fibs.forEach((level) => {
+          const ratio = Number(level.ratio);
+          const important = Math.abs(ratio - 0.705) < .002;
+          addPriceLine(instance, level.price, level.label || String(level.ratio), important ? COLORS.amber : "#49576A", dotted, important ? 2 : 1, important);
+        });
+      }
     }
 
     if (overlays.vwap) {
@@ -1272,13 +1289,16 @@
     }
 
     if (overlays.fib) {
-      const ote = (setup.fib_levels || []).filter((level) => Number(level.ratio) >= 0.618 && Number(level.ratio) <= 0.786);
-      if (ote.length) {
-        const values = ote.map((level) => coordinate(level.price)).filter((value) => value != null);
-        if (values.length) {
-          ctx.fillStyle = "rgba(169,139,255,.07)";
-          ctx.fillRect(0, Math.min(...values), chartWidth, Math.max(...values) - Math.min(...values));
-        }
+      const fibContinuation = setup.primary_entry_model_key === "FIB_PULLBACK_CONTINUATION";
+      const fibPrices = fibContinuation
+        ? [setup.signals?.fib_pullback_zone_low, setup.signals?.fib_pullback_zone_high]
+        : (setup.fib_levels || [])
+          .filter((level) => Number(level.ratio) >= 0.618 - .003 && Number(level.ratio) <= 0.786 + .003)
+          .map((level) => level.price);
+      const values = fibPrices.map((price) => coordinate(Number(price))).filter((value) => value != null);
+      if (values.length >= 2) {
+        ctx.fillStyle = fibContinuation ? "rgba(245,185,59,.075)" : "rgba(169,139,255,.07)";
+        ctx.fillRect(0, Math.min(...values), chartWidth, Math.max(...values) - Math.min(...values));
       }
     }
 

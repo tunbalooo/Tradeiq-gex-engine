@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=302" />
+<link rel="stylesheet" href="/static/styles.css?v=303" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -184,7 +184,7 @@
             <div class="setup-row"><span class="k">Backup Models</span><span class="v m" id="setupBackups">—</span></div>
             <div class="setup-row"><span class="k">Confidence Grade</span><span class="v" id="setupGrade">—</span></div>
             <div class="setup-row"><span class="k" id="entryLabel">Limit Entry</span><span class="v a" id="setupEntry">—</span></div>
-            <div class="setup-row"><span class="k">Initial Stop</span><span class="v r" id="setupStop">—</span></div>
+            <div class="setup-row"><span class="k" id="stopLabel">Initial Stop</span><span class="v r" id="setupStop">—</span></div>
             <div class="setup-row"><span class="k">Active Stop</span><span class="v a" id="setupActiveStop">—</span></div>
             <div class="setup-row"><span class="k">Management</span><span class="v" id="setupManagement">—</span></div>
             <div class="setup-row"><span class="k">Take Profit 1</span><span class="v g" id="setupTp1">—</span></div>
@@ -324,7 +324,7 @@
                   <div class="chart-setup-row"><span>Backup Models</span><b id="chartSetupBackups">—</b></div>
                   <div class="chart-setup-row"><span>Grade</span><b id="chartSetupGrade">—</b></div>
                   <div class="chart-setup-row"><span id="chartEntryLabel">Limit Entry</span><b class="a" id="chartSetupEntry">—</b></div>
-                  <div class="chart-setup-row"><span>Initial Stop</span><b class="r" id="chartSetupStop">—</b></div>
+                  <div class="chart-setup-row"><span id="chartStopLabel">Initial Stop</span><b class="r" id="chartSetupStop">—</b></div>
                   <div class="chart-setup-row"><span>Active Stop</span><b class="a" id="chartSetupActiveStop">—</b></div>
                   <div class="chart-setup-row"><span>Management</span><b id="chartSetupManagement">—</b></div>
                   <div class="chart-setup-row"><span>Take Profit 1</span><b class="g" id="chartSetupTp1">—</b></div>
@@ -490,7 +490,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=302"></script>
+<script src="/static/boot.js?v=303"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

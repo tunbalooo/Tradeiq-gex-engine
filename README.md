@@ -255,3 +255,24 @@ Current verification target:
 ```
 
 See the four living specifications in the project root for the current product, trading engine, UI/UX and roadmap definitions.
+
+
+## v3.0.3 Fib Pullback Continuation and watch execution
+
+- Added **Fib Pullback Continuation** as a model separate from OTE. It monitors a 50%–61.8% retracement, requires a completed directional rejection/reclaim, and uses the confirmation candle's body midpoint as the locked resting limit.
+- A watch-line touch now creates a visible `TRIGGER_TOUCHED` phase. The UI says `CONFIRMING LONG/SHORT` and explicitly states that no order or fill exists.
+- The engine opens a finite model-confirmation window. Confirmation arms the locked plan; structural failure invalidates it; timeout records `UNCONFIRMED_TOUCH` with the exact reason.
+- Completed candles drive model confirmation. The newest live candle drives watch touches, locked-limit fills, stops and targets.
+- Same-candle sequencing guards prevent price movement from before the order/active stop existed from being counted as a later fill or stop.
+
+Configuration:
+
+```env
+WATCH_CONFIRMATION_MINUTES=5
+```
+
+Current local verification target:
+
+```text
+123 passed
+```

@@ -41,7 +41,7 @@ def test_monitoring_trigger_is_not_an_executable_entry(monkeypatch):
     assert watching.take_profit_2 is None
 
 
-def test_early_trigger_touch_is_no_trade(monkeypatch):
+def test_early_trigger_touch_starts_confirmation_window_without_a_fill(monkeypatch):
     service = TradeEngineService()
     monkeypatch.setattr(service, "_market_gate", lambda: (True, None))
     start = datetime(2026, 7, 20, 2, 0, tzinfo=timezone.utc)
@@ -50,9 +50,11 @@ def test_early_trigger_touch_is_no_trade(monkeypatch):
     watching = service._start_watching(_candidate(), _candle(start, low=101, high=102))
     clock["now"] = start + timedelta(minutes=5)
     touched = service._advance_watching(watching, _candidate(), _candle(clock["now"], low=99, high=101))
-    assert touched.order_state == "UNCONFIRMED_TOUCH"
-    assert touched.outcome == "UNCONFIRMED_TOUCH"
+    assert touched.order_state == "WATCHING"
+    assert touched.watch_phase == "TRIGGER_TOUCHED"
+    assert touched.watch_touch_at == clock["now"]
     assert touched.filled_at is None
+    assert touched.entry is None
 
 
 def test_confirmed_limit_then_touch_fills_and_keeps_plan(monkeypatch):

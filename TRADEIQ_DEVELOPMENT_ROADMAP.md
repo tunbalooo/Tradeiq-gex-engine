@@ -1,6 +1,6 @@
 # TradeIQ Development Roadmap
 
-**Current release:** 3.0.2-entry-chart-stability
+**Current release:** 3.0.3-fib-pullback-watch-execution
 
 ## Completed
 
@@ -12,11 +12,13 @@
 - [x] v3.0 Institutional confidence, analytics and integrated UI
 - [x] v3.0.1 Small-timeframe candle integrity, price-first autoscale and viewport persistence
 - [x] v3.0.2 Model-specific entry gates, closed-candle lifecycle stability, clean chart mode and filtered setup history
+- [x] v3.0.3 Fib Pullback Continuation, visible watch-touch confirmation phase and live-candle execution events
 
-## Next — v3.0.3 Live Forward-Test Corrections
+## Next — v3.0.4 Live Forward-Test Corrections
 
 - [ ] Validate watch and arm thresholds on live NQ/MNQ 1m, 2m and 5m data
-- [ ] Review cancellation and unconfirmed-touch rates by session
+- [ ] Review confirmation-window, cancellation and unconfirmed-touch rates by model/session
+- [ ] Compare Fib Pullback body-midpoint fills with anticipatory OTE fills
 - [ ] Tune label priority from real device screenshots
 - [ ] Confirm installed PWA cache replacement on iPhone/iPad and Windows
 - [ ] Add an optional diagnostics panel showing the exact missing confirmation groups

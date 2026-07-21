@@ -87,6 +87,77 @@ class TradeEngineService:
             return None
         return number if number == number and abs(number) != float("inf") else None
 
+    @staticmethod
+    def _observation(candle) -> dict[str, object]:
+        return {
+            "candle_time": candle.time,
+            "low": float(candle.low),
+            "high": float(candle.high),
+            "close": float(candle.close),
+        }
+
+    @staticmethod
+    def _level_touched_after(
+        level: float | None,
+        candle,
+        *,
+        observed_candle_time: datetime | None,
+        observed_low: float | None,
+        observed_high: float | None,
+        observed_close: float | None,
+    ) -> bool:
+        """Detect a level only after the engine began observing that lifecycle state.
+
+        A live OHLC candle contains price movement from before a watch or order was
+        created. Treating the whole range as new produced retrospective watch touches
+        and fills. On the same live candle, a level now qualifies only when it was not
+        present in the previous observed range or the latest price crossed it. A new
+        candle can use its full range because it opened after the prior observation.
+        """
+        if level is None:
+            return False
+        level = float(level)
+        current_low = float(candle.low)
+        current_high = float(candle.high)
+        current_close = float(candle.close)
+        current_contains = current_low <= level <= current_high
+        if observed_candle_time is None:
+            return current_contains
+        if candle.time > observed_candle_time:
+            return current_contains
+        if candle.time < observed_candle_time:
+            return False
+        prior_contains = bool(
+            observed_low is not None and observed_high is not None
+            and float(observed_low) <= level <= float(observed_high)
+        )
+        crossed_by_latest_price = bool(
+            observed_close is not None
+            and min(float(observed_close), current_close) <= level <= max(float(observed_close), current_close)
+            and float(observed_close) != current_close
+        )
+        return bool((current_contains and not prior_contains) or crossed_by_latest_price)
+
+    @classmethod
+    def _watch_observation_updates(cls, candle) -> dict[str, object]:
+        observed = cls._observation(candle)
+        return {
+            "watch_observed_candle_time": observed["candle_time"],
+            "watch_observed_low": observed["low"],
+            "watch_observed_high": observed["high"],
+            "watch_observed_close": observed["close"],
+        }
+
+    @classmethod
+    def _execution_observation_updates(cls, candle) -> dict[str, object]:
+        observed = cls._observation(candle)
+        return {
+            "execution_observed_candle_time": observed["candle_time"],
+            "execution_observed_low": observed["low"],
+            "execution_observed_high": observed["high"],
+            "execution_observed_close": observed["close"],
+        }
+
     def _remember_expired_watch(self, watching: TradeSetup) -> None:
         self._expired_watch = {
             "symbol": watching.symbol,
@@ -145,17 +216,20 @@ class TradeEngineService:
             candles = market_data_service.snapshot(limit=3)
             if not candles:
                 return None
-            # Use the most recent closed one-minute candle. The newest bar may still be updating.
+            # Closed candles drive deterministic model confirmation. The newest live
+            # candle drives watch touches, limit fills, stops and targets so the UI
+            # reacts when price actually trades a level instead of waiting for bar close.
             closed = candles[-2] if len(candles) >= 2 else candles[-1]
+            live = candles[-1]
             with self._lock:
                 self._last_cycle_at = self._utcnow()
                 self._last_error = None
                 if self._current is None or self._current.order_state in TERMINAL:
-                    self._current = self._evaluate_candidate(candidate, closed)
+                    self._current = self._evaluate_candidate(candidate, closed, live)
                 elif self._current.order_state == "PREVIEW_ONLY":
                     # Preview/scanning plans may become a stable WATCHING candidate or
                     # arm after history/session gates are satisfied.
-                    refreshed = self._evaluate_candidate(candidate, closed)
+                    refreshed = self._evaluate_candidate(candidate, closed, live)
                     if refreshed.order_state == "PREVIEW_ONLY":
                         refreshed = refreshed.model_copy(update={
                             "setup_id": self._current.setup_id,
@@ -163,11 +237,10 @@ class TradeEngineService:
                         })
                     self._current = refreshed
                 elif self._current.order_state == "WATCHING":
-                    self._current = self._advance_watching(self._current, candidate, closed)
+                    self._current = self._advance_watching(self._current, candidate, closed, live)
                 else:
                     self._current = self._refresh_context(self._current, candidate)
-                    if self._last_processed_candle_time is None or closed.time > self._last_processed_candle_time:
-                        self._current = self._advance(self._current, candidate, closed)
+                    self._current = self._advance(self._current, candidate, live)
                 if self._last_processed_candle_time is None or closed.time > self._last_processed_candle_time:
                     self._last_processed_candle_time = closed.time
                 storage_service.save_setup(self._current, self._result_r(self._current))
@@ -194,6 +267,28 @@ class TradeEngineService:
             item.key == candidate.primary_entry_model_key and item.eligible
             for item in candidate.entry_model_scores
         )
+
+    def _primary_model_invalidation(self, candidate: TradeSetup) -> float | None:
+        trigger = self._finite_number(candidate.entry)
+        values: list[float | None] = []
+        for item in candidate.entry_model_scores:
+            if item.key == candidate.primary_entry_model_key:
+                values.append(self._finite_number(item.invalidation_price))
+                break
+        values.extend([
+            self._finite_number(candidate.signals.get("selected_model_invalidation")),
+            self._finite_number(candidate.stop_loss),
+        ])
+        for value in values:
+            if value is None:
+                continue
+            if trigger is None:
+                return value
+            if candidate.direction == "LONG" and value < trigger:
+                return value
+            if candidate.direction == "SHORT" and value > trigger:
+                return value
+        return None
 
     def _is_watch_candidate(self, candidate: TradeSetup) -> bool:
         return bool(
@@ -241,8 +336,12 @@ class TradeEngineService:
             "status": status or candidate.status,
         })
 
-    def _start_watching(self, candidate: TradeSetup, candle, *, setup_id: str | None = None, timestamp: datetime | None = None) -> TradeSetup:
+    def _start_watching(
+        self, candidate: TradeSetup, candle, *, market_candle=None,
+        setup_id: str | None = None, timestamp: datetime | None = None,
+    ) -> TradeSetup:
         now = self._utcnow()
+        market_candle = market_candle or candle
         watch_expires_at = now + timedelta(minutes=settings.setup_expiry_minutes)
         self._expired_watch = None
         self._reset_pending_candidate()
@@ -258,6 +357,14 @@ class TradeEngineService:
             "watch_started_at": now,
             "watch_expires_at": watch_expires_at,
             "watch_trigger": trigger,
+            "watch_invalidation": self._primary_model_invalidation(candidate),
+            "watch_phase": "WAITING_FOR_PRICE",
+            "watch_touch_at": None,
+            "watch_touch_price": None,
+            "watch_touch_candle_time": None,
+            "watch_confirmation_expires_at": None,
+            "watch_touch_count": 0,
+            **self._watch_observation_updates(market_candle),
             "order_state": "WATCHING",
             "status": f"MONITORING_{candidate.direction}",
             "actionable": False,
@@ -282,7 +389,7 @@ class TradeEngineService:
             "last_processed_candle_time": candle.time,
         })
         storage_service.transition(
-            watching, "PREVIEW_ONLY", "WATCHING", trigger, candle.time,
+            watching, "PREVIEW_ONLY", "WATCHING", trigger, market_candle.time,
             transition_reason,
             "warning",
         )
@@ -292,8 +399,11 @@ class TradeEngineService:
         self, candidate: TradeSetup, candle, *, previous_state: str = "PREVIEW_ONLY",
         setup_id: str | None = None, timestamp: datetime | None = None,
         watch_started_at: datetime | None = None, watch_expires_at: datetime | None = None,
+        watch_touch_at: datetime | None = None, watch_touch_price: float | None = None,
+        watch_touch_candle_time: datetime | None = None, execution_candle=None,
     ) -> TradeSetup:
         now = self._utcnow()
+        execution_candle = execution_candle or candle
         transition_reason = (
             "The deterministic engine received the remaining mandatory confirmations. "
             "The limit entry, protective stop, TP1, TP2 and risk box are now complete and locked."
@@ -304,11 +414,17 @@ class TradeEngineService:
             "valid_until": now + timedelta(minutes=settings.setup_expiry_minutes),
             "watch_started_at": watch_started_at,
             "watch_expires_at": watch_expires_at,
+            "watch_phase": "PLAN_ARMED",
+            "watch_touch_at": watch_touch_at,
+            "watch_touch_price": watch_touch_price,
+            "watch_touch_candle_time": watch_touch_candle_time,
+            "watch_confirmation_expires_at": None,
             "order_state": "WAITING_FOR_LIMIT",
             "status": "WAITING_FOR_LIMIT",
             "actionable": True,
             "armed_at": now,
-            "armed_candle_time": candle.time,
+            "armed_candle_time": execution_candle.time,
+            **self._execution_observation_updates(execution_candle),
             "last_transition_from": previous_state,
             "last_transition_to": "WAITING_FOR_LIMIT",
             "last_transition_reason": transition_reason,
@@ -325,29 +441,31 @@ class TradeEngineService:
             ],
         })
         storage_service.transition(
-            armed, previous_state, "WAITING_FOR_LIMIT", armed.entry, candle.time,
+            armed, previous_state, "WAITING_FOR_LIMIT", armed.entry, execution_candle.time,
             transition_reason,
             "positive",
         )
         return armed
 
-    def _evaluate_candidate(self, candidate: TradeSetup, candle) -> TradeSetup:
+    def _evaluate_candidate(self, candidate: TradeSetup, candle, market_candle=None) -> TradeSetup:
+        market_candle = market_candle or candle
         can_trade, gate_status = self._market_gate()
         if not can_trade:
             return self._preview(candidate, gate_status)
         if self._same_as_expired_watch(candidate):
             return self._preview(candidate, "WATCH_EXPIRED")
         if candidate.actionable:
-            return self._arm_candidate(candidate, candle)
+            return self._arm_candidate(candidate, candle, execution_candle=market_candle)
         if self._is_watch_candidate(candidate):
-            return self._start_watching(candidate, candle)
+            return self._start_watching(candidate, candle, market_candle=market_candle)
         return self._preview(candidate)
 
     # Backward-compatible internal name used by earlier tests and integrations.
     def _maybe_arm(self, candidate: TradeSetup, candle) -> TradeSetup:
         return self._evaluate_candidate(candidate, candle)
 
-    def _advance_watching(self, watching: TradeSetup, candidate: TradeSetup, candle) -> TradeSetup:
+    def _advance_watching(self, watching: TradeSetup, candidate: TradeSetup, candle, market_candle=None) -> TradeSetup:
+        market_candle = market_candle or candle
         can_trade, gate_status = self._market_gate()
         if not can_trade:
             now = self._utcnow()
@@ -383,6 +501,27 @@ class TradeEngineService:
                 actionable=False, closed_at=now, outcome="WATCH_EXPIRED",
             )
 
+        # The watch line is not an order, but touching it must produce a visible
+        # lifecycle event. TradeIQ now enters a short confirmation window instead
+        # of silently doing nothing or instantly discarding the setup.
+        trigger = self._finite_number(watching.watch_trigger)
+        invalidation = self._finite_number(watching.watch_invalidation)
+        invalidated = self._level_touched_after(
+            invalidation,
+            market_candle,
+            observed_candle_time=watching.watch_observed_candle_time,
+            observed_low=watching.watch_observed_low,
+            observed_high=watching.watch_observed_high,
+            observed_close=watching.watch_observed_close,
+        )
+        if invalidated:
+            self._reset_pending_candidate()
+            return self._transition(
+                watching, "INVALIDATED", market_candle,
+                f"The monitored {watching.direction.lower()} thesis was cancelled because price traded through structural invalidation at {invalidation:,.2f} before a limit plan was armed.",
+                actionable=False, closed_at=now, outcome="STRUCTURE_FAILED",
+            )
+
         if candidate.actionable and same_direction:
             self._reset_pending_candidate()
             return self._arm_candidate(
@@ -390,21 +529,54 @@ class TradeEngineService:
                 setup_id=watching.setup_id, timestamp=watching.timestamp,
                 watch_started_at=watching.watch_started_at or watching.timestamp,
                 watch_expires_at=watch_expires_at,
+                watch_touch_at=watching.watch_touch_at,
+                watch_touch_price=watching.watch_touch_price,
+                watch_touch_candle_time=watching.watch_touch_candle_time,
+                execution_candle=market_candle,
             )
 
-        # A monitored trigger is not a resting order. If price reaches it before
-        # the deterministic engine confirms the full plan, record an unconfirmed
-        # touch rather than pretending that a fill occurred or showing stale TP/SL.
-        trigger = self._finite_number(watching.watch_trigger)
-        new_closed_candle = watching.last_processed_candle_time is None or candle.time > watching.last_processed_candle_time
-        if new_closed_candle and trigger is not None and candle.low <= trigger <= candle.high:
+        confirmation_deadline = watching.watch_confirmation_expires_at
+        if watching.watch_touch_at is not None and confirmation_deadline and now >= confirmation_deadline:
             self._remember_expired_watch(watching)
             self._reset_pending_candidate()
             return self._transition(
-                watching, "UNCONFIRMED_TOUCH", candle,
-                "Price touched the monitoring trigger before the setup was confirmed. No order was armed and no fill is recorded.",
+                watching, "UNCONFIRMED_TOUCH", market_candle,
+                "Price touched the monitoring level, but the required rejection/displacement confirmation did not complete within the confirmation window. No order was armed.",
                 actionable=False, closed_at=now, outcome="UNCONFIRMED_TOUCH",
             )
+
+        touched_now = self._level_touched_after(
+            trigger,
+            market_candle,
+            observed_candle_time=watching.watch_observed_candle_time,
+            observed_low=watching.watch_observed_low,
+            observed_high=watching.watch_observed_high,
+            observed_close=watching.watch_observed_close,
+        )
+        if touched_now and watching.watch_touch_at is None:
+            expires = now + timedelta(minutes=max(1, settings.watch_confirmation_minutes))
+            reason = (
+                f"Price touched the {watching.direction.lower()} watch level at {trigger:,.2f}. "
+                "This is not a fill. TradeIQ is now waiting for the model-specific rejection or displacement confirmation before it can lock a limit plan."
+            )
+            touched = self._refresh_context(watching, candidate).model_copy(update={
+                "watch_phase": "TRIGGER_TOUCHED",
+                "status": f"CONFIRMING_{watching.direction}",
+                "watch_touch_at": now,
+                "watch_touch_price": self._finite_number(market_candle.close),
+                "watch_touch_candle_time": market_candle.time,
+                "watch_confirmation_expires_at": expires,
+                "watch_touch_count": watching.watch_touch_count + 1,
+                "last_transition_from": "WATCHING",
+                "last_transition_to": "WATCHING",
+                "last_transition_reason": reason,
+                "last_transition_at": now,
+                "last_transition_price": trigger,
+                "last_processed_candle_time": candle.time,
+            })
+            self._reset_pending_candidate()
+            storage_service.transition(touched, "WATCHING", "WATCHING", trigger, market_candle.time, reason, "info")
+            return touched
 
         candidate_watchable = self._is_watch_candidate(candidate)
         model_changed = bool(
@@ -421,7 +593,8 @@ class TradeEngineService:
             if not self._candidate_is_stable(candidate, candle):
                 return watching.model_copy(update={
                     "last_processed_candle_time": candle.time,
-                    "status": f"MONITORING_{watching.direction}",
+                    "status": f"CONFIRMING_{watching.direction}" if watching.watch_touch_at is not None else f"MONITORING_{watching.direction}",
+                    **self._watch_observation_updates(market_candle),
                 })
             new_trigger = self._finite_number(candidate.entry)
             if new_trigger is not None:
@@ -440,6 +613,13 @@ class TradeEngineService:
                     "model_selected_at": now,
                     "model_switch_count": watching.model_switch_count + 1,
                     "watch_trigger": new_trigger,
+                    "watch_invalidation": self._primary_model_invalidation(candidate),
+                    "watch_phase": "WAITING_FOR_PRICE",
+                    "watch_touch_at": None,
+                    "watch_touch_price": None,
+                    "watch_touch_candle_time": None,
+                    "watch_confirmation_expires_at": None,
+                    **self._watch_observation_updates(market_candle),
                     "last_transition_from": "WATCHING",
                     "last_transition_to": "WATCHING",
                     "last_transition_reason": reason,
@@ -457,7 +637,8 @@ class TradeEngineService:
             if not stable:
                 return watching.model_copy(update={
                     "last_processed_candle_time": candle.time,
-                    "status": f"MONITORING_{watching.direction}",
+                    "status": f"CONFIRMING_{watching.direction}" if watching.watch_touch_at is not None else f"MONITORING_{watching.direction}",
+                    **self._watch_observation_updates(market_candle),
                 })
             reason = (
                 "A confirmed opposite-direction setup replaced the monitored thesis."
@@ -487,12 +668,20 @@ class TradeEngineService:
             "confidence_grade": candidate.confidence_grade,
             "institutional_confidence_components": candidate.institutional_confidence_components,
             "institutional_confidence_maximums": candidate.institutional_confidence_maximums,
-            "status": f"MONITORING_{watching.direction}",
+            "status": f"CONFIRMING_{watching.direction}" if watching.watch_touch_at is not None else f"MONITORING_{watching.direction}",
             "order_state": "WATCHING",
             "actionable": False,
             "watch_started_at": watching.watch_started_at or watching.timestamp,
             "watch_expires_at": watch_expires_at,
             "watch_trigger": watching.watch_trigger,
+            "watch_invalidation": watching.watch_invalidation,
+            "watch_phase": watching.watch_phase,
+            "watch_touch_at": watching.watch_touch_at,
+            "watch_touch_price": watching.watch_touch_price,
+            "watch_touch_candle_time": watching.watch_touch_candle_time,
+            "watch_confirmation_expires_at": watching.watch_confirmation_expires_at,
+            "watch_touch_count": watching.watch_touch_count,
+            **self._watch_observation_updates(market_candle),
             "valid_until": watch_expires_at,
             "last_processed_candle_time": candle.time,
         })
@@ -539,18 +728,38 @@ class TradeEngineService:
     def _update_excursions(self, active: TradeSetup, candle) -> TradeSetup:
         if active.entry is None or active.order_state not in {"FILLED", "TP1_HIT"}:
             return active
-        if active.direction == "LONG":
-            favorable = max(0.0, float(candle.high) - active.entry)
-            adverse = max(0.0, active.entry - float(candle.low))
+
+        # On the same live candle that established the current lifecycle state,
+        # ignore high/low values already present in the previous observation. They
+        # may have occurred before the order filled or before the stop advanced.
+        same_observed_candle = (
+            active.execution_observed_candle_time is not None
+            and candle.time == active.execution_observed_candle_time
+        )
+        high = float(candle.high)
+        low = float(candle.low)
+        close = float(candle.close)
+        if same_observed_candle:
+            observed_high = self._finite_number(active.execution_observed_high)
+            observed_low = self._finite_number(active.execution_observed_low)
+            effective_high = high if observed_high is None or high > observed_high else close
+            effective_low = low if observed_low is None or low < observed_low else close
         else:
-            favorable = max(0.0, active.entry - float(candle.low))
-            adverse = max(0.0, float(candle.high) - active.entry)
+            effective_high = high
+            effective_low = low
+
+        if active.direction == "LONG":
+            favorable = max(0.0, effective_high - active.entry)
+            adverse = max(0.0, active.entry - effective_low)
+        else:
+            favorable = max(0.0, active.entry - effective_low)
+            adverse = max(0.0, effective_high - active.entry)
         return active.model_copy(update={
             "max_favorable_excursion_points": round(max(active.max_favorable_excursion_points, favorable), 2),
             "max_adverse_excursion_points": round(max(active.max_adverse_excursion_points, adverse), 2),
         })
 
-    def _tp1_management_updates(self, active: TradeSetup, now: datetime) -> dict:
+    def _tp1_management_updates(self, active: TradeSetup, now: datetime, candle_time: datetime | None = None) -> dict:
         actions = list(active.management_actions)
         actions.append({
             "at": now.isoformat(),
@@ -573,59 +782,166 @@ class TradeEngineService:
             updates.update({
                 "active_stop_loss": active.entry,
                 "breakeven_at": now,
+                "active_stop_effective_candle_time": candle_time,
                 "management_actions": actions,
             })
         return updates
 
     def _advance(self, active: TradeSetup, candidate: TradeSetup, candle) -> TradeSetup:
-        # Never use the candle that existed before or at the instant the plan was armed.
-        if active.armed_candle_time and candle.time <= active.armed_candle_time:
+        # Ignore data older than the live candle observed when the plan was armed.
+        if active.armed_candle_time and candle.time < active.armed_candle_time:
             return active.model_copy(update={"last_processed_candle_time": candle.time})
+
         now = self._utcnow()
         state = active.order_state
+
+        # Backward-compatible restoration guard. Setups persisted before v3.0.3
+        # do not contain live observation snapshots. If the first candle we see is
+        # the same candle on which the plan/fill/active stop was established, seed
+        # the observation instead of interpreting old range extremes as new events.
+        if active.execution_observed_candle_time is None:
+            reference_time = (
+                active.active_stop_effective_candle_time if state == "TP1_HIT"
+                else active.filled_candle_time if state == "FILLED"
+                else active.armed_candle_time
+            )
+            if reference_time is not None and candle.time <= reference_time:
+                return active.model_copy(update={
+                    "last_processed_candle_time": candle.time,
+                    **self._execution_observation_updates(candle),
+                })
+
         active = self._update_excursions(active, candle)
+
+        def touched(level: float | None) -> bool:
+            return self._level_touched_after(
+                self._finite_number(level),
+                candle,
+                observed_candle_time=active.execution_observed_candle_time,
+                observed_low=active.execution_observed_low,
+                observed_high=active.execution_observed_high,
+                observed_close=active.execution_observed_close,
+            )
+
+        def close_reached(level: float | None) -> bool:
+            if level is None:
+                return False
+            if active.direction == "LONG":
+                return float(candle.close) >= float(level)
+            return float(candle.close) <= float(level)
+
+        observation = self._execution_observation_updates(candle)
+
         if state == "WAITING_FOR_LIMIT" and now >= active.valid_until:
-            return self._transition(active, "EXPIRED", candle, "The resting limit was not filled before expiry.", actionable=False, closed_at=now, outcome="EXPIRED")
+            return self._transition(
+                active, "EXPIRED", candle, "The resting limit was not filled before expiry.",
+                actionable=False, closed_at=now, outcome="EXPIRED", **observation,
+            )
+
         if state == "WAITING_FOR_LIMIT":
-            touched_entry = candle.low <= active.entry <= candle.high
+            touched_entry = touched(active.entry)
             # A locked resting limit is evaluated before fresh context can cancel it.
-            # This prevents the exact fill candle from being mislabeled INVALIDATED
-            # merely because confidence/GEX/cluster values changed after price arrived.
+            # This prevents the exact fill interval from being mislabeled INVALIDATED.
             if not touched_entry:
                 if candidate.direction != active.direction and candidate.confidence >= settings.setup_actionable_score:
-                    return self._transition(active, "INVALIDATED", candle, "A strong opposite-direction setup invalidated the unfilled plan.", actionable=False, closed_at=now, outcome="OPPOSITE_SETUP")
+                    return self._transition(
+                        active, "INVALIDATED", candle,
+                        "A strong opposite-direction setup invalidated the unfilled plan.",
+                        actionable=False, closed_at=now, outcome="OPPOSITE_SETUP", **observation,
+                    )
                 if candidate.confidence < 50 or not candidate.signals.get("gex_alignment") or candidate.cluster_score < .35:
-                    return self._transition(active, "INVALIDATED", candle, "The original confluence cluster was lost before entry.", actionable=False, closed_at=now, outcome="CONFLUENCE_LOST")
-                return active.model_copy(update={"last_processed_candle_time": candle.time})
-            stop_touched = candle.low <= active.stop_loss <= candle.high
-            if stop_touched:
-                return self._transition(active, "STOPPED", candle, "Entry and stop occurred within the same OHLC candle; conservatively recorded stop-first.", actionable=False, filled_at=now, closed_at=now, outcome="STOPPED_ON_FILL_CANDLE", management_state="STOPPED", runner_active=False)
-            tp2_touched = candle.low <= active.take_profit_2 <= candle.high
-            tp1_touched = candle.low <= active.take_profit_1 <= candle.high
-            if tp2_touched:
-                return self._transition(active, "TP2_HIT", candle, "The fill candle also reached TP2 without touching the stop.", actionable=False, filled_at=now, closed_at=now, outcome="TP2_HIT", management_state="COMPLETE", runner_active=False)
-            if tp1_touched:
-                return self._transition(active, "TP1_HIT", candle, "The fill candle reached TP1; partial profit was secured and the runner stop advanced according to policy.", filled_at=now, outcome="TP1_HIT_RUNNING", **self._tp1_management_updates(active, now))
-            actions = list(active.management_actions) + [{"at": now.isoformat(), "action": "FILLED", "detail": "Locked limit filled; risk management is active."}]
-            return self._transition(active, "FILLED", candle, "The resting limit was filled.", filled_at=now, outcome="OPEN", management_state="POSITION_ACTIVE", runner_active=True, active_stop_loss=active.active_stop_loss or active.stop_loss, management_actions=actions)
+                    return self._transition(
+                        active, "INVALIDATED", candle,
+                        "The original confluence cluster was lost before entry.",
+                        actionable=False, closed_at=now, outcome="CONFLUENCE_LOST", **observation,
+                    )
+                return active.model_copy(update={"last_processed_candle_time": candle.time, **observation})
+
+            # If entry and stop both became reachable between two observations, the
+            # sequence is unknowable from OHLC. Record the conservative stop-first result.
+            if touched(active.stop_loss):
+                return self._transition(
+                    active, "STOPPED", candle,
+                    "Entry and stop became reachable within the same observed OHLC interval; conservatively recorded stop-first.",
+                    actionable=False, filled_at=now, filled_candle_time=candle.time,
+                    closed_at=now, outcome="STOPPED_ON_FILL_CANDLE",
+                    management_state="STOPPED", runner_active=False, **observation,
+                )
+
+            # A target wick may have occurred before the later pullback filled the
+            # limit. Only a close beyond the target proves completion on the first
+            # fill observation. Later live updates use post-fill range expansion.
+            if close_reached(active.take_profit_2):
+                return self._transition(
+                    active, "TP2_HIT", candle,
+                    "The locked limit filled and the latest traded price completed TP2.",
+                    actionable=False, filled_at=now, filled_candle_time=candle.time,
+                    closed_at=now, outcome="TP2_HIT", management_state="COMPLETE",
+                    runner_active=False, **observation,
+                )
+            if close_reached(active.take_profit_1):
+                return self._transition(
+                    active, "TP1_HIT", candle,
+                    "The locked limit filled and the latest traded price reached TP1; partial profit was secured and the runner stop advanced according to policy.",
+                    filled_at=now, filled_candle_time=candle.time,
+                    outcome="TP1_HIT_RUNNING",
+                    **self._tp1_management_updates(active, now, candle.time),
+                    **observation,
+                )
+            actions = list(active.management_actions) + [{
+                "at": now.isoformat(), "action": "FILLED",
+                "detail": "Locked limit filled; risk management is active.",
+            }]
+            return self._transition(
+                active, "FILLED", candle, "The resting limit was filled.",
+                filled_at=now, filled_candle_time=candle.time, outcome="OPEN",
+                management_state="POSITION_ACTIVE", runner_active=True,
+                active_stop_loss=active.active_stop_loss or active.stop_loss,
+                management_actions=actions, **observation,
+            )
 
         if state in {"FILLED", "TP1_HIT"}:
             stop_reference = active.active_stop_loss if active.active_stop_loss is not None else active.stop_loss
-            stop_touched = stop_reference is not None and candle.low <= stop_reference <= candle.high
-            tp2_touched = candle.low <= active.take_profit_2 <= candle.high
-            tp1_touched = candle.low <= active.take_profit_1 <= candle.high
+            stop_touched = touched(stop_reference)
+            tp2_touched = touched(active.take_profit_2)
+            tp1_touched = touched(active.take_profit_1)
+
             if stop_touched and tp2_touched:
-                return self._transition(active, "STOPPED", candle, "Active stop and TP2 were both inside one candle; conservatively recorded stop-first.", actionable=False, closed_at=now, outcome="AMBIGUOUS_STOP_FIRST", management_state="STOPPED", runner_active=False)
+                return self._transition(
+                    active, "STOPPED", candle,
+                    "Active stop and TP2 became reachable within one observed OHLC interval; conservatively recorded stop-first.",
+                    actionable=False, closed_at=now, outcome="AMBIGUOUS_STOP_FIRST",
+                    management_state="STOPPED", runner_active=False, **observation,
+                )
             if stop_touched:
-                at_breakeven = state == "TP1_HIT" and active.entry is not None and abs(float(stop_reference) - active.entry) < 1e-9
+                at_breakeven = (
+                    state == "TP1_HIT" and active.entry is not None
+                    and abs(float(stop_reference) - active.entry) < 1e-9
+                )
                 detail = "The runner returned to the break-even stop after TP1." if at_breakeven else "The active protective stop was hit."
                 outcome = "BREAKEVEN_AFTER_TP1" if at_breakeven else "STOPPED"
-                return self._transition(active, "STOPPED", candle, detail, actionable=False, closed_at=now, outcome=outcome, management_state="COMPLETE" if at_breakeven else "STOPPED", runner_active=False)
+                return self._transition(
+                    active, "STOPPED", candle, detail, actionable=False,
+                    closed_at=now, outcome=outcome,
+                    management_state="COMPLETE" if at_breakeven else "STOPPED",
+                    runner_active=False, **observation,
+                )
             if tp2_touched:
-                return self._transition(active, "TP2_HIT", candle, "The final target was reached.", actionable=False, closed_at=now, outcome="TP2_HIT", management_state="COMPLETE", runner_active=False)
+                return self._transition(
+                    active, "TP2_HIT", candle, "The final target was reached.",
+                    actionable=False, closed_at=now, outcome="TP2_HIT",
+                    management_state="COMPLETE", runner_active=False, **observation,
+                )
             if state == "FILLED" and tp1_touched:
-                return self._transition(active, "TP1_HIT", candle, "The first target was reached; partial profit was secured and the runner is still tracked.", outcome="TP1_HIT_RUNNING", **self._tp1_management_updates(active, now))
-        return active.model_copy(update={"last_processed_candle_time": candle.time})
+                return self._transition(
+                    active, "TP1_HIT", candle,
+                    "The first target was reached; partial profit was secured and the runner is still tracked.",
+                    outcome="TP1_HIT_RUNNING",
+                    **self._tp1_management_updates(active, now, candle.time),
+                    **observation,
+                )
+
+        return active.model_copy(update={"last_processed_candle_time": candle.time, **observation})
 
     def _result_r(self, setup: TradeSetup) -> float | None:
         if setup.order_state == "TP2_HIT":

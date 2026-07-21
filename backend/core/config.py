@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     entry_model_arm_score: float = 72.0
     direction_switch_confirm_bars: int = 2
     setup_expiry_minutes: int = 30
+    watch_confirmation_minutes: int = 5
     cluster_min_score: float = 0.65
     cluster_tolerance_atr: float = 0.25
     nq_tick_size: float = 0.25  # deprecated: instrument registry supplies tick sizes

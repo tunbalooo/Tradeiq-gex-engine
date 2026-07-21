@@ -34,7 +34,9 @@ State rules:
 - PREVIEW_ONLY is not a forecast, scheduled trade, or guarantee. Explain that no plan exists yet and name the strongest present and missing confirmations.
 - WATCHING/MONITORING: the watch_trigger is NOT an entry and no limit is armed. Explain precisely which confirmations are
   present, which mandatory confirmations are still missing, and what would allow the engine to produce a locked limit plan.
-  If the transition is WATCHING → WATCHING, explain the exact primary-entry-model switch and identify the new backup path.
+  If watch_phase is TRIGGER_TOUCHED, state that price reached the monitoring level, no fill occurred, and the engine is waiting
+  inside a finite confirmation window. For WATCHING → WATCHING, use last_transition_reason to distinguish a trigger touch
+  from a primary-entry-model switch; never assume that every same-state transition is a model switch.
 - WAITING_FOR_LIMIT: explain why the plan qualified, why the entry area was selected, what invalidates the idea at the
   supplied stop, and what market structures/sources justify TP1 and TP2. State that all levels are locked.
 - FILLED: explain that the locked limit was touched, then explain the supplied protective stop and both targets.
@@ -132,6 +134,11 @@ class ClaudeAnalysisService:
             "occurred_at": setup_data.get("last_transition_at"),
             "transition_price": setup_data.get("last_transition_price"),
             "watch_trigger": setup_data.get("watch_trigger"),
+            "watch_invalidation": setup_data.get("watch_invalidation"),
+            "watch_phase": setup_data.get("watch_phase"),
+            "watch_touch_at": setup_data.get("watch_touch_at"),
+            "watch_touch_price": setup_data.get("watch_touch_price"),
+            "watch_confirmation_expires_at": setup_data.get("watch_confirmation_expires_at"),
             "watch_expires_at": setup_data.get("watch_expires_at"),
             "armed_at": setup_data.get("armed_at"),
             "filled_at": setup_data.get("filled_at"),
@@ -193,6 +200,9 @@ class ClaudeAnalysisService:
             "actionable": setup.get("actionable"),
             "confidence_bucket": round(float(setup.get("confidence", 0)) / 5) * 5,
             "watch_trigger": setup.get("watch_trigger"),
+            "watch_phase": setup.get("watch_phase"),
+            "watch_touch_at": setup.get("watch_touch_at"),
+            "watch_confirmation_expires_at": setup.get("watch_confirmation_expires_at"),
             "entry": setup.get("entry"),
             "stop": setup.get("stop_loss"),
             "active_stop": setup.get("active_stop_loss"),
