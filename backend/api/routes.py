@@ -15,7 +15,7 @@ from backend.services.market_data import market_data_service
 from backend.services.multi_market_monitor import multi_market_monitor_service
 from backend.services.instruments import get_instrument, instrument_registry
 from backend.services.session_service import get_session_status
-from backend.services.setup_service import clear_fallback_gex_cache
+from backend.services.setup_service import clear_fallback_gex_cache, current_gex_summary
 from backend.services.storage_service import storage_service
 from backend.services.timeframes import aggregate_candles
 from backend.services.trade_engine import trade_engine_service
@@ -149,8 +149,45 @@ def current_setup():
 @router.get("/gex/summary")
 def gex_summary():
     setup = trade_engine_service.current_setup()
-    if setup is None: raise HTTPException(503, "Trade engine is starting")
-    return setup.gex
+    if setup is not None:
+        return setup.gex
+    try:
+        return current_gex_summary()
+    except Exception as exc:
+        raise HTTPException(503, f"GEX is still starting: {exc}") from exc
+
+
+@router.get("/live-state")
+def live_state():
+    """Lightweight REST mirror of the market WebSocket payload.
+
+    Browsers and installed PWAs use this endpoint while a proxy or network is
+    preventing a WebSocket handshake. It keeps the chart, setup panel and GEX
+    Analysis page current without pretending the socket is connected.
+    """
+    setup = trade_engine_service.current_setup()
+    market = market_data_service.health()
+    candles = market_data_service.snapshot(limit=1)
+    try:
+        gex = setup.gex if setup is not None else current_gex_summary()
+    except Exception:
+        gex = None
+    try:
+        meta = build_dashboard_meta(setup) if setup is not None else None
+    except Exception:
+        meta = None
+    return {
+        "type": "market_update",
+        "transport": "rest",
+        "candle": candles[-1] if candles else None,
+        "setup": setup,
+        "meta": meta,
+        "market": market,
+        "gex_summary": gex,
+        "gex_health": gex_service.health(),
+        "session": get_session_status(),
+        "engine": trade_engine_service.snapshot(),
+    }
 
 
 @router.get("/confluence")

@@ -22,6 +22,7 @@ from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
 from backend.services.multi_market_monitor import multi_market_monitor_service
 from backend.services.session_service import get_session_status
+from backend.services.setup_service import current_gex_summary
 from backend.services.trade_engine import trade_engine_service
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ async def lifespan(app: FastAPI):
 # Legacy v3.0.3 API release: 3.0.3-fib-pullback-watch-execution
 # Legacy v3.0.4 API release: 3.0.4-trade-desk-market-radar
 # Legacy v3.0.5 API release: 3.0.5-self-healing-market-stream
-app = FastAPI(title=settings.app_name, version="3.0.7-model-native-confirmations", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="3.0.8-connection-gex-resilience", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
@@ -103,6 +104,11 @@ async def market_websocket(websocket: WebSocket):
                     None,
                 ),
                 "market": market,
+                "gex_summary": safe_component(
+                    "gex_summary",
+                    lambda: setup.gex.model_dump(mode="json") if setup else current_gex_summary().model_dump(mode="json"),
+                    None,
+                ),
                 "gex_health": safe_component("gex", gex_service.health, {"status": "error"}),
                 "session": safe_component("session", get_session_status, None),
                 "engine": safe_component(

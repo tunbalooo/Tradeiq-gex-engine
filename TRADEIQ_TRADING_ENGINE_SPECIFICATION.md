@@ -1,6 +1,6 @@
 # TradeIQ Trading Engine Specification
 
-**Version:** 3.0.6
+**Version:** 3.0.8
 
 ## Deterministic Pipeline
 
@@ -187,3 +187,11 @@ A radar candidate remains non-executable. When the trader opens the market, the 
 - Setup History and lifecycle APIs serialize UTC with `Z`.
 - The deterministic engine never uses browser-local wall-clock time for setup ordering, expiry, fills, management or replay.
 - Display-time conversion is a UI concern and cannot change lifecycle decisions.
+
+
+## Transport Independence (v3.0.8)
+
+- WebSocket and REST fallback are delivery transports only. They cannot alter model scores, confirmation contracts, lifecycle transitions, entries, stops or targets.
+- The latest deterministic setup object remains authoritative regardless of transport.
+- GEX context can be serialized independently while a setup is warming so chart context does not disappear, but no executable plan may be inferred from GEX alone.
+- Recovered candles are merged through the existing ordering, deduplication and plausibility guards before the engine evaluates them.

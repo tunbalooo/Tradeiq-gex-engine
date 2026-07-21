@@ -720,26 +720,51 @@ class DatabentoMarketDataService:
             )
 
     def _stop_live_client(self, wait: bool = False) -> None:
+        """Stop the current Databento session without overlapping the next one.
+
+        ``Live.stop`` is graceful and non-blocking. During fast symbol changes the
+        old worker could therefore remain inside ``block_for_close`` while a new
+        Live client was created, eventually producing connection-limit loops.
+        Give the graceful stop a brief chance, then force ``Live.terminate`` and
+        join the worker before a replacement session is started.
+        """
         stop_event = self._live_stop_event
         if stop_event is not None:
             stop_event.set()
         client = self._live_client
-        self._live_client = None
+        thread = self._thread
+        timeout = max(0.5, float(settings.databento_stop_join_seconds)) if wait else 0.0
+
         if client is not None:
             try:
                 client.stop()
             except Exception:
-                logger.debug("Databento live stop failed", exc_info=True)
-        thread = self._thread
+                logger.debug("Databento graceful stop failed", exc_info=True)
+
         if (
             wait
             and thread is not None
             and thread.is_alive()
             and thread is not threading.current_thread()
         ):
-            thread.join(timeout=max(0.0, float(settings.databento_stop_join_seconds)))
+            graceful_wait = min(1.25, timeout)
+            thread.join(timeout=graceful_wait)
+            if thread.is_alive() and client is not None:
+                try:
+                    client.terminate()
+                    logger.info("Force-terminated the previous Databento live session before reconnecting")
+                except Exception:
+                    logger.debug("Databento force terminate failed", exc_info=True)
+                thread.join(timeout=max(0.0, timeout - graceful_wait))
+
+        self._live_client = None
         if thread is not None and not thread.is_alive():
             self._thread = None
+        elif wait and thread is not None and thread.is_alive():
+            with self._lock:
+                self.last_disconnect_reason = "Previous Databento live worker did not close before replacement"
+                self.last_error = self.last_disconnect_reason
+                self.stream_state = "RECONNECTING"
         self._live_stop_event = None
 
     def _start_live(self, profile: InstrumentProfile, generation: int) -> None:

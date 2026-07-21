@@ -1,7 +1,7 @@
 # TradeIQ Development Roadmap
 
-**Product version:** 3.0.6-timezone-aware-history  
-**Document version:** 3.0.6  
+**Product version:** 3.0.8-connection-gex-resilience  
+**Document version:** 3.0.8  
 **Status:** Living roadmap
 
 ## Released
@@ -98,3 +98,27 @@
 - [x] Add local versus exchange-time preference.
 - [x] Synchronize Setup History, timeline, alerts, Claude, radar, chart and backtest display times.
 - [x] Add regression coverage for UTC serialization and history output.
+
+
+### v3.0.7 — Model-Native Confirmations — Released
+
+- [x] Assign a deterministic confirmation contract to every entry model.
+- [x] Use model-specific confirmation windows.
+- [x] Separate structural invalidation from an unconfirmed touch.
+- [x] Expose exact missing confirmation conditions to the UI and Claude.
+
+### v3.0.8 — Connection and GEX Resilience — Released
+
+- [x] Add an eight-second WebSocket handshake timeout.
+- [x] Add a three-second authoritative REST live-state fallback.
+- [x] Keep Overview and Trade Desk charts updating when the socket is unavailable.
+- [x] Make GEX summary and chart overlays independent of setup availability.
+- [x] Gracefully stop and force-terminate retired Databento sessions before replacement.
+- [x] Add regression coverage for fallback transport, independent GEX and session shutdown.
+
+## Next priorities after v3.0.8
+
+- Production observability panel showing WebSocket attempt, REST fallback age, Databento error reason and next retry time.
+- Railway log correlation ID for each market connection cycle.
+- Live NQ/ES/GC soak test across repeated symbol switches and the CME maintenance window.
+- Per-symbol native GEX snapshot cache for instant inactive-market GEX pages.

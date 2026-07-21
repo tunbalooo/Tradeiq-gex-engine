@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     databento_live_watchdog_seconds: int = 5
     databento_reconnect_initial_seconds: float = 2.0
     databento_reconnect_max_seconds: float = 30.0
-    databento_stop_join_seconds: float = 2.0
+    databento_stop_join_seconds: float = 6.0
 
     gex_refresh_seconds: int = 300
     gex_reprice_seconds: int = 30

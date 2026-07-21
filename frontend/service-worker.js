@@ -24,14 +24,15 @@
 // Legacy v2.2 assets: /static/styles.css?v=22 /static/boot.js?v=22 /static/app.js?v=22 /static/trading_chart.js?v=22
 // Legacy v2.3 assets: /static/styles.css?v=23 /static/boot.js?v=23 /static/app.js?v=23 /static/trading_chart.js?v=23
 // TradeIQ v3.0.7: model-native confirmation contracts for every entry model.
-const CACHE_NAME = "tradeiq-v3.0.7-model-native-confirmations-shell";
+// TradeIQ v3.0.8: WebSocket handshake timeout, REST live fallback and independent GEX rendering.
+const CACHE_NAME = "tradeiq-v3.0.8-connection-gex-resilience-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=307",
-  "/static/boot.js?v=307",
-  "/static/time.js?v=307",
-  "/static/app.js?v=307",
-  "/static/trading_chart.js?v=307",
+  "/static/styles.css?v=308",
+  "/static/boot.js?v=308",
+  "/static/time.js?v=308",
+  "/static/app.js?v=308",
+  "/static/trading_chart.js?v=308",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",

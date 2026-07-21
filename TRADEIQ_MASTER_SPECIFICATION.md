@@ -1,7 +1,7 @@
 # TradeIQ Master Specification
 
-**Product version:** 3.0.6-timezone-aware-history  
-**Document version:** 3.0.6  
+**Product version:** 3.0.8-connection-gex-resilience  
+**Document version:** 3.0.8  
 **Status:** Living source of truth
 
 ## 1. Product Purpose
@@ -181,3 +181,14 @@ The active lifecycle object survives backend restarts. Every transition is store
 - Inactive-market radar GEX may use the stable fallback map until that market becomes active; every alert therefore requires active-market validation.
 - Browser notifications depend on user permission and browser/PWA support.
 - The radar is an informational scanner and cannot arm, fill, manage or cancel orders on inactive markets.
+
+
+## 11. Connection and GEX Resilience (v3.0.8)
+
+- The browser WebSocket has an explicit eight-second handshake timeout; a socket may not remain in `CONNECTING` indefinitely.
+- When the WebSocket is unavailable, TradeIQ enters a clearly labelled **SERVER REST FALLBACK** mode and polls a lightweight authoritative live-state endpoint every three seconds.
+- REST fallback continues updating the newest candle, setup lifecycle, session, feed health and GEX without pretending the WebSocket is connected.
+- The full Trade Desk chart and the compact Overview chart use the same fallback state and preserve the selected symbol, timeframe and viewport.
+- GEX is available independently of the trade setup lifecycle. Native option positioning is preferred; the session-stable fallback map remains visible while native GEX or the setup engine is warming.
+- Fast symbol changes gracefully stop the old Databento session and force-terminate it when necessary before a replacement client starts, preventing overlapping live sessions and connection-limit loops.
+- Transport recovery never creates, confirms, fills, cancels or manages a trade. The deterministic engine remains the sole lifecycle authority.

@@ -153,6 +153,25 @@ def _enrich_gex(gex: GexSummary, current_price: float) -> GexSummary:
     })
 
 
+def current_gex_summary() -> GexSummary:
+    """Return a usable GEX summary even while the trade engine is warming.
+
+    The GEX Analysis page and chart overlays must not disappear merely because
+    the active setup has not been rebuilt yet or the WebSocket is temporarily
+    unavailable. Native option positioning is preferred; the session-stable
+    fallback map is used until native GEX is ready.
+    """
+    profile = instrument_registry.active
+    candles = market_data_service.snapshot(limit=1)
+    current_price = float(market_data_service.current_price or (candles[-1].close if candles else 0.0))
+    if current_price <= 0:
+        raise RuntimeError(f"No {profile.symbol} market price is available for GEX.")
+    summary = gex_service.get_summary(current_price)
+    if summary is None:
+        summary = _stable_fallback_gex(current_price, profile)
+    return _enrich_gex(summary, current_price)
+
+
 def _direction_from_structure(structure: dict, current_price: float, gex: GexSummary) -> str:
     if structure["trend"] == "BULLISH":
         return "LONG"

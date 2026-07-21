@@ -69,6 +69,7 @@ const state = {
   baseCandles: [],
   setup: null,
   meta: null,
+  gexSummary: null,
   timeframe: 5,
   connected: false,
   dataSource: "SIMULATED",
@@ -88,6 +89,10 @@ const state = {
   socketReconnectAttempt: 0,
   socketReconnectTimer: null,
   socketWatchdogTimer: null,
+  socketConnectTimer: null,
+  restFallbackTimer: null,
+  restFallbackBusy: false,
+  restFallbackActive: false,
   feedState: "CONNECTING",
   feedRecordAgeSeconds: null,
   feedLastRecordAt: null,
@@ -449,10 +454,28 @@ function drawGexStrikeChart(canvas, gex = {}, compact = false) {
 }
 
 function refreshGexCharts() {
-  const gex = state.setup?.gex;
+  const gex = state.setup?.gex || state.gexSummary;
   if (!gex) return;
   drawGexStrikeChart($("gexStrikeChart"), gex, false);
   drawGexStrikeChart($("mobileGexStrikeChart"), gex, true);
+}
+
+async function loadGexPage() {
+  renderGexPage(state.setup || state.gexSummary);
+  try {
+    const response = await fetch("/api/gex/summary", { cache: "no-store" });
+    if (!response.ok) throw new Error(`GEX request failed (${response.status})`);
+    const gex = await response.json();
+    if (gex?.applied_to_symbol && gex.applied_to_symbol !== activeSymbol()) return;
+    state.gexSummary = gex;
+    if (state.setup && !state.setup.gex) state.setup.gex = gex;
+    renderGexPage(gex);
+    drawChart();
+    if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
+  } catch (error) {
+    console.warn("TradeIQ GEX page refresh failed", error);
+    renderGexPage(state.setup || state.gexSummary);
+  }
 }
 
 function classForDirection(direction) {
@@ -684,11 +707,15 @@ function formatDataAge(seconds) {
 
 function setConnection(connected) {
   state.connected = connected;
-  $("liveDot")?.classList.toggle("offline", !connected);
+  const fallback = !connected && state.restFallbackActive;
+  $("liveDot")?.classList.toggle("offline", !connected && !fallback);
   const label = $("connectionLabel");
   if (label) {
-    label.textContent = connected ? "SERVER LIVE" : "SERVER RECONNECTING";
-    label.className = connected ? "g" : "r";
+    label.textContent = connected ? "SERVER LIVE" : fallback ? "SERVER REST FALLBACK" : "SERVER RECONNECTING";
+    label.className = connected ? "g" : fallback ? "a" : "r";
+    label.title = fallback
+      ? "The WebSocket is unavailable. TradeIQ is continuing through live HTTP polling."
+      : connected ? "Live WebSocket connected" : "Attempting to reconnect the live WebSocket";
   }
 }
 
@@ -1249,6 +1276,7 @@ function renderAll(setup, meta, session = state.session) {
   const previousSetup = state.setup;
   state.setup = setup;
   state.meta = meta;
+  if (setup.gex) state.gexSummary = setup.gex;
   if (session) renderSession(session);
   renderOverview(meta.overview);
   renderHeader();
@@ -1390,9 +1418,12 @@ function drawChart(chartId = "chart") {
   const manager = window.TradeIQChartManager;
   if (!manager) return;
   if (chartId === "chartLarge" && $("chartLargeStatus")) $("chartLargeStatus").textContent = chartFeedLabel();
+  const chartSetup = state.setup
+    ? { ...state.setup, gex: state.setup.gex || state.gexSummary }
+    : (state.gexSummary ? { gex: state.gexSummary, order_state: "PREVIEW_ONLY", zones: [], fib_levels: [] } : null);
   manager.render(chartId, {
     candles: aggregateCandles(state.baseCandles, state.timeframe),
-    setup: state.setup,
+    setup: chartSetup,
     overlays: state.overlays,
     timeframe: state.timeframe,
     dataSource: state.dataSource,
@@ -1443,14 +1474,17 @@ async function initialLoad() {
     else renderSyncingState(snapshot, health.session);
     $("chartCaption").textContent = chartFeedLabel();
     renderHeader(snapshot);
-    setConnection(true);
+    startRestFallback();
     processMarketOpportunities(radar?.items || [], radar?.status || null, false);
     cacheCurrentMarket();
     await loadClaudeStatus();
     loadEconomicCalendar();
     connectWebSocket();
   } catch (error) {
-    console.error(error); setConnection(false); $("modeLabel").textContent = "ERROR";
+    console.error(error);
+    $("modeLabel").textContent = "ERROR";
+    startRestFallback();
+    connectWebSocket();
   }
 }
 
@@ -1483,6 +1517,73 @@ function clearSocketReconnectTimer() {
   if (state.socketReconnectTimer) {
     clearTimeout(state.socketReconnectTimer);
     state.socketReconnectTimer = null;
+  }
+}
+
+function clearSocketConnectTimer() {
+  if (state.socketConnectTimer) {
+    clearTimeout(state.socketConnectTimer);
+    state.socketConnectTimer = null;
+  }
+}
+
+async function pollRestFallback() {
+  if (!state.restFallbackActive || state.restFallbackBusy) return;
+  state.restFallbackBusy = true;
+  try {
+    const response = await fetch("/api/live-state", { cache: "no-store" });
+    if (!response.ok) throw new Error(`Live-state fallback failed (${response.status})`);
+    const data = await response.json();
+    if (!state.restFallbackActive || state.switchingSymbol) return;
+
+    const wasWarming = state.marketWarming;
+    const previousFeedState = state.feedState;
+    const market = data.market || {};
+    state.marketWarming = Boolean(market.warming || (market.data_source === "databento" && !market.history_cached));
+    state.historyReady = Boolean(market.history_ready ?? market.history_cached);
+    state.historySource = market.history_source || state.historySource;
+    state.dataQuality = market.data_quality || state.dataQuality;
+    state.rawSymbol = market.raw_symbol || state.rawSymbol;
+    updateMarketFeedStatus(market);
+
+    const incomingInstrument = market.instrument;
+    if (incomingInstrument && incomingInstrument.symbol !== activeSymbol()) {
+      state.baseCandles = [];
+      applyInstrument(incomingInstrument);
+    }
+    if (data.candle) upsertBaseCandle(data.candle);
+    if (data.gex_summary) state.gexSummary = data.gex_summary;
+    if (data.setup && data.meta) renderAll(data.setup, data.meta, data.session);
+    else {
+      renderSyncingState({ price: data.candle?.close }, data.session);
+      renderGexPage(state.gexSummary);
+    }
+    cacheCurrentMarket();
+
+    const feedRecovered = previousFeedState !== "LIVE" && state.feedState === "LIVE";
+    if ((wasWarming && !state.marketWarming) || feedRecovered) await reloadSyncedHistory();
+    setConnection(false);
+  } catch (error) {
+    console.debug("TradeIQ REST fallback poll failed", error);
+  } finally {
+    state.restFallbackBusy = false;
+  }
+}
+
+function startRestFallback() {
+  if (state.restFallbackActive) return;
+  state.restFallbackActive = true;
+  setConnection(false);
+  pollRestFallback();
+  state.restFallbackTimer = setInterval(pollRestFallback, 3000);
+}
+
+function stopRestFallback() {
+  state.restFallbackActive = false;
+  state.restFallbackBusy = false;
+  if (state.restFallbackTimer) {
+    clearInterval(state.restFallbackTimer);
+    state.restFallbackTimer = null;
   }
 }
 
@@ -1531,9 +1632,20 @@ function connectWebSocket() {
   const socket = new WebSocket(`${protocol}://${location.host}/ws/market`);
   state.socket = socket;
   const reconnecting = state.socketReconnectAttempt > 0;
+  clearSocketConnectTimer();
+  state.socketConnectTimer = setTimeout(() => {
+    if (state.socket !== socket || socket.readyState !== WebSocket.CONNECTING) return;
+    console.warn("TradeIQ WebSocket handshake timed out; enabling REST fallback");
+    state.socket = null;
+    startRestFallback();
+    try { socket.close(4001, "connect timeout"); } catch (_) { /* no-op */ }
+    scheduleWebSocketReconnect();
+  }, 8000);
 
   socket.onopen = () => {
     if (state.socket !== socket) return;
+    clearSocketConnectTimer();
+    stopRestFallback();
     state.socketLastMessageAt = Date.now();
     setConnection(true);
     state.socketReconnectAttempt = 0;
@@ -1557,6 +1669,7 @@ function connectWebSocket() {
       return;
     }
     if (data.component_errors?.length) console.warn("TradeIQ degraded WebSocket components", data.component_errors);
+    if (data.gex_summary) state.gexSummary = data.gex_summary;
     if (data.type === "market_stream_error") return;
     if (data.market_opportunities) processMarketOpportunities(data.market_opportunities, data.market_radar || null, true);
     if (state.switchingSymbol) return;
@@ -1578,7 +1691,10 @@ function connectWebSocket() {
     const candle = data.candle;
     if (candle) upsertBaseCandle(candle);
     if (data.setup && data.meta) renderAll(data.setup, data.meta, data.session);
-    else renderSyncingState({ price: candle?.close }, data.session);
+    else {
+      renderSyncingState({ price: candle?.close }, data.session);
+      renderGexPage(state.gexSummary);
+    }
     cacheCurrentMarket();
 
     const feedRecovered = previousFeedState !== "LIVE" && state.feedState === "LIVE";
@@ -1595,9 +1711,11 @@ function connectWebSocket() {
   };
 
   socket.onclose = () => {
+    clearSocketConnectTimer();
     if (state.socket !== socket) return;
     state.socket = null;
     state.socketLastMessageAt = 0;
+    startRestFallback();
     setConnection(false);
     scheduleWebSocketReconnect();
   };
@@ -1758,7 +1876,7 @@ function setPage(name, runLoaders = true) {
   syncMobileNavigation();
   if (!runLoaders) return;
   if (name === "chart") setTimeout(() => { drawChart("chartLarge"); if (state.claude.enabled && state.claude.auto && !state.claude.text) startClaudeAnalysis(false); }, 30);
-  if (name === "gex") window.setTimeout(refreshGexCharts, 30);
+  if (name === "gex") window.setTimeout(loadGexPage, 30);
   if (name === "setups") loadSetups();
   if (name === "alerts") loadAlertsPage();
   if (name === "positions") loadPositions();
@@ -1771,9 +1889,15 @@ function renderScorePage(id, components = {}, maximums = {}) {
     return `<div class="score-page-row"><span>${SCORE_LABELS[key] || key.replaceAll("_", " ")}</span><div class="score-page-bar"><i style="width:${pct}%"></i></div><b class="mono">${value.toFixed(1)}/${Number(maximum).toFixed(0)}</b></div>`;
   }).join("");
 }
-function renderGexPage(setup) {
-  if (!setup || !$("gexProfile")) return;
-  const g = setup.gex;
+function renderGexPage(setupOrGex = null) {
+  if (!$("gexProfile")) return;
+  const g = setupOrGex?.gex || setupOrGex || state.setup?.gex || state.gexSummary;
+  if (!g) {
+    $("gexProfile").innerHTML = '<p class="note">GEX is syncing. TradeIQ will restore the last locked map automatically.</p>';
+    if ($("gexPageTable")) $("gexPageTable").innerHTML = "";
+    return;
+  }
+  state.gexSummary = g;
   const parentNote = g.is_parent_market ? ` Parent-market levels are applied to the ${activeSymbol()} chart.` : "";
   $("gexProfile").innerHTML = `<div class="page-stats">${[
     ["Regime",g.regime],["Dealer bias",g.dealer_bias || "NEUTRAL"],["Net GEX",fmtGex(g.net_gex)],

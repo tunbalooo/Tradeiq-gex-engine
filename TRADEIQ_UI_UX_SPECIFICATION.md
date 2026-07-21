@@ -1,6 +1,6 @@
 # TradeIQ UI/UX Specification
 
-**Version:** 3.0.6
+**Version:** 3.0.8
 
 ## Design Language
 
@@ -152,3 +152,16 @@ A stale or reconnecting feed uses amber/red state styling while the last valid c
 - The chart, header clock, lifecycle timeline, alerts, Claude timestamps, radar scans and backtest rows use the same display-time preference.
 - Existing offset-less history values are treated as UTC to prevent a four- or five-hour shift.
 - A visible zone suffix such as `EDT`, `EST` or `GMT` accompanies setup-history timestamps.
+
+
+## Connection Fallback and GEX Availability (v3.0.8)
+
+The header presents one of three truthful server transport states:
+
+- `SERVER LIVE` — WebSocket updates are active.
+- `SERVER REST FALLBACK` — WebSocket is unavailable, but live-state polling is maintaining the chart and panels.
+- `SERVER RECONNECTING` — neither transport has produced a current response yet.
+
+The Databento badge and data-age badge remain separate. REST fallback must update both the Overview chart and the full Trade Desk chart without resetting zoom or pan.
+
+The GEX Analysis page must render from the latest independent GEX summary even when the current setup is unavailable. GEX overlays remain available on the chart during setup-engine warmup. A short syncing explanation replaces an empty page when no market price exists yet.
