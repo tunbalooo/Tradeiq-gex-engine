@@ -1,6 +1,6 @@
 # TradeIQ UI/UX Specification
 
-**Version:** 3.0.5
+**Version:** 3.0.6
 
 ## Design Language
 
@@ -142,3 +142,13 @@ The top bar must never combine browser/server connectivity with market-feed heal
 - `DATA <age>` showing how long ago the latest live market record was received.
 
 A stale or reconnecting feed uses amber/red state styling while the last valid candles remain visible. Recovery must not reset the chart viewport. After the socket or feed returns, the client reloads the authoritative candle snapshot and preserves the user's symbol/timeframe view.
+
+
+## Time and Setup History (v3.0.6)
+
+- Setup History displays the detected IANA zone and current abbreviation.
+- Every history row uses a UTC source timestamp converted with the browser's daylight-saving rules.
+- The user can select **Auto-detect this device** or **Exchange time (New York)** in Settings.
+- The chart, header clock, lifecycle timeline, alerts, Claude timestamps, radar scans and backtest rows use the same display-time preference.
+- Existing offset-less history values are treated as UTC to prevent a four- or five-hour shift.
+- A visible zone suffix such as `EDT`, `EST` or `GMT` accompanies setup-history timestamps.

@@ -482,3 +482,9 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 .feed-age{padding:2px 5px;border:1px solid var(--line2);border-radius:4px;color:var(--muted);white-space:nowrap}
 .feed-age.stale{border-color:rgba(255,77,94,.45);color:var(--red)}
 @media(max-width:900px){.live .feed-age{display:none}}
+
+/* TradeIQ v3.0.6 — timezone-aware setup history */
+.time-zone-suffix { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.timezone-kv { margin-top: 12px; }
+#setupHistoryTimezone { color: var(--muted); display: block; margin-top: 3px; }
+#timeZonePreference { width: 100%; }

@@ -13,6 +13,8 @@
 // TradeIQ v3.0.3: Fib Pullback Continuation and live watch/limit execution lifecycle.
 // TradeIQ v3.0.4: Trade Desk rail, cross-market radar and fast cached switching.
 // TradeIQ v3.0.5: self-healing Databento stream, heartbeat recovery and data-age status.
+// Legacy v3.0.5 cache: tradeiq-v3.0.5-self-healing-market-stream-shell
+// TradeIQ v3.0.6: browser-detected display time and explicit UTC setup-history transport.
 // Legacy v3.0.3 cache: CACHE_NAME = "tradeiq-v3.0.3-fib-pullback-watch-execution-shell"
 // Legacy v2.6 cache reference: CACHE_NAME = "tradeiq-v2.6-shell"
 // Legacy cache references retained for regression tests: tradeiq-v2.0-shell tradeiq-v2.1-shell tradeiq-v2.2-shell
@@ -20,13 +22,14 @@
 // Legacy v2.1 assets: /static/styles.css?v=21 /static/boot.js?v=21 /static/app.js?v=21 /static/trading_chart.js?v=21
 // Legacy v2.2 assets: /static/styles.css?v=22 /static/boot.js?v=22 /static/app.js?v=22 /static/trading_chart.js?v=22
 // Legacy v2.3 assets: /static/styles.css?v=23 /static/boot.js?v=23 /static/app.js?v=23 /static/trading_chart.js?v=23
-const CACHE_NAME = "tradeiq-v3.0.5-self-healing-market-stream-shell";
+const CACHE_NAME = "tradeiq-v3.0.6-timezone-aware-history-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=305",
-  "/static/boot.js?v=305",
-  "/static/app.js?v=305",
-  "/static/trading_chart.js?v=305",
+  "/static/styles.css?v=306",
+  "/static/boot.js?v=306",
+  "/static/time.js?v=306",
+  "/static/app.js?v=306",
+  "/static/trading_chart.js?v=306",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",

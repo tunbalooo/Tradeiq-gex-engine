@@ -1,7 +1,7 @@
 # TradeIQ Master Specification
 
-**Product version:** 3.0.5-self-healing-market-stream  
-**Document version:** 3.0.5  
+**Product version:** 3.0.6-timezone-aware-history  
+**Document version:** 3.0.6  
 **Status:** Living source of truth
 
 ## 1. Product Purpose
@@ -33,7 +33,7 @@ Terminal alternatives:
 
 A `WATCHING → WATCHING` event records a deterministic switch to a stronger secondary entry model.
 
-## 4. Implemented v3.0–v3.0.5 Modules
+## 4. Implemented v3.0–v3.0.6 Modules
 
 - Live/historical market data service.
 - GEX service with snapshot-stable dealer levels.
@@ -104,6 +104,16 @@ A `WATCHING → WATCHING` event records a deterministic switch to a stronger sec
 - The browser WebSocket has a heartbeat watchdog, bounded exponential reconnect and authoritative snapshot resynchronization after recovery.
 - WebSocket payload components are isolated: a Claude, GEX, radar or metadata error cannot silently terminate the market update channel.
 - The header distinguishes server connectivity from Databento feed health and displays market-data age.
+
+### Time integrity and setup-history display (v3.0.6)
+
+- All persisted setup, lifecycle and alert timestamps are stored and transported as UTC.
+- SQLite values that return without `tzinfo` are interpreted as UTC by explicit policy, never as the Railway host time.
+- API history/timeline timestamps include an explicit `Z` marker so browsers cannot reinterpret them as local wall-clock values.
+- The browser detects its IANA time zone and daylight-saving offset.
+- Setup History, lifecycle timeline, alerts, Claude timestamps, radar scans, backtests, chart labels and the header clock use one display-time service.
+- Users can choose device-local time or New York exchange time without changing stored data.
+- Legacy offset-less TradeIQ timestamps remain readable and are normalized as UTC.
 
 ## 5. Entry Models
 

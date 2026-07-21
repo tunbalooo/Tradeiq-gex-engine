@@ -1,4 +1,4 @@
-# TradeIQ Institutional Trade Desk v3.0.5
+# TradeIQ Institutional Trade Desk v3.0.6
 
 
 ## v3.0.2 entry and chart stability
@@ -328,3 +328,8 @@ Current local verification target:
 ```text
 132 passed
 ```
+
+
+## v3.0.6 Timezone-Aware Setup History
+
+TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.

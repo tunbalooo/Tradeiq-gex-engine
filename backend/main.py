@@ -48,7 +48,8 @@ async def lifespan(app: FastAPI):
 # Legacy v3.0.2 API release: 3.0.2-entry-chart-stability
 # Legacy v3.0.3 API release: 3.0.3-fib-pullback-watch-execution
 # Legacy v3.0.4 API release: 3.0.4-trade-desk-market-radar
-app = FastAPI(title=settings.app_name, version="3.0.5-self-healing-market-stream", lifespan=lifespan)
+# Legacy v3.0.5 API release: 3.0.5-self-healing-market-stream
+app = FastAPI(title=settings.app_name, version="3.0.6-timezone-aware-history", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 

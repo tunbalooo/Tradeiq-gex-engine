@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from backend.core.database import SessionLocal
+from backend.core.time_utils import ensure_utc, utc_iso
 from backend.models.db_models import AlertRecord, SetupTransitionRecord, TradeSetupRecord
 from backend.models.schemas import AlertItem, PerformanceSummary, TradeSetup
 
@@ -106,8 +107,8 @@ class StorageService:
                 ))
                 rows.reverse()
                 return [{
-                    "created_at": row.created_at,
-                    "candle_time": row.candle_time,
+                    "created_at": utc_iso(row.created_at),
+                    "candle_time": utc_iso(row.candle_time),
                     "previous_state": row.previous_state,
                     "new_state": row.new_state,
                     "price": row.price,
@@ -150,7 +151,7 @@ class StorageService:
                         continue
                     seen_recent[signature] = r.updated_at
                     results.append({
-                        "setup_id": r.setup_id, "created_at": r.created_at, "updated_at": r.updated_at,
+                        "setup_id": r.setup_id, "created_at": utc_iso(r.created_at), "updated_at": utc_iso(r.updated_at),
                         "symbol": r.symbol, "direction": r.direction, "confidence": r.confidence,
                         "confidence_grade": snapshot.get("confidence_grade", "—"),
                         "primary_entry_model": snapshot.get("primary_entry_model"),
@@ -176,7 +177,17 @@ class StorageService:
         try:
             with SessionLocal() as db:
                 rows = list(db.scalars(select(AlertRecord).order_by(AlertRecord.created_at.desc()).limit(limit)))
-                return [AlertItem(time=r.created_at.astimezone().strftime("%H:%M:%S"), title=r.title, detail=r.detail, severity=r.severity if r.severity in {"positive", "negative", "warning", "info"} else "info", created_at=r.created_at) for r in rows]
+                items = []
+                for r in rows:
+                    created_at = ensure_utc(r.created_at)
+                    items.append(AlertItem(
+                        time=created_at.strftime("%H:%M:%S UTC") if created_at else "—",
+                        title=r.title,
+                        detail=r.detail,
+                        severity=r.severity if r.severity in {"positive", "negative", "warning", "info"} else "info",
+                        created_at=created_at,
+                    ))
+                return items
         except Exception:
             return []
 

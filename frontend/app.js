@@ -1,5 +1,6 @@
 // Legacy GEX note: Maximum pain is shown only when open-interest data is available
 // Legacy v2.0 regression reference: lockedPlan ? fmt(setup.stop_loss) : "—"
+// Legacy news display reference retained for regression tests: timeZone: "America/New_York"
 const $ = (id) => document.getElementById(id);
 const SCORE_LABELS = {
   trend_alignment: "Trend (EMA 9/21/55)",
@@ -109,6 +110,20 @@ const state = {
   deskCollapsed: localStorage.getItem("tradeiq-desk-collapsed") === "true",
 };
 
+
+function displayTimeZone() { return window.TradeIQTime?.zone?.() || "America/New_York"; }
+function displayTimeZoneLabel(value = new Date()) { return window.TradeIQTime?.abbreviation?.(value) || "ET"; }
+function parseAppTimestamp(value) { return window.TradeIQTime?.normalize?.(value) || (value ? new Date(value) : null); }
+function formatAppTime(value, options = {}) {
+  return window.TradeIQTime?.formatTime?.(value, options) || (value ? new Date(value).toLocaleTimeString("en-US", options) : "—");
+}
+function formatAppDateTime(value, options = {}) {
+  return window.TradeIQTime?.formatDateTime?.(value, options) || (value ? new Date(value).toLocaleString("en-US", options) : "—");
+}
+function formatAppDate(value, options = {}) {
+  return window.TradeIQTime?.format?.(value, options) || (value ? new Date(value).toLocaleDateString("en-US", options) : "—");
+}
+
 function activeSymbol() { return state.instrument?.symbol || state.setup?.symbol || "NQ"; }
 function displaySymbol() { return state.instrument?.display_symbol || `${activeSymbol()}1!`; }
 function instrumentName() { return state.instrument?.name || "Futures market"; }
@@ -184,8 +199,8 @@ function renderMarketRadar(items = state.marketOpportunities, status = state.mar
     statusNode.className = `market-radar-status ${status?.last_error ? "error" : status?.running === false ? "" : "ready"}`;
   }
   if ($("marketRadarUpdated")) {
-    const stamp = status?.last_scan_at ? new Date(status.last_scan_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) : "—";
-    $("marketRadarUpdated").textContent = `Updated ${stamp} ET`;
+    const stamp = status?.last_scan_at ? formatAppTime(status.last_scan_at) : "—";
+    $("marketRadarUpdated").textContent = `Updated ${stamp} ${displayTimeZoneLabel(status?.last_scan_at)}`;
   }
   if (!items.length) {
     list.innerHTML = '<div class="market-radar-empty">The radar is warming NQ, ES and GC history.</div>';
@@ -300,30 +315,31 @@ function fmtGex(value) {
   return `${sign}${absolute.toFixed(0)}`;
 }
 function timeLabel(value) {
-  const date = new Date(value);
-  return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" });
+  return formatAppTime(value, { hour12: false });
 }
 function newsDateParts(item = {}) {
   const raw = item.published_at || item.datetime || item.date || null;
-  const date = raw ? new Date(raw) : null;
+  const date = parseAppTimestamp(raw);
   if (!date || Number.isNaN(date.getTime())) {
     return { day: "—", date: "Date unavailable", time: String(item.time || "—"), full: String(item.time || "—") };
   }
-  const day = date.toLocaleDateString("en-US", { weekday: "short", timeZone: "America/New_York" });
-  const calendarDate = date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined, timeZone: "America/New_York" });
-  const clock = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York" });
-  return { day, date: calendarDate, time: `${clock} ET`, full: `${day}, ${calendarDate} · ${clock} ET` };
+  const day = formatAppDate(date, { weekday: "short" });
+  const calendarDate = formatAppDate(date, { month: "short", day: "numeric", year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined });
+  const clock = window.TradeIQTime?.format?.(date, { hour: "numeric", minute: "2-digit", hour12: true }) || formatAppTime(date);
+  const label = displayTimeZoneLabel(date);
+  return { day, date: calendarDate, time: `${clock} ${label}`, full: `${day}, ${calendarDate} · ${clock} ${label}` };
 }
 function calendarDateParts(item = {}) {
   const raw = item.scheduled_at || item.time || null;
-  const date = raw ? new Date(raw) : null;
+  const date = parseAppTimestamp(raw);
   if (!date || Number.isNaN(date.getTime())) {
     return { day: "—", date: "Date unavailable", time: "—", full: "Scheduled time unavailable" };
   }
-  const day = date.toLocaleDateString("en-US", { weekday: "short", timeZone: "America/New_York" });
-  const calendarDate = date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/New_York" });
-  const clock = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York" });
-  return { day, date: calendarDate, time: `${clock} ET`, full: `${day}, ${calendarDate} · ${clock} ET` };
+  const day = formatAppDate(date, { weekday: "short" });
+  const calendarDate = formatAppDate(date, { month: "short", day: "numeric", year: "numeric" });
+  const clock = window.TradeIQTime?.format?.(date, { hour: "numeric", minute: "2-digit", hour12: true }) || formatAppTime(date);
+  const label = displayTimeZoneLabel(date);
+  return { day, date: calendarDate, time: `${clock} ${label}`, full: `${day}, ${calendarDate} · ${clock} ${label}` };
 }
 function calendarValue(value, unit) {
   if (value === null || value === undefined || value === "") return "—";
@@ -520,7 +536,7 @@ async function loadClaudeStatus() {
     if ($("headerAnalyze")) $("headerAnalyze").disabled = !state.claude.enabled;
     if (state.claude.enabled) {
       setClaudeStatus(status.cached ? "CACHED" : "READY", status.cached ? "cached" : "ready");
-      $("claudeFoot").textContent = status.cached_at ? `Last generated ${new Date(status.cached_at).toLocaleTimeString()}` : "Ready. Analysis is cached to control API cost.";
+      $("claudeFoot").textContent = status.cached_at ? `Last generated ${formatAppTime(status.cached_at)} ${displayTimeZoneLabel(status.cached_at)}` : "Ready. Analysis is cached to control API cost.";
     } else {
       setClaudeStatus("DISABLED", "disabled");
       $("claudeAnalysis").innerHTML = '<div class="claude-empty">Add ANTHROPIC_API_KEY and set CLAUDE_ANALYSIS_ENABLED=true in the server environment.</div>';
@@ -587,7 +603,7 @@ function startClaudeAnalysis(force = false) {
     renderClaudeAnalysis(state.claude.text, false);
     setClaudeStatus(payload.cached ? "CACHED" : "READY", payload.cached ? "cached" : "ready");
     $("claudeFoot").textContent = payload.generated_at
-      ? `Generated ${new Date(payload.generated_at).toLocaleTimeString()} · read-only analysis`
+      ? `Generated ${formatAppTime(payload.generated_at)} ${displayTimeZoneLabel(payload.generated_at)} · read-only analysis`
       : "Read-only analysis · engine values were not changed";
     stopClaudeStream();
   });
@@ -710,7 +726,7 @@ function updateMarketFeedStatus(market = {}) {
   if (age) {
     age.textContent = `DATA ${formatDataAge(recordAge)}`;
     age.className = `m mono feed-age ${market.data_fresh === false ? "stale" : ""}`;
-    age.title = market.last_record_at ? `Last market record: ${new Date(market.last_record_at).toLocaleString()}` : "No live market record received yet";
+    age.title = market.last_record_at ? `Last market record: ${formatAppDateTime(market.last_record_at)} ${displayTimeZoneLabel(market.last_record_at)}` : "No live market record received yet";
   }
 }
 
@@ -790,7 +806,7 @@ function renderSetupTimeline(events = []) {
   const rows = events.slice(-6).reverse();
   const html = rows.length ? rows.map((event) => {
     const stamp = event.created_at
-      ? new Date(event.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" })
+      ? formatAppTime(event.created_at)
       : "—";
     const stateName = String(event.new_state || "EVENT").replaceAll("_", " ");
     const price = Number.isFinite(Number(event.price)) ? ` · ${fmt(event.price)}` : "";
@@ -939,7 +955,7 @@ function renderTradeSetup(setup) {
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
   $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : triggerTouched ? "Confirmation Ends" : watchingPlan ? "Monitoring Ends" : "Valid Until";
-  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(triggerTouched ? (setup.watch_confirmation_expires_at || setup.watch_expires_at || setup.valid_until) : watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : formatAppTime(triggerTouched ? (setup.watch_confirmation_expires_at || setup.watch_expires_at || setup.valid_until) : watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until);
   renderModelRanking(setup, "setupModelRanking");
   renderChartTradeSetup(setup, {
     confidence,
@@ -1009,7 +1025,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupSession").textContent = state.session?.display_name || "—";
   $("chartSetupSession").className = marketClosed ? "r" : "g";
   $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : triggerTouched ? "Confirmation Ends" : watchingPlan ? "Monitoring Ends" : "Valid Until";
-  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : new Date(triggerTouched ? (setup.watch_confirmation_expires_at || setup.watch_expires_at || setup.valid_until) : watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : formatAppTime(triggerTouched ? (setup.watch_confirmation_expires_at || setup.watch_expires_at || setup.valid_until) : watchingPlan ? (setup.watch_expires_at || setup.valid_until) : setup.valid_until);
   const previewNotice = $("chartPreviewNotice");
   if (previewNotice) {
     const informational = setup.order_state === "PREVIEW_ONLY" || watchingPlan;
@@ -1079,7 +1095,7 @@ function renderFib(setup) {
 
 function renderAlerts(items = []) {
   const classes = { positive: "g", negative: "r", warning: "a", info: "b" };
-  $("alerts").innerHTML = items.map((item) => `<tr class="alert-row"><td>${item.time}</td><td class="${classes[item.severity] || "b"}">${item.title}</td></tr>
+  $("alerts").innerHTML = items.map((item) => `<tr class="alert-row"><td>${item.created_at ? formatAppTime(item.created_at) : item.time}</td><td class="${classes[item.severity] || "b"}">${item.title}</td></tr>
     <tr><td colspan="2" class="m" style="border-top:none;padding-top:0;font-size:11px">${item.detail}</td></tr>`).join("");
 }
 function renderEconomicCalendar(items = [], status = {}) {
@@ -1632,15 +1648,8 @@ async function switchMarket(symbol) {
   }
 }
 
-function getNewYorkParts(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short",
-  }).formatToParts(date);
-  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
-}
 function tick() {
-  const parts = getNewYorkParts();
-  $("clock").textContent = `${parts.hour}:${parts.minute}:${parts.second} ET`;
+  $("clock").textContent = window.TradeIQTime?.nowClock?.() || new Date().toLocaleTimeString();
   if (state.session) {
     $("sessionTimer").textContent = remainingText(state.session.countdown_target);
     if (!state.session.is_open && $("setupValid")) $("setupValid").textContent = remainingText(state.session.next_open_at);
@@ -1786,7 +1795,9 @@ async function loadSetups() {
       fetch("/api/setups/history").then((response) => response.json()),
       fetch("/api/analytics/summary").then((response) => response.json()),
     ]);
-    $("setupsTable").innerHTML = rows.length ? rows.map((item) => `<tr><td>${new Date(item.updated_at).toLocaleString()}</td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${escapeHtml(item.primary_entry_model || "—")}</td><td>${escapeHtml(item.confidence_grade || "—")}</td><td>${fmt(item.confidence,0)}</td><td>${fmt(item.entry)}</td><td>${fmt(item.stop_loss)}</td><td>${fmt(item.active_stop_loss)}</td><td>${fmt(item.take_profit_1)}</td><td>${fmt(item.take_profit_2)}</td><td>${escapeHtml(item.order_state || "—")}</td><td>${escapeHtml(item.management_state || "—")}</td><td>${item.result_r ?? '—'}</td></tr>`).join("") : '<tr><td colspan="13" class="m">No persisted setups yet.</td></tr>';
+    if ($("setupHistoryTimezone")) $("setupHistoryTimezone").textContent = `${window.TradeIQTime?.preference?.() === "EXCHANGE" ? "EXCHANGE" : "AUTO"} · ${displayTimeZone()} · ${displayTimeZoneLabel()}`;
+    if ($("setupHistoryTimeHeader")) $("setupHistoryTimeHeader").textContent = `Time (${displayTimeZoneLabel()})`;
+    $("setupsTable").innerHTML = rows.length ? rows.map((item) => `<tr><td>${formatAppDateTime(item.updated_at)} <span class="time-zone-suffix">${displayTimeZoneLabel(item.updated_at)}</span></td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${escapeHtml(item.primary_entry_model || "—")}</td><td>${escapeHtml(item.confidence_grade || "—")}</td><td>${fmt(item.confidence,0)}</td><td>${fmt(item.entry)}</td><td>${fmt(item.stop_loss)}</td><td>${fmt(item.active_stop_loss)}</td><td>${fmt(item.take_profit_1)}</td><td>${fmt(item.take_profit_2)}</td><td>${escapeHtml(item.order_state || "—")}</td><td>${escapeHtml(item.management_state || "—")}</td><td>${item.result_r ?? '—'}</td></tr>`).join("") : '<tr><td colspan="13" class="m">No persisted setups yet.</td></tr>';
     const leaders = Array.isArray(analytics.model_leaderboard) ? analytics.model_leaderboard : [];
     $("modelLeaderboard").innerHTML = leaders.length ? leaders.map((item) => `<tr><td>${escapeHtml(item.model)}</td><td>${item.trades}</td><td>${Number(item.win_rate || 0).toFixed(1)}%</td><td>${Number(item.average_r || 0).toFixed(2)}R</td><td>${Number(item.net_r || 0).toFixed(2)}R</td><td>${Number(item.profit_factor || 0).toFixed(2)}</td></tr>`).join("") : '<tr><td colspan="6" class="m">No completed model results yet.</td></tr>';
   } catch (error) { toast("Could not load setup history"); }
@@ -1794,7 +1805,7 @@ async function loadSetups() {
 async function loadAlertsPage() {
   try {
     const rows = await fetch("/api/alerts").then((response) => response.json());
-    $("alertsPage").innerHTML = rows.length ? rows.map((item) => `<div class="alert-card ${item.severity}"><b>${item.title}</b><small>${item.time} · ${item.detail}</small></div>`).join("") : '<p class="note">No alerts logged yet.</p>';
+    $("alertsPage").innerHTML = rows.length ? rows.map((item) => `<div class="alert-card ${item.severity}"><b>${item.title}</b><small>${item.created_at ? `${formatAppDateTime(item.created_at)} ${displayTimeZoneLabel(item.created_at)}` : escapeHtml(item.time || "—")} · ${item.detail}</small></div>`).join("") : '<p class="note">No alerts logged yet.</p>';
   } catch (error) { toast("Could not load alerts"); }
 }
 async function loadPositions() {
@@ -1803,10 +1814,17 @@ async function loadPositions() {
     $("positionsPage").innerHTML = rows.length ? rows.map((item) => `<div class="cluster-box page-kv">${pageRow("Symbol",item.symbol)}${pageRow("Direction",item.direction,classForDirection(item.direction))}${pageRow("Entry",fmt(item.entry))}${pageRow("Stop",fmt(item.stop_loss),'r')}${pageRow("TP1",fmt(item.take_profit_1),'g')}${pageRow("TP2",fmt(item.take_profit_2),'g')}${pageRow("State",item.state,'a')}</div>`).join("") : '<p class="note">No active engine-tracked position.</p>';
   } catch (error) { toast("Could not load positions"); }
 }
+function syncTimeZoneControls() {
+  const selector = $("timeZonePreference");
+  if (selector) selector.value = window.TradeIQTime?.preference?.() || "AUTO";
+  if ($("detectedTimeZone")) $("detectedTimeZone").textContent = window.TradeIQTime?.detectedZone || displayTimeZone();
+  if ($("activeTimeZone")) $("activeTimeZone").textContent = `${displayTimeZone()} · ${displayTimeZoneLabel()}`;
+}
 async function loadSettings() {
   try {
     const settings = await fetch("/api/settings").then((response) => response.json());
     $("settingsPage").innerHTML = Object.entries(settings).map(([key,value]) => pageRow(key.replaceAll("_"," "),String(value))).join("");
+    syncTimeZoneControls();
   } catch (error) { toast("Could not load settings"); }
 }
 function adminHeaders() { return {"Content-Type":"application/json","X-Admin-Token":$("adminToken")?.value || ""}; }
@@ -1844,6 +1862,20 @@ document.querySelectorAll(".tf").forEach((button) => button.addEventListener("cl
 }));
 document.querySelectorAll("#nav button[data-page]").forEach((item) => item.addEventListener("click", () => setPage(item.dataset.page)));
 if ($("symbolSelect")) $("symbolSelect").addEventListener("change", (event) => switchMarket(event.target.value));
+if ($("timeZonePreference")) $("timeZonePreference").addEventListener("change", (event) => {
+  window.TradeIQTime?.setPreference?.(event.target.value);
+});
+window.addEventListener("tradeiq-timezone-change", () => {
+  syncTimeZoneControls();
+  tick();
+  renderMarketRadar();
+  if (state.meta?.alerts) renderAlerts(state.meta.alerts);
+  if (state.currentPage === "setups") loadSetups();
+  if (state.currentPage === "alerts") loadAlertsPage();
+  drawChart();
+  if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
+  toast(`Display time updated to ${displayTimeZoneLabel()} (${displayTimeZone()})`);
+});
 document.querySelectorAll("[data-desk-tab]").forEach((button) => button.addEventListener("click", () => setDeskTab(button.dataset.deskTab)));
 if ($("deskRailToggle")) $("deskRailToggle").addEventListener("click", () => setDeskCollapsed(!state.deskCollapsed));
 if ($("deskRailClose")) $("deskRailClose").addEventListener("click", () => setDeskCollapsed(true));
@@ -1923,7 +1955,7 @@ if ($("backtestForm")) $("backtestForm").addEventListener("submit", async (event
     const body = {timeframe:Number($("btTf").value),target_r:Number($("btR").value),max_bars:Number($("btBars").value),minimum_score:75};
     const result = await fetch("/api/backtest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then((response) => response.json());
     $("backtestStats").innerHTML = [["Trades",result.trades],["Win rate",`${result.win_rate}%`],["Avg R",result.average_r],["Profit factor",result.profit_factor],["Net R",result.net_r]].map(([label,value]) => `<div class="page-stat"><b>${value}</b><small>${label}</small></div>`).join("");
-    $("backtestTable").innerHTML = (result.rows || []).map((item) => `<tr><td>${new Date(item.time).toLocaleString()}</td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${fmt(item.entry)}</td><td>${fmt(item.stop)}</td><td>${fmt(item.target)}</td><td class="${item.result_r>0?'g':item.result_r<0?'r':'a'}">${item.result_r}R</td></tr>`).join("");
+    $("backtestTable").innerHTML = (result.rows || []).map((item) => `<tr><td>${formatAppDateTime(item.time)} ${displayTimeZoneLabel(item.time)}</td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${fmt(item.entry)}</td><td>${fmt(item.stop)}</td><td>${fmt(item.target)}</td><td class="${item.result_r>0?'g':item.result_r<0?'r':'a'}">${item.result_r}R</td></tr>`).join("");
     drawSimpleLine($("backtestEquity"), result.equity_curve || []);
   } catch (error) { $("backtestStats").innerHTML = '<p class="note r">Backtest failed.</p>'; }
 });

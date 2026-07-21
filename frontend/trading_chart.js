@@ -710,9 +710,12 @@
     });
   }
 
-  function etTime(time) {
+  function displayChartTime(time) {
     if (!time) return "—";
-    return new Date(Number(time) * 1000).toLocaleString("en-US", {
+    const value = typeof time === "number" ? time : Number(time);
+    const timestamp = Number.isFinite(value) ? value : time;
+    if (window.TradeIQTime?.formatChartTime) return window.TradeIQTime.formatChartTime(timestamp);
+    return new Date(Number(timestamp) * 1000).toLocaleString("en-US", {
       timeZone: "America/New_York",
       month: "short",
       day: "numeric",
@@ -836,7 +839,7 @@
       trackingMode: { exitMode: LC.TrackingModeExitMode?.OnTouchEnd ?? 0 },
       localization: {
         priceFormatter: (price) => formatPrice(price),
-        timeFormatter: (time) => etTime(time),
+        timeFormatter: (time) => displayChartTime(time),
       },
     });
 
@@ -1424,7 +1427,7 @@
     instance.tickSize = Number(data.tickSize || 0.25);
     instance.pricePrecision = Number.isInteger(data.pricePrecision) ? data.pricePrecision : 2;
     instance.candleSeries.applyOptions({ priceFormat: { type: "price", precision: instance.pricePrecision, minMove: instance.tickSize } });
-    instance.chart.applyOptions({ localization: { priceFormatter: (price) => formatPrice(price, instance.pricePrecision), timeFormatter: (time) => etTime(time) } });
+    instance.chart.applyOptions({ localization: { priceFormatter: (price) => formatPrice(price, instance.pricePrecision), timeFormatter: (time) => displayChartTime(time) } });
     if (changedSymbol) {
       instance.firstRender = true;
       instance.data = [];

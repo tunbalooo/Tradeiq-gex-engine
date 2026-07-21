@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=305" />
+<link rel="stylesheet" href="/static/styles.css?v=306" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -471,7 +471,7 @@
 
     <section class="page" id="page-setups">
       <div class="page-shell">
-        <div class="panel page-panel"><div class="panel-h"><h3>Setup History</h3><button class="mini-btn" id="reloadSetups">Reload</button></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th>Time</th><th>Direction</th><th>Model</th><th>Grade</th><th>Confidence</th><th>Entry</th><th>Initial SL</th><th>Active SL</th><th>TP1</th><th>TP2</th><th>State</th><th>Management</th><th>Result R</th></tr></thead><tbody id="setupsTable"></tbody></table></div></div>
+        <div class="panel page-panel"><div class="panel-h"><div><h3>Setup History</h3><small id="setupHistoryTimezone">AUTO · detecting browser time zone…</small></div><button class="mini-btn" id="reloadSetups">Reload</button></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th id="setupHistoryTimeHeader">Time</th><th>Direction</th><th>Model</th><th>Grade</th><th>Confidence</th><th>Entry</th><th>Initial SL</th><th>Active SL</th><th>TP1</th><th>TP2</th><th>State</th><th>Management</th><th>Result R</th></tr></thead><tbody id="setupsTable"></tbody></table></div></div>
         <div class="panel page-panel"><div class="panel-h"><h3>Entry Model Performance</h3><span class="source-chip">READ ONLY</span></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th>Model</th><th>Trades</th><th>Win Rate</th><th>Average R</th><th>Net R</th><th>Profit Factor</th></tr></thead><tbody id="modelLeaderboard"><tr><td colspan="6" class="m">No completed model results yet.</td></tr></tbody></table><p class="note">Historical analytics never alter live model ranking or confidence.</p></div></div>
       </div>
     </section>
@@ -495,6 +495,7 @@
     <section class="page" id="page-settings">
       <div class="page-shell two-col">
         <div class="panel page-panel"><div class="panel-h"><h3>Runtime Configuration</h3></div><div class="panel-b"><div id="settingsPage" class="settings-kv"></div></div></div>
+        <div class="panel page-panel"><div class="panel-h"><h3>Display Time</h3><span class="source-chip">BROWSER DETECTED</span></div><div class="panel-b"><div class="form"><label>Time zone<select id="timeZonePreference"><option value="AUTO">Auto-detect this device</option><option value="EXCHANGE">Exchange time (New York)</option></select></label></div><div class="settings-kv timezone-kv"><div><span>Detected device zone</span><b id="detectedTimeZone">—</b></div><div><span>Active display zone</span><b id="activeTimeZone">—</b></div></div><p class="note">TradeIQ stores all setup and lifecycle timestamps in UTC, then converts them only for display. Auto mode follows the browser/device time zone and daylight-saving rules.</p></div></div>
         <div class="panel page-panel"><div class="panel-h"><h3>Admin Actions</h3></div><div class="panel-b"><div class="form"><label>Admin token<input id="adminToken" type="password" placeholder="Railway ADMIN_TOKEN"></label><button id="settingsRefreshGex">Refresh GEX Cache</button><button class="danger" id="resetSetup">Reset Active Setup</button></div><p class="note">The token remains in this browser session and is never written to GitHub.</p></div></div>
       </div>
     </section>
@@ -518,7 +519,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=305"></script>
+<script src="/static/boot.js?v=306"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

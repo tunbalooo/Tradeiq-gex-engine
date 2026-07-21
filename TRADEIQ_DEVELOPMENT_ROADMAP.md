@@ -1,7 +1,7 @@
 # TradeIQ Development Roadmap
 
-**Product version:** 3.0.5-self-healing-market-stream  
-**Document version:** 3.0.5  
+**Product version:** 3.0.6-timezone-aware-history  
+**Document version:** 3.0.6  
 **Status:** Living roadmap
 
 ## Released
@@ -88,3 +88,13 @@
 - [x] Prevent optional payload-component failures from closing `/ws/market`.
 - [x] Separate server status, feed status and data age in the header.
 - [x] Add regression coverage for stale detection, client recreation, gap merge and WebSocket isolation.
+
+
+### v3.0.6 — Timezone-Aware Setup History — Released
+
+- [x] Store and transport setup/lifecycle timestamps as explicit UTC.
+- [x] Correct legacy SQLite offset-less timestamps.
+- [x] Auto-detect browser/device IANA time zone.
+- [x] Add local versus exchange-time preference.
+- [x] Synchronize Setup History, timeline, alerts, Claude, radar, chart and backtest display times.
+- [x] Add regression coverage for UTC serialization and history output.

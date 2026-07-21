@@ -1,6 +1,6 @@
 # TradeIQ Trading Engine Specification
 
-**Version:** 3.0.5
+**Version:** 3.0.6
 
 ## Deterministic Pipeline
 
@@ -178,3 +178,12 @@ A radar candidate remains non-executable. When the trader opens the market, the 
 - When the live stream reconnects, missing minute bars are backfilled before the chart and engine are treated as synchronized.
 - Replayed records are merged by minute and do not create retrospective watch touches, fills, stops or targets.
 - Feed recovery never changes an entry, stop, target, confidence score or setup state by itself; it only restores authoritative market observations for the deterministic engine.
+
+
+## Timestamp Contract (v3.0.6)
+
+- Engine and persistence timestamps are UTC-aware datetimes.
+- A naive timestamp read from SQLite is interpreted as UTC because all TradeIQ persistence writes use UTC.
+- Setup History and lifecycle APIs serialize UTC with `Z`.
+- The deterministic engine never uses browser-local wall-clock time for setup ordering, expiry, fills, management or replay.
+- Display-time conversion is a UI concern and cannot change lifecycle decisions.
