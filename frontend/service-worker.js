@@ -1,3 +1,4 @@
+// Previous cache: tradeiq-v3.0.6-timezone-aware-history-shell
 // Legacy v2.5 asset query: ?v=25
 // Legacy v2.5 cache reference: CACHE_NAME = "tradeiq-v2.5-shell"
 // Legacy v2.4 cache: CACHE_NAME = "tradeiq-v2.4-shell"; assets used ?v=24
@@ -22,14 +23,15 @@
 // Legacy v2.1 assets: /static/styles.css?v=21 /static/boot.js?v=21 /static/app.js?v=21 /static/trading_chart.js?v=21
 // Legacy v2.2 assets: /static/styles.css?v=22 /static/boot.js?v=22 /static/app.js?v=22 /static/trading_chart.js?v=22
 // Legacy v2.3 assets: /static/styles.css?v=23 /static/boot.js?v=23 /static/app.js?v=23 /static/trading_chart.js?v=23
-const CACHE_NAME = "tradeiq-v3.0.6-timezone-aware-history-shell";
+// TradeIQ v3.0.7: model-native confirmation contracts for every entry model.
+const CACHE_NAME = "tradeiq-v3.0.7-model-native-confirmations-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=306",
-  "/static/boot.js?v=306",
-  "/static/time.js?v=306",
-  "/static/app.js?v=306",
-  "/static/trading_chart.js?v=306",
+  "/static/styles.css?v=307",
+  "/static/boot.js?v=307",
+  "/static/time.js?v=307",
+  "/static/app.js?v=307",
+  "/static/trading_chart.js?v=307",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",

@@ -16,6 +16,7 @@ from engine.fib_ote import calculate_fib_levels, ote_zone
 from engine.fib_pullback_continuation import analyze_fib_pullback_continuation
 from engine.gex import OptionPosition, derive_gex_summary_from_positions
 from engine.market_structure import analyze_market_structure
+from engine.model_confirmations import evaluate_model_confirmations
 from engine.entry_models import ModelContext, rank_entry_models
 from engine.institutional_confidence import CATEGORY_WEIGHTS, calculate_institutional_confidence
 from engine.risk_engine import build_trade_levels
@@ -289,6 +290,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         "approaching_wall": abs(nearest_wall - current_price) <= atr * 5,
         "rth_session_bars": len(session),
         "legacy_confluence_score": legacy_confidence,
+        "atr": round(float(atr), 6),
         "volume_ratio": round(volume_ratio, 3),
         "volume_expansion": volume_expansion_quality >= .6,
         "directional_fvg_low": structure.get("bullish_fvg_low") if direction == "LONG" else structure.get("bearish_fvg_low"),
@@ -309,6 +311,35 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         "fib_pullback_entry_fresh": fib_pullback.entry_fresh,
         "fib_pullback_confirmation_candle_time": fib_pullback.confirmation_candle_time.isoformat() if fib_pullback.confirmation_candle_time else None,
     }
+
+    # Every entry model owns its confirmation contract. Locations may qualify a
+    # setup for monitoring, but only a completed model-native confirmation can
+    # arm execution. This prevents a valid short/long from being cancelled merely
+    # because it did not print a generic rejection candle.
+    confirmation_map = evaluate_model_confirmations(
+        candles_5m, direction=direction, atr=atr, vwap=vwap, gamma_flip=gex.gamma_flip,
+        zone_low=selected_zone.low if selected_zone else None,
+        zone_high=selected_zone.high if selected_zone else None,
+        ote_low=ote_low, ote_high=ote_high,
+        fvg_low=signals.get("directional_fvg_low"),
+        fvg_high=signals.get("directional_fvg_high"),
+        previous_liquidity_low=structure.get("previous_liquidity_low"),
+        previous_liquidity_high=structure.get("previous_liquidity_high"),
+        signals=signals,
+    )
+    signals["model_confirmations"] = {
+        key: {
+            "confirmed": result.confirmed,
+            "label": result.label,
+            "evidence": result.evidence,
+            "missing": result.missing,
+            "window_bars": result.window_bars,
+        }
+        for key, result in confirmation_map.items()
+    }
+    for key, result in confirmation_map.items():
+        signals[f"confirm_{key.lower()}"] = result.confirmed
+
     # Rank the institutional entry models before locking a price plan. The top
     # model supplies its own trigger and structural invalidation. This prevents
     # every model from being forced through the old universal OTE/liquidity gate.

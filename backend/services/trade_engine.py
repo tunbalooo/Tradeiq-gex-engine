@@ -336,6 +336,33 @@ class TradeEngineService:
             "status": status or candidate.status,
         })
 
+    @staticmethod
+    def _model_confirmation_contract(setup: TradeSetup) -> dict[str, object]:
+        contracts = setup.signals.get("model_confirmations") if isinstance(setup.signals, dict) else None
+        if not isinstance(contracts, dict):
+            return {}
+        contract = contracts.get(setup.primary_entry_model_key or "")
+        return contract if isinstance(contract, dict) else {}
+
+    @classmethod
+    def _confirmation_window_minutes(cls, setup: TradeSetup) -> int:
+        contract = cls._model_confirmation_contract(setup)
+        try:
+            bars = max(1, int(contract.get("window_bars") or 1))
+        except (TypeError, ValueError):
+            bars = 1
+        # Setup evidence is built from completed 5-minute candles. Give each model
+        # enough time to print its native confirmation rather than applying the
+        # old universal five-minute timeout. The configured minimum remains valid.
+        return max(int(settings.watch_confirmation_minutes), bars * 5)
+
+    @classmethod
+    def _confirmation_description(cls, setup: TradeSetup) -> tuple[str, list[str]]:
+        contract = cls._model_confirmation_contract(setup)
+        label = str(contract.get("label") or "model-specific confirmation")
+        missing = [str(item) for item in (contract.get("missing") or [])]
+        return label, missing
+
     def _start_watching(
         self, candidate: TradeSetup, candle, *, market_candle=None,
         setup_id: str | None = None, timestamp: datetime | None = None,
@@ -346,9 +373,11 @@ class TradeEngineService:
         self._expired_watch = None
         self._reset_pending_candidate()
         trigger = self._finite_number(candidate.entry)
+        confirmation_label, missing_confirmation = self._confirmation_description(candidate)
+        missing_text = ", ".join(missing_confirmation[:3]) or confirmation_label
         transition_reason = (
-            f"TradeIQ is monitoring a {candidate.direction.lower()} candidate near {trigger:,.2f}; "
-            "the full limit plan is not armed because one or more mandatory confirmations are still missing."
+            f"TradeIQ is monitoring a {candidate.direction.lower()} {candidate.primary_entry_model or 'entry'} "
+            f"candidate near {trigger:,.2f}. No order is armed. Waiting for {missing_text}."
         )
         watching = candidate.model_copy(deep=True, update={
             "setup_id": setup_id or str(uuid4()),
@@ -537,11 +566,43 @@ class TradeEngineService:
 
         confirmation_deadline = watching.watch_confirmation_expires_at
         if watching.watch_touch_at is not None and confirmation_deadline and now >= confirmation_deadline:
+            confirmation_label, missing_confirmation = self._confirmation_description(candidate)
+            missing_text = ", ".join(missing_confirmation[:3]) or confirmation_label
+            # A timeout is not structural invalidation. When the thesis remains
+            # valid and price is still near the watch location, keep monitoring
+            # for one fresh model-native confirmation cycle. This prevents a
+            # setup from being labelled "cancelled" immediately before the move.
+            distance = abs(float(market_candle.close) - float(trigger or market_candle.close))
+            atr_value = self._finite_number(candidate.signals.get("atr")) if isinstance(candidate.signals, dict) else None
+            near_watch = distance <= max((atr_value or 0.0) * 0.75, 1.0)
+            if self._is_watch_candidate(candidate) and same_direction and near_watch and watching.watch_touch_count < 2:
+                extension = self._confirmation_window_minutes(candidate)
+                extended_to = min(watch_expires_at, now + timedelta(minutes=extension))
+                reason = (
+                    f"The first confirmation window ended without {missing_text}, but structural invalidation "
+                    "has not failed and price remains near the watch location. Monitoring continues for one fresh confirmation cycle; no order is armed."
+                )
+                extended = self._refresh_context(watching, candidate).model_copy(update={
+                    "watch_phase": "CONFIRMATION_EXTENDED",
+                    "status": f"CONFIRMING_{watching.direction}",
+                    "watch_confirmation_expires_at": extended_to,
+                    "watch_touch_count": watching.watch_touch_count + 1,
+                    "last_transition_from": "WATCHING",
+                    "last_transition_to": "WATCHING",
+                    "last_transition_reason": reason,
+                    "last_transition_at": now,
+                    "last_transition_price": self._finite_number(market_candle.close),
+                    "last_processed_candle_time": candle.time,
+                    **self._watch_observation_updates(market_candle),
+                })
+                storage_service.transition(extended, "WATCHING", "WATCHING", market_candle.close, market_candle.time, reason, "info")
+                return extended
+
             self._remember_expired_watch(watching)
             self._reset_pending_candidate()
             return self._transition(
                 watching, "UNCONFIRMED_TOUCH", market_candle,
-                "Price touched the monitoring level, but the required rejection/displacement confirmation did not complete within the confirmation window. No order was armed.",
+                f"Price touched the monitoring level, but {missing_text} did not complete before the model-specific confirmation window ended. No order was armed; this is a missed confirmation, not structural invalidation.",
                 actionable=False, closed_at=now, outcome="UNCONFIRMED_TOUCH",
             )
 
@@ -554,10 +615,14 @@ class TradeEngineService:
             observed_close=watching.watch_observed_close,
         )
         if touched_now and watching.watch_touch_at is None:
-            expires = now + timedelta(minutes=max(1, settings.watch_confirmation_minutes))
+            window_minutes = self._confirmation_window_minutes(candidate)
+            expires = min(watch_expires_at, now + timedelta(minutes=window_minutes))
+            confirmation_label, missing_confirmation = self._confirmation_description(candidate)
+            waiting_for = ", ".join(missing_confirmation[:3]) or confirmation_label
             reason = (
                 f"Price touched the {watching.direction.lower()} watch level at {trigger:,.2f}. "
-                "This is not a fill. TradeIQ is now waiting for the model-specific rejection or displacement confirmation before it can lock a limit plan."
+                f"This is not a fill. The {candidate.primary_entry_model or 'selected'} model now requires "
+                f"{waiting_for}. The confirmation window is {window_minutes} minutes."
             )
             touched = self._refresh_context(watching, candidate).model_copy(update={
                 "watch_phase": "TRIGGER_TOUCHED",

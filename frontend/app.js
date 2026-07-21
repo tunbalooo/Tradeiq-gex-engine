@@ -860,8 +860,25 @@ function renderSession(session) {
   if (state.currentPage === "dashboard") $("pageTitle").textContent = open ? `${activeSymbol()} · ${session.display_name}` : `${activeSymbol()} · MARKET CLOSED`;
 }
 
+function activeModelConfirmation(setup) {
+  const contracts = setup?.signals?.model_confirmations || {};
+  const contract = contracts[setup?.primary_entry_model_key] || {};
+  const missing = Array.isArray(contract.missing) ? contract.missing : [];
+  return {
+    label: contract.label || "model-specific confirmation",
+    missing,
+    evidence: Array.isArray(contract.evidence) ? contract.evidence : [],
+    windowBars: Number(contract.window_bars || 0),
+  };
+}
+
+function confirmationWaitingText(setup) {
+  const contract = activeModelConfirmation(setup);
+  return contract.missing.length ? contract.missing.slice(0, 3).join(" · ") : contract.label;
+}
+
 function previewExplanation(setup, { syncing = false, marketClosed = false } = {}) {
-  if (watchTriggerTouched(setup)) return `Price touched the ${setup.direction.toLowerCase()} watch level at ${fmt(watchTrigger(setup))}. No order was filled. TradeIQ is waiting for a closed rejection or displacement confirmation before it can lock a limit plan.`;
+  if (watchTriggerTouched(setup)) return `Price touched the ${setup.direction.toLowerCase()} watch level at ${fmt(watchTrigger(setup))}. No order was filled. ${setup.primary_entry_model || "The selected model"} is waiting for ${confirmationWaitingText(setup)} before it can lock a limit plan.`;
   if (hasWatchingPlan(setup)) return `Monitoring ${setup.direction.toLowerCase()} near ${fmt(watchTrigger(setup))}. This trigger is not an entry and no limit order is armed. Wait for LIMIT READY before considering the plan.`;
   if (syncing) return "Temporary levels from local placeholder data while Databento history syncs. Do not trade this preview.";
   if (marketClosed) return "Watch-only candidate from the latest closed data. It can change or disappear when live trading resumes.";
@@ -939,13 +956,13 @@ function renderTradeSetup(setup) {
     ? fmt(setup.watch_invalidation)
     : lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
   $("setupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
-  $("setupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : triggerTouched ? "CONFIRMATION WINDOW" : watchingPlan ? "WAITING FOR PRICE" : "—";
+  $("setupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : triggerTouched ? activeModelConfirmation(setup).label.toUpperCase() : watchingPlan ? "WAITING FOR PRICE" : "—";
   $("setupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("setupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("setupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
   $("setupTp2Source").textContent = lockedPlan ? (setup.target_sources?.tp2 || "—") : "—";
   $("setupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : triggerTouched ? `Watch level touched · waiting for closed confirmation · no order armed` : watchingPlan ? `Monitoring ${setup.direction.toLowerCase()} · do not place a limit yet` : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch expired — waiting for a new candidate" : "Scanning — no setup") :
+  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : triggerTouched ? `Watch touched · waiting for ${confirmationWaitingText(setup)} · no order armed` : watchingPlan ? `Monitoring ${setup.direction.toLowerCase()} · do not place a limit yet` : setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch expired — waiting for a new candidate" : "Scanning — no setup") :
     setup.order_state === "UNCONFIRMED_TOUCH" ? "No trade — trigger was touched before confirmation" :
     setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
@@ -1011,7 +1028,7 @@ function renderChartTradeSetup(setup, context) {
     ? fmt(setup.watch_invalidation)
     : lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
   $("chartSetupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
-  $("chartSetupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : triggerTouched ? "CONFIRMATION WINDOW" : watchingPlan ? "WAITING FOR PRICE" : "—";
+  $("chartSetupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : triggerTouched ? activeModelConfirmation(setup).label.toUpperCase() : watchingPlan ? "WAITING FOR PRICE" : "—";
   $("chartSetupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";

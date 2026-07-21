@@ -47,7 +47,7 @@ def test_trade_lifecycle_records_authoritative_transition_reasons(monkeypatch):
     watching = service._start_watching(_candidate(), _candle(start, low=101, high=102))
     assert watching.last_transition_from == "PREVIEW_ONLY"
     assert watching.last_transition_to == "WATCHING"
-    assert "mandatory confirmations" in watching.last_transition_reason
+    assert "No order is armed" in watching.last_transition_reason
 
     clock["now"] += timedelta(minutes=5)
     armed = service._advance_watching(

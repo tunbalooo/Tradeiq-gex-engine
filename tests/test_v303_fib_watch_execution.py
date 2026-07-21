@@ -176,8 +176,15 @@ def test_watch_touch_is_visible_then_expires_only_after_confirmation_window(monk
     assert touched.entry is None and touched.filled_at is None
     assert "not a fill" in touched.last_transition_reason.lower()
 
+    # Fib Pullback Continuation owns a five-bar confirmation window. It must not
+    # be cancelled by the old universal five-minute timeout.
     clock["now"] = start + timedelta(minutes=1 + settings.watch_confirmation_minutes + 1)
-    expired = service._advance_watching(touched, _candidate(), live_touch, live_touch)
+    still_confirming = service._advance_watching(touched, _candidate(), live_touch, live_touch)
+    assert still_confirming.order_state == "WATCHING"
+    assert still_confirming.watch_phase == "TRIGGER_TOUCHED"
+
+    clock["now"] = touched.watch_confirmation_expires_at + timedelta(seconds=1)
+    expired = service._advance_watching(touched.model_copy(update={"watch_touch_count": 2}), _candidate(), live_touch, live_touch)
     assert expired.order_state == "UNCONFIRMED_TOUCH"
     assert expired.outcome == "UNCONFIRMED_TOUCH"
 
