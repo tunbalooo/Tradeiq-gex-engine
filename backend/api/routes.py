@@ -12,6 +12,7 @@ from backend.services.finnhub_news import finnhub_news_service
 from backend.services.finnhub_calendar import finnhub_calendar_service
 from backend.services.databento_gex import gex_service
 from backend.services.market_data import market_data_service
+from backend.services.multi_market_monitor import multi_market_monitor_service
 from backend.services.instruments import get_instrument, instrument_registry
 from backend.services.session_service import get_session_status
 from backend.services.setup_service import clear_fallback_gex_cache
@@ -59,6 +60,8 @@ async def select_market_symbol(request: MarketSymbolRequest):
     if previous != profile.symbol:
         trade_engine_service.reset_for_symbol(profile.symbol)
         claude_analysis_service.reset_cache()
+    # Cached history makes the visual switch immediate; complete one deterministic
+    # engine pass before returning so API clients always receive a coherent setup.
     setup = await trade_engine_service.run_once()
     return {
         "changed": previous != profile.symbol,
@@ -69,6 +72,26 @@ async def select_market_symbol(request: MarketSymbolRequest):
         "session": get_session_status(),
         "setup": setup,
     }
+
+
+@router.get("/multi-market/opportunities")
+def multi_market_opportunities():
+    return {
+        "items": multi_market_monitor_service.snapshot(),
+        "status": multi_market_monitor_service.status(),
+    }
+
+
+@router.get("/multi-market/status")
+def multi_market_status():
+    return multi_market_monitor_service.status()
+
+
+@router.post("/multi-market/scan")
+async def scan_multi_market_now(x_admin_token: str | None = Header(default=None)):
+    require_admin(x_admin_token)
+    items = await multi_market_monitor_service.scan_once()
+    return {"items": items, "status": multi_market_monitor_service.status()}
 
 
 @router.get("/market/snapshot")
@@ -193,7 +216,7 @@ def backtest(request: BacktestRequest):
 @router.get("/settings")
 def read_settings():
     profile = instrument_registry.active
-    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "active_symbol": profile.symbol, "supported_symbols": ", ".join(item["symbol"] for item in instrument_registry.list_public()), "dataset": settings.databento_dataset, "futures_symbol": profile.futures_continuous, "options_parent": profile.options_parent, "gex_source": profile.gex_source_label, "tick_size": profile.tick_size, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "entry_model_min_score": settings.entry_model_min_score, "move_stop_to_breakeven_after_tp1": settings.move_stop_to_breakeven_after_tp1, "partial_exit_percent": settings.partial_exit_percent, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled, "finnhub_economic_calendar": finnhub_calendar_service.status()}
+    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "active_symbol": profile.symbol, "supported_symbols": ", ".join(item["symbol"] for item in instrument_registry.list_public()), "dataset": settings.databento_dataset, "futures_symbol": profile.futures_continuous, "options_parent": profile.options_parent, "gex_source": profile.gex_source_label, "tick_size": profile.tick_size, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "entry_model_min_score": settings.entry_model_min_score, "move_stop_to_breakeven_after_tp1": settings.move_stop_to_breakeven_after_tp1, "partial_exit_percent": settings.partial_exit_percent, "multi_market_alerts_enabled": settings.multi_market_alerts_enabled, "multi_market_symbols": settings.multi_market_symbols, "multi_market_scan_seconds": settings.multi_market_scan_seconds, "multi_market_history_refresh_seconds": settings.multi_market_history_refresh_seconds, "multi_market_max_data_age_seconds": settings.multi_market_max_data_age_seconds, "multi_market_min_model_score": settings.multi_market_min_model_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled, "finnhub_economic_calendar": finnhub_calendar_service.status()}
 
 
 @router.get("/news")

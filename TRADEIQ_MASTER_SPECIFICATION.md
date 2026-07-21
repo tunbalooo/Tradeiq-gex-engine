@@ -1,7 +1,7 @@
 # TradeIQ Master Specification
 
-**Product version:** 3.0.3-fib-pullback-watch-execution  
-**Document version:** 3.0.3  
+**Product version:** 3.0.4-trade-desk-market-radar  
+**Document version:** 3.0.4  
 **Status:** Living source of truth
 
 ## 1. Product Purpose
@@ -33,7 +33,7 @@ Terminal alternatives:
 
 A `WATCHING → WATCHING` event records a deterministic switch to a stronger secondary entry model.
 
-## 4. Implemented v3.0–v3.0.3 Modules
+## 4. Implemented v3.0–v3.0.4 Modules
 
 - Live/historical market data service.
 - GEX service with snapshot-stable dealer levels.
@@ -77,6 +77,20 @@ A `WATCHING → WATCHING` event records a deterministic switch to a stronger sec
 - The engine opens a finite confirmation window, then arms, invalidates or records `UNCONFIRMED_TOUCH` with an exact reason.
 - Completed candles drive model confirmation; the newest live candle drives touches, fills, stops and targets.
 - Observation snapshots prevent pre-watch, pre-arm, pre-fill or pre-break-even price extremes from being treated as later events while still detecting new same-candle crossings.
+
+
+### Institutional Trade Desk and cross-market radar (v3.0.4)
+
+- The full chart is now branded as the **TradeIQ Institutional Trade Desk** and receives the largest share of the desktop workspace.
+- Trade Setup, Claude and Market Radar are mutually exclusive right-rail tabs. Only one pane is visible at a time, preventing Claude from overlapping setup information.
+- The entire rail can be collapsed to create a chart-first workspace.
+- NQ, ES and GC are prewarmed by default and retained in server plus browser memory for materially faster instrument switching.
+- Previously viewed markets restore immediately from browser memory while the backend synchronizes the selected live market.
+- A read-only Cross-Market Radar scans configured markets without changing the active chart or active trade lifecycle.
+- Radar candidates must pass deterministic entry validity, model-score, confidence and data-freshness gates.
+- Inactive-market alerts are labeled **setup forming**, not executable trades. Opening the market is required before the active engine can validate current GEX, confirmation, entry and risk.
+- Radar alerts are recorded in TradeIQ Alerts and can also use browser desktop notifications after explicit permission.
+- Databento inactive-market refreshes use incremental one-minute history updates instead of repeatedly downloading the complete history window.
 
 ## 5. Entry Models
 
@@ -138,6 +152,9 @@ The active lifecycle object survives backend restarts. Every transition is store
 - SMT requires synchronized comparison-market data and therefore remains unavailable when that feed is absent.
 - Order Block and FVG models use deterministic data already derived by the current structure/zone engine; they are not full depth-of-market models.
 - Analytics are descriptive and do not adapt live model weights.
-- Multi-symbol selection exists, but simultaneous portfolio monitoring is not yet implemented.
+- The Cross-Market Radar monitors NQ, ES and GC for developing candidates, but only the selected instrument owns an executable setup lifecycle.
 - Model-specific thresholds are deterministic configuration values and still require live forward testing by symbol/session.
 - Clean Chart mode reduces visual noise but does not remove the underlying analytical data or change engine decisions.
+- Inactive-market radar GEX may use the stable fallback map until that market becomes active; every alert therefore requires active-market validation.
+- Browser notifications depend on user permission and browser/PWA support.
+- The radar is an informational scanner and cannot arm, fill, manage or cancel orders on inactive markets.

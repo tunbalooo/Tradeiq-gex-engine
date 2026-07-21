@@ -1,4 +1,4 @@
-# TradeIQ Institutional Decision Platform v3.0.2
+# TradeIQ Institutional Trade Desk v3.0.4
 
 
 ## v3.0.2 entry and chart stability
@@ -50,7 +50,7 @@ TradeIQ no longer blocks the instrument selector while a full Databento history 
 
 After a market has loaded once, its candles are retained in an in-memory cache for 30 minutes, so switching back is normally sub-second. Finnhub's general-news feed is also downloaded once and filtered locally for NQ, ES, and Gold instead of making a separate network request for each symbol.
 
-Optional prewarming is disabled by default to avoid multiplying Databento historical usage on every Railway deployment. It can be enabled with:
+NQ, ES and GC prewarming is enabled by default so the primary desk markets can switch quickly. The configured list is warmed sequentially, and later refreshes request only the missing one-minute tail. It can be enabled with:
 
 ```env
 DATABENTO_PREWARM_MARKETS=true
@@ -100,7 +100,7 @@ SIMULATED_MODE=false
 DEFAULT_SYMBOL=NQ
 DATABENTO_API_KEY=your_private_key
 DATABENTO_MARKET_CACHE_SECONDS=1800
-DATABENTO_PREWARM_MARKETS=false
+DATABENTO_PREWARM_MARKETS=true
 ```
 
 For Finnhub news:
@@ -274,5 +274,30 @@ WATCH_CONFIRMATION_MINUTES=5
 Current local verification target:
 
 ```text
-123 passed
+126 passed
+```
+
+## v3.0.4 Trade Desk and Cross-Market Radar
+
+- The desktop full-chart workspace is now the **TradeIQ Institutional Trade Desk**.
+- Setup, Claude and Market Radar are separate tabs, so Claude no longer overlaps setup information.
+- The right rail can be collapsed for a chart-first layout.
+- NQ, ES and GC are scanned in the background for deterministic **setup forming** opportunities.
+- Radar opportunities can create TradeIQ alerts and permission-based browser notifications, but cannot create an order on an inactive market.
+- Previously viewed symbols restore immediately from browser memory while the backend synchronizes authoritative live data.
+- Databento prewarming and incremental background refresh improve NQ/ES/GC switching without repeatedly downloading the complete history window.
+- Stale candles are blocked from alert generation.
+
+New endpoints:
+
+```text
+GET  /api/multi-market/opportunities
+GET  /api/multi-market/status
+POST /api/multi-market/scan
+```
+
+Current local verification target:
+
+```text
+126 passed
 ```

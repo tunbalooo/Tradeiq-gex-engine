@@ -1,6 +1,6 @@
 # TradeIQ Trading Engine Specification
 
-**Version:** 3.0.3
+**Version:** 3.0.4
 
 ## Deterministic Pipeline
 
@@ -132,3 +132,40 @@ Claude receives the current setup, latest transition, recent timeline, primary m
 ## Setup History Policy
 
 Transient scanning previews are not trade-history records. The history endpoint hides `PREVIEW_ONLY` rows that never became a watch and suppresses near-duplicate lifecycle rows. Full deterministic transitions remain available in each setup timeline.
+
+## Cross-Market Radar Contract (v3.0.4)
+
+The radar is a separate read-only service. It may evaluate NQ, ES and GC in the background, but it cannot change `instrument_registry.active`, create an active trade, arm a limit, modify a stop or advance the persistent lifecycle.
+
+For each configured market it:
+
+1. obtains at least 100 normalized one-minute candles;
+2. refreshes inactive Databento history incrementally;
+3. builds a candidate through the same deterministic setup and model-ranking pipeline;
+4. requires a valid entry proposal;
+5. requires the configured model score and confidence floor;
+6. rejects stale market data;
+7. applies duplicate/cooldown suppression;
+8. emits a **setup forming** alert for inactive markets only.
+
+Default radar controls:
+
+```env
+MULTI_MARKET_ALERTS_ENABLED=true
+MULTI_MARKET_SYMBOLS=NQ,ES,GC
+MULTI_MARKET_SCAN_SECONDS=45
+MULTI_MARKET_HISTORY_REFRESH_SECONDS=60
+MULTI_MARKET_MAX_DATA_AGE_SECONDS=180
+MULTI_MARKET_MIN_MODEL_SCORE=72
+MULTI_MARKET_MIN_CONFIDENCE=45
+MULTI_MARKET_ALERT_COOLDOWN_MINUTES=15
+```
+
+A radar candidate remains non-executable. When the trader opens the market, the active engine recalculates live GEX, lifecycle evidence, target path and risk before any watch or locked order can exist.
+
+## Market-Switch Integrity
+
+- The active lifecycle is reset only when the selected instrument truly changes.
+- Cached candles may be shown immediately for continuity, but the backend completes a deterministic engine pass before the symbol-switch API returns.
+- Browser-cached setup content is a temporary visual preview and is replaced by the selected market's authoritative backend response.
+- WebSocket updates are ignored during the critical switch window so the previous symbol cannot overwrite the new chart.

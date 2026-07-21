@@ -160,8 +160,8 @@ def _direction_from_structure(structure: dict, current_price: float, gex: GexSum
     return "LONG" if current_price >= gex.gamma_flip else "SHORT"
 
 
-def build_candidate_setup(candles_override=None) -> TradeSetup:
-    profile = instrument_registry.active
+def build_candidate_setup(candles_override=None, profile_override: InstrumentProfile | None = None, gex_override: GexSummary | None = None) -> TradeSetup:
+    profile = profile_override or instrument_registry.active
     base_candles = candles_override or market_data_service.snapshot()
     if not base_candles:
         raise RuntimeError("No market candles are available.")
@@ -178,7 +178,12 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
     )
     zones = sorted(zones, key=lambda z: (z.fresh, z.strength, z.created_at or base_candles[0].time), reverse=True)[:12]
 
-    gex = gex_service.get_summary(current_price)
+    gex = gex_override
+    # Native GEX belongs to the currently selected market. Background radar
+    # scans must never change the global instrument merely to obtain GEX, so
+    # inactive markets use the stable fallback map until the trader opens them.
+    if gex is None and profile.symbol == instrument_registry.active.symbol:
+        gex = gex_service.get_summary(current_price)
     if gex is None:
         gex = _stable_fallback_gex(current_price, profile)
 

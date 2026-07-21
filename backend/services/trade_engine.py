@@ -849,7 +849,7 @@ class TradeEngineService:
                         "A strong opposite-direction setup invalidated the unfilled plan.",
                         actionable=False, closed_at=now, outcome="OPPOSITE_SETUP", **observation,
                     )
-                if candidate.confidence < 50 or not candidate.signals.get("gex_alignment") or candidate.cluster_score < .35:
+                if not candidate.actionable and (candidate.confidence < 50 or not candidate.signals.get("gex_alignment") or candidate.cluster_score < .35):
                     return self._transition(
                         active, "INVALIDATED", candle,
                         "The original confluence cluster was lost before entry.",

@@ -57,6 +57,16 @@ class StorageService:
             logger.exception("Unable to persist lifecycle transition")
 
 
+    def save_alert(self, title: str, detail: str, severity: str = "info", setup_id: str | None = None) -> None:
+        """Persist a non-lifecycle alert such as a background market-radar event."""
+        safe_severity = severity if severity in {"positive", "negative", "warning", "info"} else "info"
+        try:
+            with SessionLocal() as db:
+                db.add(AlertRecord(setup_id=setup_id, title=title[:120], detail=detail, severity=safe_severity))
+                db.commit()
+        except Exception:
+            logger.exception("Unable to persist alert")
+
     def load_active_setup(self, symbol: str | None = None) -> TradeSetup | None:
         """Restore the newest non-terminal setup after a server restart.
 

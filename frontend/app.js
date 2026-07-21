@@ -94,6 +94,12 @@ const state = {
   setupTimeline: [],
   timelineSetupId: null,
   timelineLifecycleKey: null,
+  marketOpportunities: [],
+  marketRadarStatus: null,
+  seenOpportunityIds: new Set(JSON.parse(localStorage.getItem("tradeiq-seen-opportunities") || "[]")),
+  marketCache: {},
+  deskTab: localStorage.getItem("tradeiq-desk-tab") || "setup",
+  deskCollapsed: localStorage.getItem("tradeiq-desk-collapsed") === "true",
 };
 
 function activeSymbol() { return state.instrument?.symbol || state.setup?.symbol || "NQ"; }
@@ -105,6 +111,144 @@ function timeframeLabel() { return state.timeframe >= 60 ? `${state.timeframe / 
 function chartFeedLabel() {
   const quality = state.dataQuality && state.dataQuality !== "READY" ? ` · ${state.dataQuality.replaceAll("_", " ")}` : "";
   return `${instrumentName()} · ${timeframeLabel()} · ${state.dataSource}${quality}`;
+}
+
+function cacheCurrentMarket() {
+  const symbol = activeSymbol();
+  if (!symbol || !state.baseCandles.length || !state.instrument) return;
+  state.marketCache[symbol] = {
+    candles: state.baseCandles.map((item) => ({ ...item })),
+    instrument: { ...state.instrument },
+    historyReady: state.historyReady,
+    historySource: state.historySource,
+    dataQuality: state.dataQuality,
+    rawSymbol: state.rawSymbol,
+    dataSource: state.dataSource,
+    marketWarming: state.marketWarming,
+    setup: state.setup ? JSON.parse(JSON.stringify(state.setup)) : null,
+    meta: state.meta ? JSON.parse(JSON.stringify(state.meta)) : null,
+    session: state.session ? JSON.parse(JSON.stringify(state.session)) : null,
+  };
+}
+
+function restoreCachedMarket(symbol) {
+  const cached = state.marketCache[symbol];
+  if (!cached) return false;
+  state.baseCandles = cached.candles.map((item) => ({ ...item }));
+  state.historyReady = cached.historyReady;
+  state.historySource = cached.historySource;
+  state.dataQuality = cached.dataQuality;
+  state.rawSymbol = cached.rawSymbol;
+  state.dataSource = cached.dataSource;
+  state.marketWarming = cached.marketWarming;
+  applyInstrument(cached.instrument);
+  if (cached.setup && cached.meta) renderAll(cached.setup, cached.meta, cached.session);
+  renderHeader({ price: state.baseCandles.at(-1)?.close, instrument: cached.instrument });
+  window.TradeIQChartManager?.marketChanged?.("chart");
+  window.TradeIQChartManager?.marketChanged?.("chartLarge");
+  drawChart();
+  if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
+  return true;
+}
+
+function saveSeenOpportunities() {
+  const values = [...state.seenOpportunityIds].slice(-100);
+  localStorage.setItem("tradeiq-seen-opportunities", JSON.stringify(values));
+}
+
+function opportunityPrice(value, symbol) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+  const digits = ["ES", "MES"].includes(symbol) ? 2 : 2;
+  return Number(value).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function renderMarketRadar(items = state.marketOpportunities, status = state.marketRadarStatus) {
+  const list = $("marketRadarList");
+  if (!list) return;
+  const alertable = items.filter((item) => item.alertable);
+  const badge = $("marketRadarBadge");
+  if (badge) {
+    badge.textContent = String(alertable.length);
+    badge.hidden = alertable.length === 0;
+  }
+  const statusNode = $("marketRadarStatus");
+  if (statusNode) {
+    statusNode.textContent = status?.last_error ? "DEGRADED" : status?.running === false ? "OFF" : "LIVE";
+    statusNode.className = `market-radar-status ${status?.last_error ? "error" : status?.running === false ? "" : "ready"}`;
+  }
+  if ($("marketRadarUpdated")) {
+    const stamp = status?.last_scan_at ? new Date(status.last_scan_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) : "—";
+    $("marketRadarUpdated").textContent = `Updated ${stamp} ET`;
+  }
+  if (!items.length) {
+    list.innerHTML = '<div class="market-radar-empty">The radar is warming NQ, ES and GC history.</div>';
+    return;
+  }
+  list.innerHTML = items.map((item) => {
+    const direction = String(item.direction || "NONE").toLowerCase();
+    const model = escapeHtml(item.model || (item.status === "SYNCING" ? "History syncing" : "No qualified model"));
+    const reason = escapeHtml(item.reason || "The engine is scanning for stronger alignment.");
+    return `<button type="button" class="market-radar-card ${direction} ${item.alertable ? "alertable" : ""}" data-radar-symbol="${escapeHtml(item.symbol)}">
+      <div class="market-radar-symbol"><b>${escapeHtml(item.symbol)}</b><span>${escapeHtml(item.direction || item.status)}</span></div>
+      <div class="market-radar-score">${Number(item.model_score || 0).toFixed(0)}%</div>
+      <div class="market-radar-model">${model}</div>
+      <div class="market-radar-detail"><span>Watch <b>${opportunityPrice(item.watch_price, item.symbol)}</b></span><span>Grade <b>${escapeHtml(item.grade || "—")}</b></span></div>
+      <div class="market-radar-reason">${reason}</div>
+    </button>`;
+  }).join("");
+}
+
+function notifyMarketOpportunity(item) {
+  const message = `${item.model || "Institutional model"} ${Number(item.model_score || 0).toFixed(0)}% · watch ${opportunityPrice(item.watch_price, item.symbol)}`;
+  toast(`${item.symbol} ${item.direction} setup forming · ${message}`);
+  if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+    const notification = new Notification(`${item.symbol} ${item.direction} setup forming`, { body: message, icon: "/static/app-icon-192.png", tag: item.opportunity_id });
+    notification.onclick = () => { window.focus(); switchMarket(item.symbol); notification.close(); };
+  }
+}
+
+function processMarketOpportunities(items = [], status = null, announce = true) {
+  state.marketOpportunities = Array.isArray(items) ? items : [];
+  state.marketRadarStatus = status || state.marketRadarStatus;
+  renderMarketRadar();
+  for (const item of state.marketOpportunities) {
+    if (!item.alertable || !item.opportunity_id || state.seenOpportunityIds.has(item.opportunity_id)) continue;
+    state.seenOpportunityIds.add(item.opportunity_id);
+    if (announce) notifyMarketOpportunity(item);
+  }
+  saveSeenOpportunities();
+}
+
+async function loadMarketRadar(announce = false) {
+  try {
+    const payload = await fetch("/api/multi-market/opportunities").then((response) => {
+      if (!response.ok) throw new Error(`Radar request failed (${response.status})`);
+      return response.json();
+    });
+    processMarketOpportunities(payload.items || [], payload.status || null, announce);
+  } catch (error) {
+    console.error(error);
+    state.marketRadarStatus = { running: false, last_error: error.message };
+    renderMarketRadar();
+  }
+}
+
+function setDeskTab(tab) {
+  const resolved = ["setup", "claude", "radar"].includes(tab) ? tab : "setup";
+  state.deskTab = resolved;
+  localStorage.setItem("tradeiq-desk-tab", resolved);
+  document.querySelectorAll("[data-desk-tab]").forEach((button) => button.classList.toggle("active", button.dataset.deskTab === resolved));
+  document.querySelectorAll("[data-desk-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.deskPane === resolved));
+  if (resolved === "claude" && state.claude.enabled && state.claude.auto && !state.claude.text && !state.claude.busy) startClaudeAnalysis(false);
+  if (resolved === "radar") loadMarketRadar(false);
+}
+
+function setDeskCollapsed(collapsed) {
+  state.deskCollapsed = Boolean(collapsed);
+  localStorage.setItem("tradeiq-desk-collapsed", String(state.deskCollapsed));
+  $("page-chart")?.querySelector(".tv-chart-layout")?.classList.toggle("desk-collapsed", state.deskCollapsed);
+  $("deskRailToggle")?.classList.toggle("active", !state.deskCollapsed);
+  scheduleChartDraw("chartLarge", 20);
 }
 
 function applySnapshotMetadata(snapshot = {}) {
@@ -121,7 +265,7 @@ function applyInstrument(instrument) {
   const selector = $("symbolSelect");
   if (selector && selector.value !== instrument.symbol) selector.value = instrument.symbol;
   document.title = `TradeIQ — ${instrument.symbol} ${instrument.name}`;
-  if ($("chartBrandTitle")) $("chartBrandTitle").innerHTML = `Trade<span>IQ</span> · ${escapeHtml(instrument.symbol)}`;
+  if ($("chartBrandTitle")) $("chartBrandTitle").innerHTML = `Trade<span>IQ</span> Desk · ${escapeHtml(instrument.symbol)}`;
   if ($("chartCaption")) $("chartCaption").textContent = chartFeedLabel();
   if ($("chartLargeStatus")) $("chartLargeStatus").textContent = chartFeedLabel();
   if ($("newsPanelTitle")) $("newsPanelTitle").textContent = `${instrument.symbol} Market News · Finnhub`;
@@ -1189,10 +1333,11 @@ function scheduleChartDraw(chartId = "chartLarge", delay = 0) {
 
 async function initialLoad() {
   try {
-    const [health, snapshot, dashboard] = await Promise.all([
+    const [health, snapshot, dashboard, radar] = await Promise.all([
       fetch("/api/health").then((response) => response.ok ? response.json() : Promise.reject(new Error("Health request failed"))),
       fetch("/api/market/snapshot?timeframe=1&limit=1400").then((response) => response.json()),
       fetch("/api/dashboard").then(async (response) => response.ok ? response.json() : null),
+      fetch("/api/multi-market/opportunities").then(async (response) => response.ok ? response.json() : null),
     ]);
     state.baseCandles = normaliseMarketCandles(snapshot.candles || []);
     applySnapshotMetadata(snapshot);
@@ -1212,6 +1357,8 @@ async function initialLoad() {
     $("chartCaption").textContent = chartFeedLabel();
     renderHeader(snapshot);
     setConnection(true);
+    processMarketOpportunities(radar?.items || [], radar?.status || null, false);
+    cacheCurrentMarket();
     await loadClaudeStatus();
     loadEconomicCalendar();
     connectWebSocket();
@@ -1251,8 +1398,9 @@ function connectWebSocket() {
   state.socket = socket;
   socket.onopen = () => setConnection(true);
   socket.onmessage = async (event) => {
-    if (state.switchingSymbol) return;
     const data = JSON.parse(event.data);
+    if (data.market_opportunities) processMarketOpportunities(data.market_opportunities, data.market_radar || null, true);
+    if (state.switchingSymbol) return;
     const wasWarming = state.marketWarming;
     state.marketWarming = Boolean(data.market?.warming || (data.market?.data_source === "databento" && !data.market?.history_cached));
     state.historyReady = Boolean(data.market?.history_ready ?? data.market?.history_cached);
@@ -1272,6 +1420,7 @@ function connectWebSocket() {
     if (candle) upsertBaseCandle(candle);
     if (data.setup && data.meta) renderAll(data.setup, data.meta, data.session);
     else renderSyncingState({ price: candle?.close }, data.session);
+    cacheCurrentMarket();
     if (wasWarming && !state.marketWarming) {
       await reloadSyncedHistory();
       if (state.currentPage === "chart" && state.claude.enabled && state.claude.auto && !state.claude.busy) {
@@ -1290,6 +1439,8 @@ function connectWebSocket() {
 async function switchMarket(symbol) {
   const selector = $("symbolSelect");
   if (!selector || state.switchingSymbol || symbol === activeSymbol()) return;
+  const previousSymbol = activeSymbol();
+  cacheCurrentMarket();
   state.switchingSymbol = true;
   selector.disabled = true;
   selector.closest(".symbol-selector")?.classList.add("busy");
@@ -1298,7 +1449,8 @@ async function switchMarket(symbol) {
   renderClaudeAnalysis("", false);
   setClaudeStatus("WAITING", "cached");
   if ($("claudeFoot")) $("claudeFoot").textContent = `Waiting for ${symbol} market data…`;
-  toast(`Switching TradeIQ to ${symbol}…`);
+  const restoredInstantly = restoreCachedMarket(symbol);
+  toast(restoredInstantly ? `${symbol} restored from local cache · syncing live data` : `Switching TradeIQ to ${symbol}…`);
   try {
     const response = await fetch("/api/market/symbol", {
       method: "POST",
@@ -1331,6 +1483,7 @@ async function switchMarket(symbol) {
     window.TradeIQChartManager?.marketChanged?.("chartLarge");
     drawChart();
     if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
+    cacheCurrentMarket();
     await loadClaudeStatus();
     if (!state.marketWarming && state.currentPage === "chart" && state.claude.enabled && state.claude.auto) {
       startClaudeAnalysis(false);
@@ -1338,7 +1491,8 @@ async function switchMarket(symbol) {
     toast(state.marketWarming ? `${symbol} loaded · Databento history syncing` : `${symbol} market loaded`);
   } catch (error) {
     console.error(error);
-    selector.value = activeSymbol();
+    restoreCachedMarket(previousSymbol);
+    selector.value = previousSymbol;
     toast(error.message || "Could not switch market");
   } finally {
     state.switchingSymbol = false;
@@ -1442,7 +1596,7 @@ function setPage(name, runLoaders = true) {
   closeMobileMenu();
   const symbol = activeSymbol();
   const dashboardTitle = state.session ? (state.session.is_open ? `${symbol} · ${state.session.display_name}` : `${symbol} · MARKET CLOSED`) : `${symbol} TRADE ENGINE`;
-  const titles = { dashboard:dashboardTitle, chart:`ADVANCED ${symbol} CHART`, gex:`${symbol} GEX ANALYSIS`, confluence:`${symbol} CONFLUENCE ENGINE`, setups:`${symbol} TRADE SETUPS`, alerts:"ALERT CENTER", positions:"POSITIONS", backtest:`${symbol} BACKTEST LAB`, settings:"SETTINGS" };
+  const titles = { dashboard:`${symbol} MARKET COMMAND CENTER`, chart:`${symbol} INSTITUTIONAL TRADE DESK`, gex:`${symbol} GEX ANALYSIS`, confluence:`${symbol} CONFLUENCE ENGINE`, setups:`${symbol} TRADE SETUPS`, alerts:"ALERT CENTER", positions:"POSITIONS", backtest:`${symbol} BACKTEST LAB`, settings:"SETTINGS" };
   $("pageTitle").textContent = titles[name] || dashboardTitle;
   syncMobileNavigation();
   if (!runLoaders) return;
@@ -1559,6 +1713,23 @@ document.querySelectorAll(".tf").forEach((button) => button.addEventListener("cl
 }));
 document.querySelectorAll("#nav button[data-page]").forEach((item) => item.addEventListener("click", () => setPage(item.dataset.page)));
 if ($("symbolSelect")) $("symbolSelect").addEventListener("change", (event) => switchMarket(event.target.value));
+document.querySelectorAll("[data-desk-tab]").forEach((button) => button.addEventListener("click", () => setDeskTab(button.dataset.deskTab)));
+if ($("deskRailToggle")) $("deskRailToggle").addEventListener("click", () => setDeskCollapsed(!state.deskCollapsed));
+if ($("deskRailClose")) $("deskRailClose").addEventListener("click", () => setDeskCollapsed(true));
+if ($("marketRadarList")) $("marketRadarList").addEventListener("click", (event) => {
+  const card = event.target.closest("[data-radar-symbol]");
+  if (!card) return;
+  setDeskTab("setup");
+  switchMarket(card.dataset.radarSymbol);
+});
+if ($("enableMarketNotifications")) $("enableMarketNotifications").addEventListener("click", async () => {
+  if (!("Notification" in window)) { toast("This browser does not support desktop notifications"); return; }
+  const permission = await Notification.requestPermission();
+  const enabled = permission === "granted";
+  $("enableMarketNotifications").classList.toggle("enabled", enabled);
+  $("enableMarketNotifications").textContent = enabled ? "Desktop alerts enabled" : "Enable desktop alerts";
+  toast(enabled ? "Cross-market desktop alerts enabled" : "Notification permission was not granted");
+});
 if ($("mobileMenuButton")) $("mobileMenuButton").addEventListener("click", toggleMobileMenu);
 if ($("mobileBackdrop")) $("mobileBackdrop").addEventListener("click", closeMobileMenu);
 document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.addEventListener("click", () => setMobilePane(button.dataset.mobileTarget)));
@@ -1580,6 +1751,12 @@ if ($("pwaInstall")) $("pwaInstall").addEventListener("click", async () => {
 });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMobileMenu(); });
 registerInstallPrompt();
+setDeskTab(state.deskTab);
+setDeskCollapsed(state.deskCollapsed);
+if ($("enableMarketNotifications") && "Notification" in window && Notification.permission === "granted") {
+  $("enableMarketNotifications").classList.add("enabled");
+  $("enableMarketNotifications").textContent = "Desktop alerts enabled";
+}
 setMobilePane(state.mobilePane, false);
 setMobileNewsTab(state.mobileNewsTab);
 const requestedView = new URLSearchParams(window.location.search).get("view");
@@ -1635,5 +1812,6 @@ setInterval(() => {
   if (state.currentPage === "chart" && state.claude.enabled && state.claude.auto && !state.claude.busy) startClaudeAnalysis(false);
 }, 300000);
 setInterval(loadEconomicCalendar, 900000);
+setInterval(() => loadMarketRadar(true), 60000);
 
 setInterval(tick, 1000); tick(); initialLoad();

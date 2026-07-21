@@ -83,6 +83,29 @@ class MarketOverviewItem(BaseModel):
     change_percent: float
 
 
+class MarketOpportunity(BaseModel):
+    opportunity_id: str
+    symbol: str
+    display_symbol: str
+    direction: Literal["LONG", "SHORT", "NONE"]
+    model: str | None = None
+    model_key: str | None = None
+    model_score: float = 0.0
+    confidence: float = 0.0
+    grade: str = "AVOID"
+    watch_price: float | None = None
+    invalidation_price: float | None = None
+    status: str = "SCANNING"
+    reason: str = ""
+    detected_at: datetime
+    candle_time: datetime | None = None
+    data_age_seconds: float | None = None
+    data_source: str = "cached-history"
+    gex_source: str = "fallback"
+    active_market: bool = False
+    alertable: bool = False
+
+
 class AlertItem(BaseModel):
     time: str
     title: str

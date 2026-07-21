@@ -1,6 +1,6 @@
 # TradeIQ UI/UX Specification
 
-**Version:** 3.0.3
+**Version:** 3.0.4
 
 ## Design Language
 
@@ -86,3 +86,48 @@ The UI must never use words such as “filled,” “active trade” or “risk 
 ## History and Analytics
 
 Setup History includes model, grade, initial/active stop, management state and result. Transient preview/scanning rows are hidden, and repeated rows from the same closed candle are suppressed. Model analytics are explicitly read-only.
+
+## Desktop Trade Desk (v3.0.4)
+
+The full-chart workspace is the primary execution surface and is branded **TradeIQ Desk**.
+
+### Right rail
+
+- Tabs: **Setup**, **Claude**, **Market Radar**.
+- Exactly one tab is visible at a time on desktop.
+- Every pane scrolls independently inside the rail.
+- Claude can never sit underneath or overlap the setup panel.
+- The Desk button and close control collapse the entire rail; chart resize is triggered immediately.
+- The last selected tab and collapsed state persist in local storage.
+
+### Market Radar
+
+Each card shows:
+
+- symbol and direction;
+- selected entry model;
+- model score;
+- watch price;
+- confidence grade;
+- deterministic reason;
+- whether the item is alertable.
+
+Selecting a card switches the active instrument. Alerts must say **setup forming** and must not imply an order exists.
+
+### Market switching
+
+- The current symbol is saved to browser memory before switching.
+- A previously viewed symbol paints immediately from browser memory.
+- The server response then replaces cached content with authoritative candles, setup, session and instrument metadata.
+- NQ, ES and GC are server-prewarmed by default.
+- The selector shows a busy state and is always restored after success or failure.
+
+### Navigation branding
+
+- `Overview` replaces the generic Dashboard label.
+- `Trade Desk` replaces the generic Chart label.
+- The chart header identifies the active instrument and TradeIQ Desk.
+
+## Mobile behavior
+
+The existing bottom navigation remains the mobile control surface. Desktop tabs are hidden on small screens so the current mobile Setup/Claude/News pane system remains touch friendly and does not duplicate controls.

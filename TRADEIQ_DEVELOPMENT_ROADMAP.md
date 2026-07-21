@@ -1,53 +1,78 @@
 # TradeIQ Development Roadmap
 
-**Current release:** 3.0.3-fib-pullback-watch-execution
+**Product version:** 3.0.4-trade-desk-market-radar  
+**Document version:** 3.0.4  
+**Status:** Living roadmap
 
-## Completed
+## Released
 
-- [x] v2.5 Claude lifecycle explanations
-- [x] v2.6 Persistent setup memory and timeline
-- [x] v2.7 Decision Brain and deterministic model ranking
-- [x] v2.8 Stable GEX snapshot and dealer interpretation
-- [x] v2.9 Partial/runner management and break-even stop
-- [x] v3.0 Institutional confidence, analytics and integrated UI
-- [x] v3.0.1 Small-timeframe candle integrity, price-first autoscale and viewport persistence
-- [x] v3.0.2 Model-specific entry gates, closed-candle lifecycle stability, clean chart mode and filtered setup history
-- [x] v3.0.3 Fib Pullback Continuation, visible watch-touch confirmation phase and live-candle execution events
+### v3.0.0 — Institutional Decision Platform
 
-## Next — v3.0.4 Live Forward-Test Corrections
+- Decision Brain and deterministic model ranking.
+- Weighted confidence engine.
+- Stable GEX snapshots.
+- Persistent lifecycle, management and analytics.
 
-- [ ] Validate watch and arm thresholds on live NQ/MNQ 1m, 2m and 5m data
-- [ ] Review confirmation-window, cancellation and unconfirmed-touch rates by model/session
-- [ ] Compare Fib Pullback body-midpoint fills with anticipatory OTE fills
-- [ ] Tune label priority from real device screenshots
-- [ ] Confirm installed PWA cache replacement on iPhone/iPad and Windows
-- [ ] Add an optional diagnostics panel showing the exact missing confirmation groups
+### v3.0.1 — Chart/Candle Integrity
 
-## v3.1 Quality and Data Depth
+- Ordered, sanitized candles.
+- Small-timeframe autoscale and viewport stability.
 
-- [ ] Native synchronized SMT feed for NQ/ES and related pairs
-- [ ] Explicit FVG and inverse-FVG lifecycle objects
-- [ ] Dedicated order-block/breaker/rejection-block detector
-- [ ] Historical model-by-model backtest using archived GEX snapshots
-- [ ] More robust session/news risk gates
+### v3.0.2 — Entry/Chart Stability
 
-## v3.2 Execution and Portfolio Workspace
+- Model-specific arming contracts.
+- Duplicate setup suppression.
+- Clean Chart mode.
 
-- [ ] Simultaneous multi-symbol monitoring
-- [ ] Portfolio heat map
-- [ ] Cross-market correlation dashboard
-- [ ] Alert/webhook adapter with explicit user-controlled execution
-- [ ] Advanced trailing policies
+### v3.0.3 — Fib Pullback and Realistic Watch Execution
 
-## v3.5 Data and Replay
+- Fib Pullback Continuation.
+- Visible trigger-touch confirmation phase.
+- Non-retrospective candle event handling.
 
-- [ ] Full setup replay on historical candles
-- [ ] Dealer-position history
-- [ ] Model calibration by symbol/session/regime
-- [ ] Downloadable journal and audit report
+### v3.0.4 — Trade Desk and Cross-Market Radar
 
-## v4.0 Research Goal
+- Chart-first institutional Trade Desk branding.
+- Separate Setup, Claude and Market Radar tabs.
+- Collapsible desktop rail; no Claude/setup overlap.
+- NQ/ES/GC background scanning and in-app/browser alerts.
+- Data-freshness and cooldown protection.
+- Browser cache plus Databento prewarming and incremental refresh for faster switching.
 
-- [ ] Offline adaptive model weighting trained only on audited historical results
-- [ ] Strict separation between research weights and live deterministic policy
-- [ ] Walk-forward validation and drift monitoring
+## Next priorities
+
+### v3.0.5 — Live validation and observability
+
+- Forward-test NQ, ES and GC radar timing with the production Databento entitlement.
+- Add radar latency, cache age and scan-duration metrics.
+- Add per-symbol alert enable/disable and session filters.
+- Add alert acknowledgement and dismiss controls.
+- Measure cold and warm symbol-switch latency.
+
+### v3.1 — Institutional chart workspace
+
+- User-resizable chart/right rail.
+- Saved workspace layouts.
+- Improved right-axis label collision management.
+- Stable crosshair synchronization and drawing persistence.
+- Optional detached Claude/Market Radar window.
+
+### v3.2 — Multi-market intelligence
+
+- Synchronized NQ/ES SMT evaluation.
+- Cross-asset context such as DXY for GC.
+- Portfolio-level opportunity priority and conflict control.
+- Native per-market GEX snapshot caching for inactive markets.
+
+### v3.3 — Execution analytics
+
+- Radar-to-watch conversion rate.
+- Alert precision by market/model/session.
+- Missed-entry and cancellation analytics.
+- Historical replay of radar detection through trade completion.
+
+## Safety backlog
+
+- Broker order routing remains out of scope until simulation, replay and live paper testing are validated.
+- Claude remains read-only.
+- An inactive-market radar card never becomes an order without active-market deterministic confirmation.

@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     databento_history_days: int = 7
     databento_history_limit: int = 2400
     databento_market_cache_seconds: int = 1800
-    databento_prewarm_markets: bool = False
+    databento_prewarm_markets: bool = True
+    databento_prewarm_symbols: str = "NQ,ES,GC"
     databento_prewarm_delay_seconds: float = 0.5
 
     gex_refresh_seconds: int = 300
@@ -48,6 +49,18 @@ class Settings(BaseSettings):
     entry_model_min_score: float = 55.0
     move_stop_to_breakeven_after_tp1: bool = True
     partial_exit_percent: float = 50.0
+
+    # Background market radar. It scans cached 1-minute history without changing
+    # the active chart or trade lifecycle. Alerts are informational until the
+    # trader opens that market and the active engine confirms the setup.
+    multi_market_alerts_enabled: bool = True
+    multi_market_symbols: str = "NQ,ES,GC"
+    multi_market_scan_seconds: int = 45
+    multi_market_history_refresh_seconds: int = 60
+    multi_market_max_data_age_seconds: int = 180
+    multi_market_min_model_score: float = 72.0
+    multi_market_min_confidence: float = 45.0
+    multi_market_alert_cooldown_minutes: int = 15
 
     admin_token: str | None = None
     allow_public_admin: bool = False

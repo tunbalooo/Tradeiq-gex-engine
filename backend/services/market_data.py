@@ -239,6 +239,7 @@ class SimulatedMarketDataService:
         self._rng = random.Random(57255 + sum(ord(char) for char in self.instrument.symbol))
         self._task: asyncio.Task | None = None
         self._lock = threading.RLock()
+        self._background_cache: dict[str, list[Candle]] = {}
         self._seed_history()
 
     @property
@@ -337,6 +338,28 @@ class SimulatedMarketDataService:
         with self._lock:
             values = [c.model_copy(deep=True) for c in self.candles]
         return values[-limit:] if limit else values
+
+    def cached_snapshot(self, symbol: str, limit: int | None = None) -> list[Candle]:
+        profile = get_instrument(symbol)
+        if profile.symbol == self.instrument.symbol:
+            return self.snapshot(limit=limit)
+        with self._lock:
+            cached = self._background_cache.get(profile.symbol)
+        if cached is None:
+            generator = SimulatedMarketDataService(max_candles=self.max_candles, profile=profile)
+            cached = generator.snapshot()
+            with self._lock:
+                self._background_cache[profile.symbol] = cached
+        values = [item.model_copy(deep=True) for item in cached]
+        return values[-limit:] if limit else values
+
+    async def refresh_symbol_cache(self, symbol: str, force: bool = False) -> list[Candle]:
+        return self.cached_snapshot(symbol)
+
+    def cache_status(self, symbol: str) -> dict:
+        profile = get_instrument(symbol)
+        cached = profile.symbol == self.instrument.symbol or profile.symbol in self._background_cache
+        return {"symbol": profile.symbol, "cached": cached, "age_seconds": 0.0 if cached else None}
 
     def price_change(self) -> tuple[float, float]:
         session = rth_candles(self.snapshot(), profile=self.instrument)
@@ -537,14 +560,26 @@ class DatabentoMarketDataService:
             logger.exception("Databento history refresh failed for %s", profile.symbol)
 
     async def _prewarm_remaining_markets(self) -> None:
-        # Load the other five instruments one at a time to avoid a burst of paid
-        # historical requests. Once warmed, switching is normally sub-second.
+        # Warm only the configured desk markets one at a time to avoid a burst of
+        # paid historical requests. NQ/ES/GC are the default fast-switch set.
+        requested = {item.strip().upper() for item in str(settings.databento_prewarm_symbols or "NQ,ES,GC").split(",") if item.strip()}
         for profile in INSTRUMENTS.values():
+            if profile.symbol not in requested:
+                continue
             if profile.symbol == self.instrument.symbol or profile.symbol in self._history_cache:
                 continue
             try:
-                loaded = await asyncio.to_thread(self._load_history, profile)
-                self._store_history(profile, loaded)
+                existing = self._history_tasks.get(profile.symbol)
+                if existing and not existing.done():
+                    await existing
+                else:
+                    task = asyncio.create_task(
+                        self._refresh_history(profile, None),
+                        name=f"databento-prewarm-{profile.symbol.lower()}",
+                    )
+                    self._history_tasks[profile.symbol] = task
+                    task.add_done_callback(lambda _task, symbol=profile.symbol: self._history_tasks.pop(symbol, None))
+                    await task
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -673,6 +708,37 @@ class DatabentoMarketDataService:
             raise RuntimeError(f"Databento returned no {profile.symbol} historical bars for {profile.futures_continuous}.")
         return loaded[-settings.databento_history_limit:]
 
+    def _load_history_since(self, profile: InstrumentProfile, start: datetime) -> list[Candle]:
+        db = self._import_db()
+        client = db.Historical(key=settings.databento_api_key)
+        requested_end = datetime.now(timezone.utc)
+        end = available_dataset_end(client, settings.databento_dataset, "ohlcv-1m", requested_end)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if start >= end:
+            return []
+        store = client.timeseries.get_range(
+            dataset=settings.databento_dataset,
+            schema="ohlcv-1m",
+            stype_in="continuous",
+            symbols=[profile.futures_continuous],
+            start=start.isoformat(),
+            end=end.isoformat(),
+        )
+        loaded = [
+            Candle(
+                time=_record_time(record),
+                open=round(_pretty_price(record, "open"), profile.price_precision),
+                high=round(_pretty_price(record, "high"), profile.price_precision),
+                low=round(_pretty_price(record, "low"), profile.price_precision),
+                close=round(_pretty_price(record, "close"), profile.price_precision),
+                volume=int(record.volume),
+            )
+            for record in store
+            if all(hasattr(record, field) for field in ("open", "high", "low", "close", "volume"))
+        ]
+        return _sanitize_candles(loaded)
+
     def _run_live(self, profile: InstrumentProfile, generation: int) -> None:
         try:
             db = self._import_db()
@@ -789,6 +855,99 @@ class DatabentoMarketDataService:
         with self._lock:
             values = [c.model_copy(deep=True) for c in self.candles]
         return values[-limit:] if limit else values
+
+    def cached_snapshot(self, symbol: str, limit: int | None = None) -> list[Candle]:
+        profile = get_instrument(symbol)
+        with self._lock:
+            if profile.symbol == self.instrument.symbol:
+                values = [item.model_copy(deep=True) for item in self.candles]
+            else:
+                cache = self._history_cache.get(profile.symbol)
+                values = [item.model_copy(deep=True) for item in cache.candles] if cache else []
+        return values[-limit:] if limit else values
+
+    async def refresh_symbol_cache(self, symbol: str, force: bool = False) -> list[Candle]:
+        profile = get_instrument(symbol)
+        if profile.symbol == self.instrument.symbol and self.candles:
+            return self.snapshot()
+        with self._lock:
+            cache = self._history_cache.get(profile.symbol)
+        age = (datetime.now(timezone.utc) - cache.loaded_at).total_seconds() if cache else None
+        refresh_after = max(30, min(
+            int(settings.databento_market_cache_seconds),
+            int(settings.multi_market_history_refresh_seconds),
+        ))
+        if cache and not force and age is not None and age <= refresh_after:
+            return self.cached_snapshot(profile.symbol)
+
+        existing = self._history_tasks.get(profile.symbol)
+        if existing and not existing.done():
+            await existing
+        else:
+            coroutine = self._refresh_incremental_history(profile) if cache else self._refresh_history(profile, None)
+            task = asyncio.create_task(
+                coroutine,
+                name=f"databento-radar-history-{profile.symbol.lower()}",
+            )
+            self._history_tasks[profile.symbol] = task
+            task.add_done_callback(lambda _task, symbol=profile.symbol: self._history_tasks.pop(symbol, None))
+            await task
+        return self.cached_snapshot(profile.symbol)
+
+    async def _refresh_incremental_history(self, profile: InstrumentProfile) -> None:
+        """Refresh only the missing tail for an inactive radar market.
+
+        A complete multi-day request on every radar cycle would be both slow and
+        wasteful. The overlap minute lets the merge repair an incomplete final
+        candle while keeping NQ/ES/GC background data recent enough for alerts.
+        """
+        with self._lock:
+            cache = self._history_cache.get(profile.symbol)
+            start = cache.candles[-1].time - timedelta(minutes=2) if cache and cache.candles else None
+        if start is None:
+            await self._refresh_history(profile, None)
+            return
+        try:
+            loaded = await asyncio.to_thread(self._load_history_since, profile, start)
+            self._merge_background_history(profile, loaded)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Databento incremental radar refresh failed for %s", profile.symbol)
+
+    def _merge_background_history(self, profile: InstrumentProfile, loaded: list[Candle]) -> None:
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            cache = self._history_cache.get(profile.symbol)
+            if not cache:
+                if loaded:
+                    self._store_history(profile, loaded)
+                return
+            if not loaded:
+                cache.loaded_at = now
+                return
+            merged = {candle.time: candle.model_copy(deep=True) for candle in cache.candles}
+            for candle in loaded:
+                merged[candle.time] = candle.model_copy(deep=True)
+            values = _sanitize_candles(sorted(merged.values(), key=lambda candle: candle.time))[-self.max_candles:]
+            if not values:
+                cache.loaded_at = now
+                return
+            self._history_cache[profile.symbol] = _MarketHistoryCache(
+                candles=[candle.model_copy(deep=True) for candle in values],
+                current_price=values[-1].close,
+                raw_symbol=cache.raw_symbol,
+                loaded_at=now,
+            )
+
+    def cache_status(self, symbol: str) -> dict:
+        profile = get_instrument(symbol)
+        with self._lock:
+            if profile.symbol == self.instrument.symbol and self.candles:
+                return {"symbol": profile.symbol, "cached": True, "age_seconds": 0.0}
+            cache = self._history_cache.get(profile.symbol)
+        age = (datetime.now(timezone.utc) - cache.loaded_at).total_seconds() if cache else None
+        return {"symbol": profile.symbol, "cached": cache is not None, "age_seconds": round(age, 1) if age is not None else None}
 
     def price_change(self) -> tuple[float, float]:
         values = self.snapshot()

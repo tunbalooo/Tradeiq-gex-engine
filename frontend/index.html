@@ -10,12 +10,12 @@
 <meta name="apple-mobile-web-app-title" content="TradeIQ" />
 <link rel="manifest" href="/static/manifest.webmanifest" />
 <link rel="apple-touch-icon" href="/static/app-icon-192.png" />
-<title>TradeIQ — Multi-Market Futures Engine</title>
+<title>TradeIQ Desk — Multi-Market Futures Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=303" />
+<link rel="stylesheet" href="/static/styles.css?v=304" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -27,8 +27,8 @@
         <div class="m brand-sub">Gamma Intelligence</div></div>
     </div>
     <nav class="nav" id="nav">
-      <button type="button" data-page="dashboard" class="active"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</button>
-      <button type="button" data-page="chart"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg>Chart</button>
+      <button type="button" data-page="dashboard" class="active"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Overview</button>
+      <button type="button" data-page="chart"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg>Trade Desk</button>
       <button type="button" data-page="gex"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>GEX Analysis</button>
       <button type="button" data-page="confluence"><svg viewBox="0 0 24 24"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="17" r="4"/><path d="M7 11v6M17 7v-.5"/></svg>Confluence</button>
       <button type="button" data-page="setups"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/></svg>Trade Setups</button>
@@ -58,7 +58,7 @@
         <span></span><span></span><span></span>
       </button>
       <div class="mobile-brand" aria-label="TradeIQ">Trade<span>IQ</span></div>
-      <div class="title" id="pageTitle">TRADEIQ FUTURES ENGINE</div>
+      <div class="title" id="pageTitle">TRADEIQ INSTITUTIONAL DESK</div>
       <label class="symbol-pill symbol-selector" aria-label="Active futures market">
         <select id="symbolSelect">
           <option value="NQ">NQ</option><option value="MNQ">MNQ</option>
@@ -245,10 +245,12 @@
     <section class="page" id="page-chart">
       <div class="page-shell chart-page-shell">
         <div class="panel page-panel tv-full-panel">
+          <!-- Legacy v3.0.3 toolbar contract: id="chartBrandTitle">Trade<span>IQ</span> · FUTURES -->
           <div class="tradeiq-chart-bar" data-chart-id="chartLarge">
-            <div class="chart-brand-title" id="chartBrandTitle">Trade<span>IQ</span> · FUTURES</div>
+            <div class="chart-brand-title" id="chartBrandTitle">Trade<span>IQ</span> · DESK</div>
             <div class="tv-timeframes chart-tfs">
               <span class="tf" data-tf="1">1m</span>
+              <span class="tf" data-tf="2">2m</span>
               <span class="tf" data-tf="3">3m</span>
               <span class="tf active" data-tf="5">5m</span>
               <span class="tf" data-tf="15">15m</span>
@@ -272,6 +274,7 @@
               <button type="button" data-chart-action="autoscale" class="active">Auto</button>
               <button type="button" data-chart-action="fit">Fit</button>
               <button type="button" data-chart-action="recenter">Real time</button>
+              <button type="button" id="deskRailToggle" class="active" title="Show or hide Trade Desk">Desk</button>
               <button type="button" data-chart-action="fullscreen" title="Fullscreen">⛶</button>
             </div>
           </div>
@@ -306,7 +309,16 @@
             </div>
 
             <div class="tv-chart-rail" id="chartSideRail">
-              <aside class="tv-chart-setup" id="chartSetupPanel" data-mobile-pane="setup" aria-label="Live trade setup">
+              <div class="trade-desk-head">
+                <div><b>TradeIQ Desk</b><small>Execution, explanation and cross-market radar</small></div>
+                <button type="button" id="deskRailClose" aria-label="Hide Trade Desk">×</button>
+              </div>
+              <div class="trade-desk-tabs" role="tablist" aria-label="Trade Desk panels">
+                <button type="button" class="active" data-desk-tab="setup" role="tab">Setup</button>
+                <button type="button" data-desk-tab="claude" role="tab">Claude</button>
+                <button type="button" data-desk-tab="radar" role="tab">Market Radar <span id="marketRadarBadge" hidden>0</span></button>
+              </div>
+              <aside class="tv-chart-setup desk-pane active" id="chartSetupPanel" data-desk-pane="setup" data-mobile-pane="setup" aria-label="Live trade setup">
                 <div class="tv-chart-setup-head">
                   <h3>Trade Setup</h3>
                   <span class="mono m" id="chartSetupLabel">SCANNING</span>
@@ -353,7 +365,7 @@
                 </div>
               </aside>
 
-              <aside class="claude-panel" id="claudePanel" data-mobile-pane="claude" aria-label="Claude market analyst">
+              <aside class="claude-panel desk-pane" id="claudePanel" data-desk-pane="claude" data-mobile-pane="claude" aria-label="Claude market analyst">
                 <div class="claude-panel-head">
                   <div>
                     <h3>Claude Market Analyst</h3>
@@ -370,6 +382,21 @@
                   <div class="claude-empty">Claude will explain the current bias, evidence, missing conditions, risk and next action. It cannot change the score or place a trade.</div>
                 </div>
                 <div class="claude-foot" id="claudeFoot">API key stays in the Python backend and Railway variables.</div>
+              </aside>
+
+              <aside class="market-radar-panel desk-pane" id="marketRadarPanel" data-desk-pane="radar" aria-label="Cross-market setup radar">
+                <div class="market-radar-head">
+                  <div><h3>Cross-Market Radar</h3><small>NQ, ES and GC are scanned without changing the active chart.</small></div>
+                  <span class="market-radar-status" id="marketRadarStatus">SYNCING</span>
+                </div>
+                <div class="market-radar-actions">
+                  <button type="button" id="enableMarketNotifications">Enable desktop alerts</button>
+                  <span id="marketRadarUpdated">Waiting for first scan…</span>
+                </div>
+                <div class="market-radar-list" id="marketRadarList">
+                  <div class="market-radar-empty">Loading cross-market opportunities…</div>
+                </div>
+                <p class="market-radar-note">Background alerts identify a setup forming. Open the instrument before treating it as actionable so the active engine can validate live GEX, confirmation, entry and risk.</p>
               </aside>
 
               <aside class="mobile-info-panel mobile-news-panel" id="mobileNewsPanel" data-mobile-pane="news" aria-label="Economic calendar and market news">
@@ -490,7 +517,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=303"></script>
+<script src="/static/boot.js?v=304"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));
