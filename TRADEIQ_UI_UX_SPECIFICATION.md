@@ -1,6 +1,6 @@
 # TradeIQ UI/UX Specification
 
-**Version:** 3.0.1
+**Version:** 3.0.2
 
 ## Design Language
 
@@ -41,6 +41,11 @@ Display the five highest models. Clearly distinguish:
 
 ## Chart
 
+### Default Clean Mode
+
+Clean mode is enabled on first load. It keeps the core candle/EMA/trade view and only the nearest or selected institutional context. The user can turn Clean off to reveal the complete analytical map. Clean mode changes presentation only; it never changes scoring or trade state.
+
+
 - Watch trigger: dashed amber line with `NO ORDER` language.
 - Locked entry: fixed limit line.
 - Initial stop: fixed red line and fixed risk box.
@@ -51,6 +56,9 @@ Display the five highest models. Clearly distinguish:
 - 1m/2m defaults show fewer bars so candle bodies remain readable.
 - Symbol/timeframe viewports are remembered independently.
 - Invalid, duplicated or out-of-order bars must never be rendered.
+- The latest live bar must pass the same malformed-wick test as historical bars.
+- Duplicate right-axis tags are suppressed while their underlying lines remain visible.
+- Default 1m/2m/5m visible ranges must preserve readable candle bodies.
 
 ## Mobile
 
@@ -60,4 +68,4 @@ Display the five highest models. Clearly distinguish:
 
 ## History and Analytics
 
-Setup History includes model, grade, initial/active stop, management state and result. Model analytics are explicitly read-only.
+Setup History includes model, grade, initial/active stop, management state and result. Transient preview/scanning rows are hidden, and repeated rows from the same closed candle are suppressed. Model analytics are explicitly read-only.

@@ -91,6 +91,8 @@ def build_trade_levels(
     session_low: float,
     sweep_price: float | None = None,
     tick_size: float = 0.25,
+    preferred_entry: float | None = None,
+    preferred_invalidation: float | None = None,
 ) -> dict:
     direction = direction.upper()
     if direction not in {"LONG", "SHORT"}:
@@ -104,11 +106,16 @@ def build_trade_levels(
     selected_zone = cluster.zone
     cluster_low = cluster.low if cluster.low is not None else ote_low
     cluster_high = cluster.high if cluster.high is not None else ote_high
-    entry = _clip(ideal_ote, cluster_low, cluster_high)
+    if preferred_entry is not None:
+        entry = float(preferred_entry)
+    else:
+        entry = _clip(ideal_ote, cluster_low, cluster_high)
     buffer = max(tick_size * 2, atr * 0.20)
 
     if direction == "LONG":
         anchors = [ote_low]
+        if preferred_invalidation is not None and float(preferred_invalidation) < entry:
+            anchors.append(float(preferred_invalidation))
         if selected_zone is not None:
             anchors.append(selected_zone.low)
         if sweep_price is not None:
@@ -117,6 +124,8 @@ def build_trade_levels(
         entry_valid = entry <= current_price - tick_size
     else:
         anchors = [ote_high]
+        if preferred_invalidation is not None and float(preferred_invalidation) > entry:
+            anchors.append(float(preferred_invalidation))
         if selected_zone is not None:
             anchors.append(selected_zone.high)
         if sweep_price is not None:

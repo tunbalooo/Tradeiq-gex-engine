@@ -7,19 +7,21 @@
 // TradeIQ v3.0: Decision Brain, ranked entry models, professional management and read-only analytics.
 // Legacy v3.0 cache: CACHE_NAME = "tradeiq-v3.0-shell"
 // TradeIQ v3.0.1: coherent small-timeframe candles and price-first autoscaling.
+// Legacy v3.0.1 cache: CACHE_NAME = "tradeiq-v3.0.1-chart-hotfix-shell"
+// TradeIQ v3.0.2: model-specific entries, stable setup lifecycle and clean chart mode.
 // Legacy v2.6 cache reference: CACHE_NAME = "tradeiq-v2.6-shell"
 // Legacy cache references retained for regression tests: tradeiq-v2.0-shell tradeiq-v2.1-shell tradeiq-v2.2-shell
 // /static/styles.css?v=20 /static/boot.js?v=20 /static/app.js?v=20 /static/trading_chart.js?v=20
 // Legacy v2.1 assets: /static/styles.css?v=21 /static/boot.js?v=21 /static/app.js?v=21 /static/trading_chart.js?v=21
 // Legacy v2.2 assets: /static/styles.css?v=22 /static/boot.js?v=22 /static/app.js?v=22 /static/trading_chart.js?v=22
 // Legacy v2.3 assets: /static/styles.css?v=23 /static/boot.js?v=23 /static/app.js?v=23 /static/trading_chart.js?v=23
-const CACHE_NAME = "tradeiq-v3.0.1-chart-hotfix-shell";
+const CACHE_NAME = "tradeiq-v3.0.2-entry-chart-stability-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=301",
-  "/static/boot.js?v=301",
-  "/static/app.js?v=301",
-  "/static/trading_chart.js?v=301",
+  "/static/styles.css?v=302",
+  "/static/boot.js?v=302",
+  "/static/app.js?v=302",
+  "/static/trading_chart.js?v=302",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",

@@ -110,10 +110,35 @@ class StorageService:
     def recent_setups(self, limit: int = 100) -> list[dict]:
         try:
             with SessionLocal() as db:
-                rows = list(db.scalars(select(TradeSetupRecord).order_by(TradeSetupRecord.updated_at.desc()).limit(limit)))
+                # Fetch extra rows because preview/scanning records are intentionally
+                # hidden from Setup History. The page now represents actual lifecycle
+                # candidates, not every transient engine refresh.
+                rows = list(db.scalars(
+                    select(TradeSetupRecord)
+                    .order_by(TradeSetupRecord.updated_at.desc())
+                    .limit(max(limit * 5, limit))
+                ))
                 results = []
+                seen_recent: dict[tuple, datetime] = {}
                 for r in rows:
                     snapshot = r.setup_snapshot or {}
+                    meaningful = bool(
+                        r.order_state != "PREVIEW_ONLY"
+                        or snapshot.get("watch_started_at")
+                        or r.armed_at
+                        or r.filled_at
+                        or r.closed_at
+                    )
+                    if not meaningful:
+                        continue
+                    signature = (
+                        r.symbol, r.direction, snapshot.get("primary_entry_model"), r.order_state,
+                        round(float(r.entry), 2) if r.entry is not None else round(float(snapshot.get("watch_trigger")), 2) if snapshot.get("watch_trigger") is not None else None,
+                    )
+                    prior = seen_recent.get(signature)
+                    if prior and abs((prior - r.updated_at).total_seconds()) < 45:
+                        continue
+                    seen_recent[signature] = r.updated_at
                     results.append({
                         "setup_id": r.setup_id, "created_at": r.created_at, "updated_at": r.updated_at,
                         "symbol": r.symbol, "direction": r.direction, "confidence": r.confidence,
@@ -130,6 +155,8 @@ class StorageService:
                         "mae_points": snapshot.get("max_adverse_excursion_points", 0),
                         "target_sources": r.target_sources or {},
                     })
+                    if len(results) >= limit:
+                        break
                 return results
         except Exception:
             logger.exception("Unable to read setup history")

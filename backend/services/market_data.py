@@ -128,7 +128,7 @@ def _sanitize_candles(candles: list[Candle], max_jump_ratio: float = 0.12) -> li
         typical_range = median([value for value in recent_ranges[-30:] if value > 0]) if any(value > 0 for value in recent_ranges[-30:]) else 0.0
         giant_wick = bool(
             typical_range > 0
-            and candle_range > max(typical_range * 18, reference * 0.012)
+            and candle_range > max(typical_range * 10, reference * 0.008)
             and body < max(typical_range * 5, candle_range * 0.35)
         )
         # Drop isolated regime spikes and giant one-bar wicks. Preserve sustained
@@ -137,7 +137,20 @@ def _sanitize_candles(candles: list[Candle], max_jump_ratio: float = 0.12) -> li
             continue
         clean.append(current)
         recent_ranges.append(candle_range)
-    clean.append(ordered[-1])
+    last = ordered[-1]
+    previous = clean[-1]
+    reference = max(abs(previous.close), 1e-9)
+    candle_range = max(last.high - last.low, 0.0)
+    body = abs(last.close - last.open)
+    sample = [value for value in recent_ranges[-30:] if value > 0]
+    typical_range = median(sample) if sample else 0.0
+    giant_live_wick = bool(
+        typical_range > 0
+        and candle_range > max(typical_range * 10, reference * 0.008)
+        and body < max(typical_range * 4, candle_range * 0.35)
+    )
+    if not giant_live_wick:
+        clean.append(last)
     return clean
 
 

@@ -1,6 +1,6 @@
 # TradeIQ Development Roadmap
 
-**Current release:** 3.0.1-chart-candle-hotfix
+**Current release:** 3.0.2-entry-chart-stability
 
 ## Completed
 
@@ -11,8 +11,17 @@
 - [x] v2.9 Partial/runner management and break-even stop
 - [x] v3.0 Institutional confidence, analytics and integrated UI
 - [x] v3.0.1 Small-timeframe candle integrity, price-first autoscale and viewport persistence
+- [x] v3.0.2 Model-specific entry gates, closed-candle lifecycle stability, clean chart mode and filtered setup history
 
-## Next — v3.1 Quality and Data Depth
+## Next — v3.0.3 Live Forward-Test Corrections
+
+- [ ] Validate watch and arm thresholds on live NQ/MNQ 1m, 2m and 5m data
+- [ ] Review cancellation and unconfirmed-touch rates by session
+- [ ] Tune label priority from real device screenshots
+- [ ] Confirm installed PWA cache replacement on iPhone/iPad and Windows
+- [ ] Add an optional diagnostics panel showing the exact missing confirmation groups
+
+## v3.1 Quality and Data Depth
 
 - [ ] Native synchronized SMT feed for NQ/ES and related pairs
 - [ ] Explicit FVG and inverse-FVG lifecycle objects

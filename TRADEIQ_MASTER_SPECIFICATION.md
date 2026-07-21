@@ -1,7 +1,7 @@
 # TradeIQ Master Specification
 
-**Product version:** 3.0.1-chart-candle-hotfix  
-**Document version:** 3.0  
+**Product version:** 3.0.2-entry-chart-stability  
+**Document version:** 3.0.2  
 **Status:** Living source of truth
 
 ## 1. Product Purpose
@@ -33,7 +33,7 @@ Terminal alternatives:
 
 A `WATCHING → WATCHING` event records a deterministic switch to a stronger secondary entry model.
 
-## 4. Implemented v3.0–v3.0.1 Modules
+## 4. Implemented v3.0–v3.0.2 Modules
 
 - Live/historical market data service.
 - GEX service with snapshot-stable dealer levels.
@@ -55,6 +55,16 @@ A `WATCHING → WATCHING` event records a deterministic switch to a stronger sec
 - Replayed out-of-order Databento records are merged into their original minute or ignored instead of being appended out of sequence.
 - Corrupt OHLC records and isolated giant wicks are rejected before reaching the chart.
 - Each symbol/timeframe/chart combination retains its own viewport.
+
+### Entry and lifecycle stability (v3.0.2)
+
+- Every entry model is evaluated by a model-specific confirmation contract.
+- A Liquidity Sweep model requires sweep/displacement/sequence evidence; OTE, EMA, VWAP, zone and FVG models are not forced through that unrelated gate.
+- The selected model may provide the preferred resting entry and structural invalidation used by the risk engine.
+- Monitoring and limit arming use separate thresholds.
+- Model/direction replacement evidence is counted only on distinct closed candles, preventing two-second polling churn.
+- Setup History exposes meaningful lifecycle objects rather than every transient preview.
+- Clean Chart mode is the default and preserves the important institutional context without burying candles.
 
 ## 5. Entry Models
 
@@ -87,7 +97,7 @@ Confidence is deterministic and totals 100 points:
 | Volume | 10 |
 | Session | 5 |
 
-The entry model has a separate model score. Both the setup score and mandatory safety gates must qualify before a limit plan is armed.
+The entry model has a separate model score. Monitoring begins when the top eligible model reaches the watch threshold. A limit can arm only after the confidence floor, common risk safety and the selected model's own confirmation groups qualify.
 
 ## 7. GEX Policy
 
@@ -116,3 +126,5 @@ The active lifecycle object survives backend restarts. Every transition is store
 - Order Block and FVG models use deterministic data already derived by the current structure/zone engine; they are not full depth-of-market models.
 - Analytics are descriptive and do not adapt live model weights.
 - Multi-symbol selection exists, but simultaneous portfolio monitoring is not yet implemented.
+- Model-specific thresholds are deterministic configuration values and still require live forward testing by symbol/session.
+- Clean Chart mode reduces visual noise but does not remove the underlying analytical data or change engine decisions.

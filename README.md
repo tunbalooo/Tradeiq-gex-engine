@@ -1,4 +1,14 @@
-# TradeIQ Institutional Decision Platform v3.0.1
+# TradeIQ Institutional Decision Platform v3.0.2
+
+
+## v3.0.2 entry and chart stability
+
+This release fixes the two problems visible in the v3.0.1 screenshots:
+
+- **No limit despite a ranked setup:** entry models now use their own confirmation contracts instead of one universal liquidity-sweep/cluster gate. Monitoring begins at a model score of 58; a limit can arm at 72 after model-specific confirmation and common risk safety pass.
+- **Unclean chart and noisy history:** Clean Chart mode is now on by default, extra zone/GEX labels are suppressed, the newest malformed wick is filtered, and repeated polling of the same closed candle cannot generate alternating setup-history rows.
+
+TradeIQ still does not manufacture a trade. A limit requires a valid resting entry, target space, at least 2R to TP2, the confidence floor and the selected model's deterministic confirmations.
 
 
 ## v3.0.1 chart and candlestick hotfix

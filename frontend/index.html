@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=301" />
+<link rel="stylesheet" href="/static/styles.css?v=302" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -90,6 +90,7 @@
             <span class="m mono chart-caption" id="chartCaption">Futures market · 5m · CONNECTING</span>
           </div>
           <div class="indicator-strip" id="indicatorStrip">
+            <button class="overlay-btn active" data-overlay="clean">Clean</button>
             <button class="overlay-btn active" data-overlay="emas">EMAs</button>
             <button class="overlay-btn active" data-overlay="gex">GEX</button>
             <button class="overlay-btn active" data-overlay="fib">Fib / OTE</button>
@@ -254,6 +255,7 @@
               <span class="tf" data-tf="60">1h</span>
             </div>
             <div class="chart-overlay-toggles" aria-label="Chart overlays">
+              <button class="overlay-btn active" data-overlay="clean">Clean</button>
               <button class="overlay-btn active" data-overlay="emas">EMAs</button>
               <button class="overlay-btn active" data-overlay="gex">GEX</button>
               <button class="overlay-btn active" data-overlay="fib">Fib/OTE</button>
@@ -488,7 +490,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=301"></script>
+<script src="/static/boot.js?v=302"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

@@ -287,13 +287,41 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         "previous_liquidity_high": structure.get("previous_liquidity_high"),
         "sweep_price": structure.get("sweep_price"),
     }
-    mandatory = all([
-        trend_alignment, gex_alignment, cluster.score >= settings.cluster_min_score,
-        levels["entry_valid"], not levels["blocked_by_near_target"],
-        ordered_sequence or (direction_sweep and direction_displacement),
-        (levels["tp2_r"] or 0) >= 2.0,
-    ])
-    actionable = confidence >= settings.setup_actionable_score and mandatory
+    # Rank the institutional entry models before locking a price plan. The top
+    # model supplies its own trigger and structural invalidation. This prevents
+    # every model from being forced through the old universal OTE/liquidity gate.
+    preliminary_context = ModelContext(
+        direction=direction, current_price=current_price, atr=atr, proposed_entry=levels["entry"],
+        vwap=vwap, gamma_flip=gex.gamma_flip,
+        selected_zone_low=selected_zone.low if selected_zone else None,
+        selected_zone_high=selected_zone.high if selected_zone else None,
+        ote_low=ote_low, ote_high=ote_high,
+        fvg_low=signals.get("directional_fvg_low"), fvg_high=signals.get("directional_fvg_high"),
+        signals=signals, structure=structure, volume_expansion=volume_expansion_quality, session_quality=session_quality,
+    )
+    preliminary_ranking = rank_entry_models(preliminary_context)
+    preliminary_primary = next((item for item in preliminary_ranking if item.eligible), preliminary_ranking[0] if preliminary_ranking else None)
+    if preliminary_primary and preliminary_primary.trigger_price is not None:
+        levels = build_trade_levels(
+            direction=direction, current_price=current_price, ote_low=ote_low, ote_high=ote_high,
+            ideal_ote=ideal_ote, zones=zones, atr=atr, cluster=cluster, gex=gex,
+            previous_liquidity_high=structure["previous_liquidity_high"],
+            previous_liquidity_low=structure["previous_liquidity_low"],
+            session_high=session_high, session_low=session_low,
+            sweep_price=structure["sweep_price"] if direction_sweep else None,
+            tick_size=profile.tick_size,
+            preferred_entry=preliminary_primary.trigger_price,
+            preferred_invalidation=preliminary_primary.invalidation_price,
+        )
+
+    signals.update({
+        "valid_limit": bool(levels["entry_valid"]),
+        "target_not_blocked": not levels["blocked_by_near_target"],
+        "selected_model_trigger": preliminary_primary.trigger_price if preliminary_primary else None,
+        "selected_model_invalidation": preliminary_primary.invalidation_price if preliminary_primary else None,
+    })
+    flags["risk_reward"] = 1.0 if levels["entry_valid"] and not levels["blocked_by_near_target"] and (levels["tp2_r"] or 0) >= 2 else 0.0
+    legacy_confidence, components = calculate_confidence(flags)
 
     rationale = []
     if trend_alignment: rationale.append(f"The 9/21/55 EMA structure is {direction.lower()}-aligned.")
@@ -303,12 +331,14 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
     if cluster.score >= settings.cluster_min_score:
         zone_name = f"{cluster.zone.timeframe} {cluster.zone.kind.lower()}" if cluster.zone else "zone"
         rationale.append(f"OTE, {zone_name}, and {cluster.gex_type or 'GEX'} cluster around {cluster.low:,.2f}–{cluster.high:,.2f}.")
+    if preliminary_primary:
+        rationale.append(f"{preliminary_primary.name} is the current primary entry model at {preliminary_primary.score:.1f}%.")
     if levels["blocked_by_near_target"]: rationale.append("A nearby market level blocks sufficient reward; preview only.")
-    if not levels["entry_valid"]: rationale.append("The proposed entry is not a valid resting limit relative to current price.")
+    if not levels["entry_valid"]: rationale.append("The selected model trigger is not a valid resting limit relative to current price.")
     if levels["target_sources"]: rationale.append(f"TP1 uses {levels['target_sources']['tp1']}; TP2 uses {levels['target_sources']['tp2']}.")
     if not rationale: rationale.append("The engine is scanning for a stronger multi-factor setup.")
 
-    status = "WAITING_FOR_LIMIT" if actionable else "DEVELOPING" if confidence >= 55 and levels["entry_valid"] else "SCANNING"
+    status = "DEVELOPING" if preliminary_primary and preliminary_primary.eligible and preliminary_primary.score >= settings.setup_watch_model_score and levels["entry_valid"] else "SCANNING"
     now = datetime.now(timezone.utc)
     setup = TradeSetup(
         setup_id=f"preview-{uuid4()}", symbol=profile.symbol, timestamp=now,
@@ -318,8 +348,8 @@ def build_candidate_setup(candles_override=None) -> TradeSetup:
         confidence_grade=confidence_grade,
         institutional_confidence_components=institutional_components,
         institutional_confidence_maximums={k: float(v) for k, v in CATEGORY_WEIGHTS.items()},
-        actionable=actionable, entry_valid=bool(levels["entry_valid"]),
-        order_state="ARMED" if actionable else "PREVIEW_ONLY",
+        actionable=False, entry_valid=bool(levels["entry_valid"]),
+        order_state="PREVIEW_ONLY",
         entry=levels["entry"], stop_loss=levels["stop_loss"], take_profit_1=levels["take_profit_1"],
         take_profit_2=levels["take_profit_2"], risk_reward=levels["risk_reward"],
         tp1_r=levels["tp1_r"], tp2_r=levels["tp2_r"], target_sources=levels["target_sources"],

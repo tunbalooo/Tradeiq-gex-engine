@@ -631,13 +631,22 @@
       const body = Math.abs(current.close - current.open);
       const typicalRange = median(recentRanges.slice(-30).filter((value) => value > 0)) || 0;
       const giantWick = typicalRange > 0
-        && candleRange > Math.max(typicalRange * 18, reference * 0.012)
+        && candleRange > Math.max(typicalRange * 10, reference * 0.008)
         && body < Math.max(typicalRange * 5, candleRange * 0.35);
       if (giantWick || (jump > MAX_SERIES_REGIME_GAP && returnJump > MAX_SERIES_REGIME_GAP)) continue;
       clean.push(current);
       recentRanges.push(candleRange);
     }
-    clean.push(ordered.at(-1));
+    const last = ordered.at(-1);
+    const previous = clean.at(-1);
+    const reference = Math.max(Math.abs(previous.close), 1e-9);
+    const candleRange = Math.max(0, last.high - last.low);
+    const body = Math.abs(last.close - last.open);
+    const typicalRange = median(recentRanges.slice(-30).filter((value) => value > 0)) || 0;
+    const giantLiveWick = typicalRange > 0
+      && candleRange > Math.max(typicalRange * 10, reference * 0.008)
+      && body < Math.max(typicalRange * 4, candleRange * 0.35);
+    if (!giantLiveWick) clean.push(last);
     return latestCoherentSegment(clean);
   }
 
@@ -831,7 +840,9 @@
     const candleSeries = chart.addSeries(LC.CandlestickSeries, {
       upColor: COLORS.green,
       downColor: COLORS.red,
-      borderVisible: false,
+      borderVisible: true,
+      borderUpColor: COLORS.green,
+      borderDownColor: COLORS.red,
       wickUpColor: COLORS.green,
       wickDownColor: COLORS.red,
       priceLineVisible: true,
@@ -1086,48 +1097,69 @@
       try { instance.candleSeries.removePriceLine(line); } catch (_) { /* stale line */ }
     });
     instance.priceLines = [];
+    instance.systemLabelPrices = [];
   }
 
-  function addPriceLine(instance, price, title, color, style = dashed, width = 1) {
+  function addPriceLine(instance, price, title, color, style = dashed, width = 1, axisLabelVisible = true) {
     if (!Number.isFinite(Number(price))) return;
+    const numericPrice = Number(price);
+    if (axisLabelVisible) {
+      const tolerance = Math.max(Number(instance.tickSize || .25) * 8, Number(instance.setup?.atr || 0) * .10);
+      if ((instance.systemLabelPrices || []).some((value) => Math.abs(value - numericPrice) < tolerance)) {
+        axisLabelVisible = false;
+        title = "";
+      } else {
+        instance.systemLabelPrices = [...(instance.systemLabelPrices || []), numericPrice];
+      }
+    }
     const line = instance.candleSeries.createPriceLine({
-      price: Number(price), color, lineWidth: width, lineStyle: style,
-      axisLabelVisible: true, title,
+      price: numericPrice, color, lineWidth: width, lineStyle: style,
+      axisLabelVisible, title,
     });
     instance.priceLines.push(line);
+  }
+
+  function cleanPriorityZones(instance, setup) {
+    const zones = (setup?.zones || []).filter((zone) =>
+      Number.isFinite(Number(zone.low)) && Number.isFinite(Number(zone.high)) && Number(zone.high) >= Number(zone.low)
+    );
+    if (!zones.length) return [];
+    const current = Number(instance.data.at(-1)?.close);
+    const atr = Math.max(Number(setup?.atr || 0), Number(instance.tickSize || 0.25) * 8);
+    const selected = zones.find((zone) =>
+      setup.selected_zone_low != null && setup.selected_zone_high != null
+      && Math.abs(Number(zone.low) - Number(setup.selected_zone_low)) <= Number(instance.tickSize || .25)
+      && Math.abs(Number(zone.high) - Number(setup.selected_zone_high)) <= Number(instance.tickSize || .25)
+    );
+    const distance = (zone) => {
+      if (!Number.isFinite(current)) return 0;
+      if (Number(zone.low) <= current && current <= Number(zone.high)) return 0;
+      return Math.min(Math.abs(current - Number(zone.low)), Math.abs(current - Number(zone.high)));
+    };
+    const candidates = [];
+    if (selected) candidates.push(selected);
+    ["DEMAND", "SUPPLY"].forEach((kind) => {
+      const nearest = zones.filter((zone) => zone.kind === kind).sort((a, b) => distance(a) - distance(b))[0];
+      if (nearest) candidates.push(nearest);
+    });
+    const deduped = [];
+    candidates.forEach((zone) => {
+      const mid = (Number(zone.low) + Number(zone.high)) / 2;
+      if (deduped.some((other) => Math.abs(mid - (Number(other.low) + Number(other.high)) / 2) < atr * .18)) return;
+      deduped.push(zone);
+    });
+    return deduped.slice(0, 3);
   }
 
   function rebuildPriceLines(instance) {
     clearSystemPriceLines(instance);
     const setup = instance.setup;
     const overlays = instance.overlays || {};
+    const cleanMode = overlays.clean !== false;
     if (!setup) return;
 
-    if (overlays.gex && setup.gex) {
-      addPriceLine(instance, setup.gex.call_wall, "GAMMA RES / CALL WALL", COLORS.blue, dashed, 2);
-      if (Number.isFinite(Number(setup.gex.gamma_resistance)) && Math.abs(Number(setup.gex.gamma_resistance) - Number(setup.gex.call_wall)) > instance.tickSize * 2)
-        addPriceLine(instance, setup.gex.gamma_resistance, "GAMMA RESISTANCE", COLORS.purple, dotted, 1);
-      addPriceLine(instance, setup.gex.gamma_flip, "GAMMA FLIP", COLORS.amber, dashed, 2);
-      if (Number.isFinite(Number(setup.gex.max_pain))) addPriceLine(instance, setup.gex.max_pain, "MAX PAIN", "#D85CFF", dashed, 2);
-      addPriceLine(instance, setup.gex.put_wall, "PUT SUPPORT / WALL", COLORS.red, dashed, 2);
-      (setup.gex.levels || []).slice(0, instance.host.clientWidth < 700 ? 2 : instance.id === "chartLarge" ? 6 : 3).forEach((level) => {
-        addPriceLine(instance, level.price, level.type || "GEX", Number(level.gex || 0) >= 0 ? "#21875A" : "#9D3542", dotted, 1);
-      });
-    }
-
-    if (overlays.fib) {
-      (setup.fib_levels || []).forEach((level) => {
-        addPriceLine(instance, level.price, level.label || String(level.ratio), Math.abs(Number(level.ratio) - 0.705) < 0.002 ? COLORS.amber : "#49576A", dotted, 1);
-      });
-    }
-
-    if (overlays.vwap) {
-      addPriceLine(instance, setup.vwap, "VWAP", COLORS.vwap, dotted, 1);
-      addPriceLine(instance, setup.standard_deviation_high, "+1σ", COLORS.muted, dotted, 1);
-      addPriceLine(instance, setup.standard_deviation_low, "-1σ", COLORS.muted, dotted, 1);
-      addPriceLine(instance, instance.rthEq, "RTH EQ", "#E8D99A", dotted, 1);
-    }
-
+    // Trade lifecycle levels receive label priority. Context levels that sit on
+    // top of them remain visible as lines but suppress duplicate right-axis tags.
     if (overlays.trade && hasWatchingPlan(setup)) {
       addPriceLine(instance, watchTrigger(setup), `MONITOR ${setup.direction} · NO ORDER`, COLORS.amber, dotted, 1);
     } else if (overlays.trade && hasLockedTradePlan(setup)) {
@@ -1139,11 +1171,47 @@
       addPriceLine(instance, setup.take_profit_2, "TP2", COLORS.green, dashed, 2);
     }
 
+    if (overlays.gex && setup.gex) {
+      addPriceLine(instance, setup.gex.call_wall, "GAMMA RES / CALL WALL", COLORS.blue, dashed, 2);
+      if (Number.isFinite(Number(setup.gex.gamma_resistance)) && Math.abs(Number(setup.gex.gamma_resistance) - Number(setup.gex.call_wall)) > instance.tickSize * 2)
+        addPriceLine(instance, setup.gex.gamma_resistance, "GAMMA RESISTANCE", COLORS.purple, dotted, 1);
+      addPriceLine(instance, setup.gex.gamma_flip, "GAMMA FLIP", COLORS.amber, dashed, 2);
+      if (Number.isFinite(Number(setup.gex.max_pain))) addPriceLine(instance, setup.gex.max_pain, "MAX PAIN", "#D85CFF", dashed, 2);
+      addPriceLine(instance, setup.gex.put_wall, "PUT SUPPORT / WALL", COLORS.red, dashed, 2);
+      if (!cleanMode) {
+        (setup.gex.levels || []).slice(0, instance.host.clientWidth < 700 ? 2 : instance.id === "chartLarge" ? 6 : 3).forEach((level) => {
+          addPriceLine(instance, level.price, level.type || "GEX", Number(level.gex || 0) >= 0 ? "#21875A" : "#9D3542", dotted, 1);
+        });
+      }
+    }
+
+    if (overlays.fib) {
+      const fibs = cleanMode
+        ? (setup.fib_levels || []).filter((level) => [0.618, 0.705, 0.786].some((ratio) => Math.abs(Number(level.ratio) - ratio) < .003))
+        : (setup.fib_levels || []);
+      fibs.forEach((level) => {
+        addPriceLine(instance, level.price, level.label || String(level.ratio), Math.abs(Number(level.ratio) - 0.705) < 0.002 ? COLORS.amber : "#49576A", dotted, 1, Math.abs(Number(level.ratio) - 0.705) < 0.002);
+      });
+    }
+
+    if (overlays.vwap) {
+      addPriceLine(instance, setup.vwap, "VWAP", COLORS.vwap, dotted, 1);
+      if (!cleanMode) {
+        addPriceLine(instance, setup.standard_deviation_high, "+1σ", COLORS.muted, dotted, 1);
+        addPriceLine(instance, setup.standard_deviation_low, "-1σ", COLORS.muted, dotted, 1);
+        addPriceLine(instance, instance.rthEq, "RTH EQ", "#E8D99A", dotted, 1);
+      }
+    }
+
     if (overlays.zones) {
-      (setup.zones || []).slice(0, instance.host.clientWidth < 700 ? 3 : instance.id === "chartLarge" ? 7 : 4).forEach((zone) => {
+      const zones = cleanMode
+        ? cleanPriorityZones(instance, setup)
+        : (setup.zones || []).slice(0, instance.host.clientWidth < 700 ? 3 : instance.id === "chartLarge" ? 7 : 4);
+      zones.forEach((zone) => {
         const color = zone.kind === "DEMAND" ? "#21875A" : "#9D3542";
-        addPriceLine(instance, zone.high, `${zone.timeframe} ${zone.kind}`, color, dotted, 1);
-        addPriceLine(instance, zone.low, "", color, dotted, 1);
+        const selected = setup.selected_zone_low != null && Math.abs(Number(zone.low) - Number(setup.selected_zone_low)) <= Number(instance.tickSize || .25);
+        addPriceLine(instance, zone.high, `${zone.timeframe} ${zone.kind}`, color, dotted, selected ? 2 : 1, true);
+        addPriceLine(instance, zone.low, "", color, dotted, 1, false);
       });
     }
   }
@@ -1169,6 +1237,7 @@
 
     const setup = instance.setup;
     const overlays = instance.overlays || {};
+    const cleanMode = overlays.clean !== false;
     if (!setup) return;
     const chartWidth = Math.max(0, width - 77);
     const coordinate = (price) => instance.candleSeries.priceToCoordinate(Number(price));
@@ -1190,11 +1259,14 @@
     }
 
     if (overlays.zones) {
-      (setup.zones || []).slice(0, instance.id === "chartLarge" ? 9 : 5).forEach((zone) => {
+      const zones = cleanMode ? cleanPriorityZones(instance, setup) : (setup.zones || []).slice(0, instance.id === "chartLarge" ? 9 : 5);
+      zones.forEach((zone) => {
         const top = coordinate(zone.high);
         const bottom = coordinate(zone.low);
         if (top == null || bottom == null) return;
-        ctx.fillStyle = zone.kind === "DEMAND" ? "rgba(38,208,124,.075)" : "rgba(255,77,94,.075)";
+        ctx.fillStyle = zone.kind === "DEMAND"
+          ? (cleanMode ? "rgba(38,208,124,.040)" : "rgba(38,208,124,.075)")
+          : (cleanMode ? "rgba(255,77,94,.040)" : "rgba(255,77,94,.075)");
         ctx.fillRect(0, Math.min(top, bottom), chartWidth, Math.abs(bottom - top));
       });
     }
@@ -1234,13 +1306,13 @@
       return 100;
     }
     if (instance.id === "chartLarge") {
-      if (tf <= 2) return 125;
-      if (tf <= 5) return 145;
-      return 165;
+      if (tf <= 2) return 90;
+      if (tf <= 5) return 112;
+      return 145;
     }
-    if (tf <= 2) return 95;
-    if (tf <= 5) return 108;
-    return 120;
+    if (tf <= 2) return 78;
+    if (tf <= 5) return 92;
+    return 110;
   }
 
   function applyData(instance, data) {

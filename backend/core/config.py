@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     nq_contract_multiplier: int = 20  # deprecated: instrument registry supplies multipliers
 
     setup_actionable_score: float = 75.0
+    setup_confidence_floor: float = 45.0
+    setup_watch_model_score: float = 58.0
+    entry_model_arm_score: float = 72.0
+    direction_switch_confirm_bars: int = 2
     setup_expiry_minutes: int = 30
     cluster_min_score: float = 0.65
     cluster_tolerance_atr: float = 0.25

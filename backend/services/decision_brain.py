@@ -1,8 +1,10 @@
-"""Central deterministic coordinator for TradeIQ v3.0.
+"""Central deterministic coordinator for TradeIQ v3.0.2.
 
-The brain selects and explains an entry model. It never asks Claude to make a
-trading decision, and it cannot bypass the existing market, risk or lifecycle
-safety gates.
+The Decision Brain selects the strongest entry model and applies model-specific
+confirmation gates. Claude remains read-only. A universal liquidity-sequence
+requirement is deliberately avoided because an OTE, EMA, VWAP or zone-retest
+setup should be judged by its own deterministic evidence rather than by the
+rules of a different model.
 """
 from __future__ import annotations
 
@@ -10,6 +12,44 @@ from datetime import datetime, timezone
 
 from backend.core.config import settings
 from backend.models.schemas import EntryModelScore, TradeSetup
+
+
+MODEL_CONFIRMATIONS: dict[str, tuple[tuple[str, ...], ...]] = {
+    # Every inner tuple is an OR group. Every group must have at least one true signal.
+    "LIQUIDITY_SWEEP_MSS": (("liquidity_sweep",), ("displacement",), ("ordered_sequence",)),
+    "SUPPLY_DEMAND_RETEST": (("supply_demand",), ("trend_alignment",), ("gex_ote_zone_cluster", "gex_alignment")),
+    "OTE_RETRACEMENT": (("ote_overlap",), ("trend_alignment",), ("gex_ote_zone_cluster", "supply_demand"), ("displacement", "ordered_sequence")),
+    "GAMMA_FLIP_RECLAIM": (("gex_alignment",), ("trend_alignment",), ("displacement",), ("vwap_alignment",)),
+    "FVG_RETEST": (("directional_fvg",), ("displacement",), ("trend_alignment",)),
+    "ORDER_BLOCK_RETEST": (("supply_demand",), ("displacement",), ("trend_alignment",)),
+    "EMA_PULLBACK": (("trend_alignment",), ("vwap_alignment",), ("displacement", "volume_expansion")),
+    "VWAP_RECLAIM": (("vwap_alignment",), ("trend_alignment",), ("displacement",)),
+    "BREAK_RETEST": (("displacement",), ("trend_alignment",), ("ordered_sequence",)),
+    "TREND_CONTINUATION": (("trend_alignment",), ("displacement",), ("vwap_alignment", "volume_expansion")),
+    "INVERSE_FVG": (("inverse_fvg",), ("displacement",), ("trend_alignment",)),
+    "SMT_DIVERGENCE": (("smt_divergence",), ("liquidity_sweep", "displacement"), ("trend_alignment",)),
+}
+
+
+def _signal_truth(signals: dict, name: str) -> bool:
+    value = signals.get(name)
+    if isinstance(value, bool):
+        return value
+    try:
+        return float(value or 0.0) >= 0.6
+    except (TypeError, ValueError):
+        return False
+
+
+def _model_confirmation(primary: EntryModelScore, signals: dict) -> tuple[bool, list[str]]:
+    groups = MODEL_CONFIRMATIONS.get(primary.key, ())
+    if not groups:
+        return primary.eligible, []
+    missing: list[str] = []
+    for alternatives in groups:
+        if not any(_signal_truth(signals, name) for name in alternatives):
+            missing.append(" or ".join(name.replace("_", " ") for name in alternatives))
+    return not missing, missing
 
 
 class DecisionBrainService:
@@ -27,12 +67,32 @@ class DecisionBrainService:
                 "actionable": False,
             })
 
-        model_gate = primary.eligible and primary.score >= settings.entry_model_min_score
-        actionable = bool(setup.actionable and model_gate)
-        if primary.eligible:
+        model_confirmed, model_missing = _model_confirmation(primary, setup.signals)
+        common_safety = bool(
+            setup.entry_valid
+            and setup.signals.get("target_not_blocked")
+            and (setup.tp2_r or 0.0) >= 2.0
+            and setup.confidence >= settings.setup_confidence_floor
+        )
+        model_gate = bool(
+            primary.eligible
+            and primary.score >= settings.entry_model_arm_score
+            and model_confirmed
+        )
+        actionable = bool(common_safety and model_gate)
+
+        if actionable:
             reason = (
-                f"{primary.name} ranks first at {primary.score:.1f}%. "
+                f"{primary.name} ranks first at {primary.score:.1f}% and its model-specific confirmations are complete. "
                 f"The engine retained {len(alternatives)} qualified backup model(s)."
+            )
+        elif primary.eligible:
+            waiting = model_missing or [
+                f"model score {settings.entry_model_arm_score:.0f}%" if primary.score < settings.entry_model_arm_score else "common risk safety"
+            ]
+            reason = (
+                f"{primary.name} ranks first at {primary.score:.1f}%, but the limit remains unarmed while waiting for: "
+                f"{', '.join(waiting)}."
             )
         else:
             reason = (
@@ -40,11 +100,10 @@ class DecisionBrainService:
                 f"but it is missing: {', '.join(primary.missing) or 'mandatory confirmation'}."
             )
 
-        status = setup.status
-        order_state = setup.order_state
-        if setup.actionable and not actionable:
-            status = "DEVELOPING"
-            order_state = "PREVIEW_ONLY"
+        status = "WAITING_FOR_LIMIT" if actionable else "DEVELOPING" if (
+            primary.eligible and primary.score >= settings.setup_watch_model_score and setup.entry_valid
+        ) else "SCANNING"
+        order_state = "ARMED" if actionable else "PREVIEW_ONLY"
 
         return setup.model_copy(update={
             "primary_entry_model": primary.name,
@@ -60,6 +119,9 @@ class DecisionBrainService:
             "signals": {
                 **setup.signals,
                 "entry_model_gate": model_gate,
+                "entry_model_confirmed": model_confirmed,
+                "entry_model_missing": model_missing,
+                "common_safety_gate": common_safety,
                 "primary_model_key": primary.key,
             },
         })

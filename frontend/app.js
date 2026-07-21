@@ -76,7 +76,7 @@ const state = {
   dataQuality: "UNKNOWN",
   rawSymbol: null,
   socket: null,
-  overlays: { emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
+  overlays: { clean: true, emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
   claude: {
     enabled: false, auto: true, busy: false, source: null, text: "", model: "—",
     lastStartedAt: 0, pendingLifecycle: false, lastLifecycleKey: null,
@@ -1055,13 +1055,24 @@ function normaliseMarketCandles(candles = []) {
     const middle = Math.floor(sample.length / 2);
     const typicalRange = sample.length ? (sample.length % 2 ? sample[middle] : (sample[middle - 1] + sample[middle]) / 2) : 0;
     const giantWick = typicalRange > 0
-      && candleRange > Math.max(typicalRange * 18, reference * 0.012)
+      && candleRange > Math.max(typicalRange * 10, reference * 0.008)
       && body < Math.max(typicalRange * 5, candleRange * 0.35);
     if (giantWick || (jump > 0.08 && returnJump > 0.08)) continue;
     clean.push(current);
     recentRanges.push(candleRange);
   }
-  clean.push(ordered.at(-1));
+  const last = ordered.at(-1);
+  const previous = clean.at(-1);
+  const reference = Math.max(Math.abs(previous.close), 1e-9);
+  const candleRange = Math.max(0, last.high - last.low);
+  const body = Math.abs(last.close - last.open);
+  const sample = recentRanges.slice(-30).filter((value) => value > 0).sort((a, b) => a - b);
+  const middle = Math.floor(sample.length / 2);
+  const typicalRange = sample.length ? (sample.length % 2 ? sample[middle] : (sample[middle - 1] + sample[middle]) / 2) : 0;
+  const giantLiveWick = typicalRange > 0
+    && candleRange > Math.max(typicalRange * 10, reference * 0.008)
+    && body < Math.max(typicalRange * 4, candleRange * 0.35);
+  if (!giantLiveWick) clean.push(last);
   return clean.slice(-2400);
 }
 

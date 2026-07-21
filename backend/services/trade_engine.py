@@ -14,7 +14,7 @@ from backend.services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"TP2_HIT", "STOPPED", "EXPIRED", "INVALIDATED", "UNCONFIRMED_TOUCH"}
-WATCH_MIN_CONFIDENCE = 55.0
+WATCH_MIN_CONFIDENCE = 35.0
 
 
 class TradeEngineService:
@@ -33,6 +33,9 @@ class TradeEngineService:
         # The suppression is cleared only after the market presents a materially
         # different candidate (direction/entry/cluster) or loses watch eligibility.
         self._expired_watch: dict[str, object] | None = None
+        self._pending_candidate_signature: tuple | None = None
+        self._pending_candidate_count = 0
+        self._pending_candidate_candle_time: datetime | None = None
 
     async def start(self) -> None:
         if self._task is None:
@@ -186,13 +189,50 @@ class TradeEngineService:
             return False, "MARKET_CLOSED"
         return True, None
 
+    def _primary_model_eligible(self, candidate: TradeSetup) -> bool:
+        return any(
+            item.key == candidate.primary_entry_model_key and item.eligible
+            for item in candidate.entry_model_scores
+        )
+
     def _is_watch_candidate(self, candidate: TradeSetup) -> bool:
         return bool(
             candidate.entry_valid
             and candidate.direction in {"LONG", "SHORT"}
             and candidate.entry is not None
-            and candidate.confidence >= WATCH_MIN_CONFIDENCE
+            and candidate.confidence >= max(WATCH_MIN_CONFIDENCE, settings.setup_confidence_floor - 10)
+            and candidate.primary_model_score >= settings.setup_watch_model_score
+            and self._primary_model_eligible(candidate)
         )
+
+    def _reset_pending_candidate(self) -> None:
+        self._pending_candidate_signature = None
+        self._pending_candidate_count = 0
+        self._pending_candidate_candle_time = None
+
+    def _candidate_signature(self, candidate: TradeSetup) -> tuple:
+        profile = get_instrument(candidate.symbol)
+        trigger = self._finite_number(candidate.entry)
+        bucket = None if trigger is None else round(trigger / max(profile.tick_size * 4, 1e-9))
+        return (candidate.symbol, candidate.direction, candidate.primary_entry_model_key, bucket)
+
+    def _candidate_is_stable(self, candidate: TradeSetup, candle) -> bool:
+        """Require distinct closed candles before replacing a live watch.
+
+        The engine polls every few seconds, while the setup evidence is built from
+        closed candles. Counting polling cycles caused the old engine to create a
+        new LONG/SHORT history row every refresh. Only a new closed candle can now
+        advance replacement confirmation.
+        """
+        signature = self._candidate_signature(candidate)
+        if signature != self._pending_candidate_signature:
+            self._pending_candidate_signature = signature
+            self._pending_candidate_count = 0
+            self._pending_candidate_candle_time = None
+        if self._pending_candidate_candle_time is None or candle.time > self._pending_candidate_candle_time:
+            self._pending_candidate_count += 1
+            self._pending_candidate_candle_time = candle.time
+        return self._pending_candidate_count >= max(1, settings.direction_switch_confirm_bars)
 
     def _preview(self, candidate: TradeSetup, status: str | None = None) -> TradeSetup:
         return candidate.model_copy(update={
@@ -205,6 +245,7 @@ class TradeEngineService:
         now = self._utcnow()
         watch_expires_at = now + timedelta(minutes=settings.setup_expiry_minutes)
         self._expired_watch = None
+        self._reset_pending_candidate()
         trigger = self._finite_number(candidate.entry)
         transition_reason = (
             f"TradeIQ is monitoring a {candidate.direction.lower()} candidate near {trigger:,.2f}; "
@@ -342,22 +383,52 @@ class TradeEngineService:
                 actionable=False, closed_at=now, outcome="WATCH_EXPIRED",
             )
 
-        # A developing thesis may rotate to a stronger secondary execution model
-        # without being discarded. The lifecycle and exact switch reason remain
-        # visible to Claude and the setup timeline.
+        if candidate.actionable and same_direction:
+            self._reset_pending_candidate()
+            return self._arm_candidate(
+                candidate, candle, previous_state="WATCHING",
+                setup_id=watching.setup_id, timestamp=watching.timestamp,
+                watch_started_at=watching.watch_started_at or watching.timestamp,
+                watch_expires_at=watch_expires_at,
+            )
+
+        # A monitored trigger is not a resting order. If price reaches it before
+        # the deterministic engine confirms the full plan, record an unconfirmed
+        # touch rather than pretending that a fill occurred or showing stale TP/SL.
+        trigger = self._finite_number(watching.watch_trigger)
+        new_closed_candle = watching.last_processed_candle_time is None or candle.time > watching.last_processed_candle_time
+        if new_closed_candle and trigger is not None and candle.low <= trigger <= candle.high:
+            self._remember_expired_watch(watching)
+            self._reset_pending_candidate()
+            return self._transition(
+                watching, "UNCONFIRMED_TOUCH", candle,
+                "Price touched the monitoring trigger before the setup was confirmed. No order was armed and no fill is recorded.",
+                actionable=False, closed_at=now, outcome="UNCONFIRMED_TOUCH",
+            )
+
+        candidate_watchable = self._is_watch_candidate(candidate)
         model_changed = bool(
             same_direction
-            and candidate.primary_entry_model
-            and candidate.primary_entry_model != watching.primary_entry_model
-            and self._is_watch_candidate(candidate)
+            and candidate.primary_entry_model_key
+            and candidate.primary_entry_model_key != watching.primary_entry_model_key
+            and candidate_watchable
         )
-        if model_changed and not candidate.actionable:
+
+        # Model and direction changes must persist across distinct closed candles.
+        # Polling the same candle every two seconds can no longer produce dozens of
+        # alternating setup-history rows.
+        if model_changed:
+            if not self._candidate_is_stable(candidate, candle):
+                return watching.model_copy(update={
+                    "last_processed_candle_time": candle.time,
+                    "status": f"MONITORING_{watching.direction}",
+                })
             new_trigger = self._finite_number(candidate.entry)
             if new_trigger is not None:
                 reason = (
                     f"Primary entry model changed from {watching.primary_entry_model or 'unclassified'} "
                     f"to {candidate.primary_entry_model} at {candidate.primary_model_score:.1f}%. "
-                    "TradeIQ is monitoring the stronger secondary opportunity; no order is armed."
+                    "The stronger model remained stable across closed candles; no order is armed."
                 )
                 switched = self._refresh_context(watching, candidate).model_copy(update={
                     "primary_entry_model": candidate.primary_entry_model,
@@ -376,54 +447,32 @@ class TradeEngineService:
                     "last_transition_price": new_trigger,
                     "last_processed_candle_time": candle.time,
                 })
+                self._reset_pending_candidate()
                 storage_service.transition(switched, "WATCHING", "WATCHING", new_trigger, candle.time, reason, "info")
                 return switched
 
-        if candidate.actionable and same_direction:
-            return self._arm_candidate(
-                candidate, candle, previous_state="WATCHING",
-                setup_id=watching.setup_id, timestamp=watching.timestamp,
-                watch_started_at=watching.watch_started_at or watching.timestamp,
-                watch_expires_at=watch_expires_at,
-            )
-
-        # A monitored trigger is not a resting order. If price reaches it before
-        # the deterministic engine confirms the full plan, record an unconfirmed
-        # touch rather than pretending that a fill occurred or showing stale TP/SL.
-        trigger = self._finite_number(watching.watch_trigger)
-        new_closed_candle = watching.last_processed_candle_time is None or candle.time > watching.last_processed_candle_time
-        if new_closed_candle and trigger is not None and candle.low <= trigger <= candle.high:
-            self._remember_expired_watch(watching)
-            return self._transition(
-                watching, "UNCONFIRMED_TOUCH", candle,
-                "Price touched the monitoring trigger before the setup was confirmed. No order was armed and no fill is recorded.",
-                actionable=False, closed_at=now, outcome="UNCONFIRMED_TOUCH",
-            )
-
-        if not same_direction or not self._is_watch_candidate(candidate):
-            replacement = self._evaluate_candidate(candidate, candle)
-            if replacement.order_state == "PREVIEW_ONLY":
-                now = self._utcnow()
-                reason = (
-                    "The monitoring candidate was cancelled because its direction changed before confirmation."
-                    if not same_direction
-                    else "The monitoring candidate was cancelled because its required confirmations weakened before a limit plan was armed."
-                )
-                replacement = replacement.model_copy(update={
-                    "setup_id": watching.setup_id,
-                    "timestamp": watching.timestamp,
-                    "last_transition_from": "WATCHING",
-                    "last_transition_to": "PREVIEW_ONLY",
-                    "last_transition_reason": reason,
-                    "last_transition_at": now,
-                    "last_transition_price": self._finite_number(candle.close),
+        if not same_direction or not candidate_watchable:
+            immediate_opposite = bool(not same_direction and candidate.actionable)
+            stable = immediate_opposite or self._candidate_is_stable(candidate, candle)
+            if not stable:
+                return watching.model_copy(update={
+                    "last_processed_candle_time": candle.time,
+                    "status": f"MONITORING_{watching.direction}",
                 })
-                storage_service.transition(
-                    replacement, "WATCHING", "PREVIEW_ONLY", candle.close, candle.time,
-                    reason,
-                    "warning",
-                )
-            return replacement
+            reason = (
+                "A confirmed opposite-direction setup replaced the monitored thesis."
+                if immediate_opposite
+                else "The monitoring candidate was cancelled after its required confirmations weakened across closed candles."
+                if same_direction
+                else "The monitoring direction changed and the replacement remained stable across closed candles."
+            )
+            self._reset_pending_candidate()
+            return self._transition(
+                watching, "INVALIDATED", candle, reason,
+                actionable=False, closed_at=now, outcome="OPPOSITE_SETUP" if not same_direction else "CONFLUENCE_LOST",
+            )
+
+        self._reset_pending_candidate()
 
         # Keep the original watched direction and entry fixed. Only market context,
         # confidence and confluence diagnostics are refreshed while confirmation develops.
@@ -599,6 +648,7 @@ class TradeEngineService:
             self._current = None
             self._last_processed_candle_time = None
             self._expired_watch = None
+            self._reset_pending_candidate()
             self._restored_setup_id = None
             self._restored_at = None
 
@@ -609,6 +659,7 @@ class TradeEngineService:
             self._last_processed_candle_time = None
             self._last_error = None
             self._expired_watch = None
+            self._reset_pending_candidate()
             self._restored_setup_id = None
             self._restored_at = None
 
