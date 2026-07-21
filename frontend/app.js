@@ -83,6 +83,13 @@ const state = {
   dataQuality: "UNKNOWN",
   rawSymbol: null,
   socket: null,
+  socketLastMessageAt: 0,
+  socketReconnectAttempt: 0,
+  socketReconnectTimer: null,
+  socketWatchdogTimer: null,
+  feedState: "CONNECTING",
+  feedRecordAgeSeconds: null,
+  feedLastRecordAt: null,
   overlays: { clean: true, emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
   claude: {
     enabled: false, auto: true, busy: false, source: null, text: "", model: "—",
@@ -650,11 +657,61 @@ function maybeRunClaudeOnStateChange(previousSetup, nextSetup) {
 }
 
 
+function formatDataAge(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return "—";
+  if (value < 60) return `${Math.round(value)}s`;
+  const minutes = Math.floor(value / 60);
+  const remainder = Math.round(value % 60);
+  return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+}
+
 function setConnection(connected) {
   state.connected = connected;
-  $("liveDot").classList.toggle("offline", !connected);
-  $("connectionLabel").textContent = connected ? "LIVE" : "RECONNECTING";
-  $("connectionLabel").className = connected ? "g" : "r";
+  $("liveDot")?.classList.toggle("offline", !connected);
+  const label = $("connectionLabel");
+  if (label) {
+    label.textContent = connected ? "SERVER LIVE" : "SERVER RECONNECTING";
+    label.className = connected ? "g" : "r";
+  }
+}
+
+function updateMarketFeedStatus(market = {}) {
+  const source = String(market.data_source || "").toLowerCase();
+  const rawState = String(market.stream_state || (market.connected ? "LIVE" : "RECONNECTING")).toUpperCase();
+  const rawAge = market.last_record_age_seconds ?? market.last_candle_age_seconds;
+  const recordAge = rawAge === null || rawAge === undefined ? Number.NaN : Number(rawAge);
+  const hasAge = Number.isFinite(recordAge);
+  state.feedState = rawState;
+  state.feedRecordAgeSeconds = hasAge ? recordAge : null;
+  state.feedLastRecordAt = market.last_record_at || null;
+
+  let label = source === "databento" ? `DATABENTO ${rawState}` : String(market.mode || "SIMULATED").toUpperCase();
+  if (source === "databento" && rawState === "LIVE" && market.data_fresh === false) label = "DATABENTO WAITING";
+  if (source === "databento" && market.warming && rawState === "LIVE") label = "DATABENTO SYNC";
+  if (source === "databento" && rawState === "DEGRADED") label = "DATABENTO DEGRADED";
+  if (source === "databento" && rawState === "STALE") label = "DATABENTO STALE";
+  if (source === "databento" && rawState === "MARKET_CLOSED") label = "DATABENTO MARKET CLOSED";
+  state.dataSource = label;
+
+  const mode = $("modeLabel");
+  if (mode) {
+    mode.textContent = label;
+    mode.classList.remove("live", "sync", "reconnecting", "stale", "error");
+    if (["LIVE"].includes(rawState) && !market.warming && market.data_fresh !== false) mode.classList.add("live");
+    else if (market.warming || ["CONNECTING", "MARKET_CLOSED"].includes(rawState)) mode.classList.add("sync");
+    else if (rawState === "RECONNECTING") mode.classList.add("reconnecting");
+    else if (["STALE", "DEGRADED"].includes(rawState)) mode.classList.add("stale");
+    else if (["ERROR", "STOPPED"].includes(rawState)) mode.classList.add("error");
+    mode.title = market.last_disconnect_reason || market.last_error || label;
+  }
+
+  const age = $("dataAgeLabel");
+  if (age) {
+    age.textContent = `DATA ${formatDataAge(recordAge)}`;
+    age.className = `m mono feed-age ${market.data_fresh === false ? "stale" : ""}`;
+    age.title = market.last_record_at ? `Last market record: ${new Date(market.last_record_at).toLocaleString()}` : "No live market record received yet";
+  }
 }
 
 function renderHeader(snapshot) {
@@ -1347,11 +1404,8 @@ async function initialLoad() {
     state.historySource = snapshot.history_source || initialMarket.history_source || state.historySource;
     state.dataQuality = snapshot.data_quality || initialMarket.data_quality || state.dataQuality;
     state.rawSymbol = snapshot.raw_symbol || initialMarket.raw_symbol || null;
-    state.dataSource = health.data_source === "databento"
-      ? (initialMarket.last_error && !initialMarket.history_cached ? "DATABENTO ERROR" : state.marketWarming ? "DATABENTO SYNC" : "DATABENTO LIVE")
-      : health.mode.toUpperCase();
+    updateMarketFeedStatus(initialMarket);
     applyInstrument(snapshot.instrument || health.instrument || health.market?.instrument);
-    $("modeLabel").textContent = state.dataSource;
     if (dashboard?.setup && dashboard?.meta) renderAll(dashboard.setup, dashboard.meta, dashboard.session || health.session);
     else renderSyncingState(snapshot, health.session);
     $("chartCaption").textContent = chartFeedLabel();
@@ -1392,25 +1446,97 @@ async function reloadSyncedHistory() {
   }
 }
 
+function clearSocketReconnectTimer() {
+  if (state.socketReconnectTimer) {
+    clearTimeout(state.socketReconnectTimer);
+    state.socketReconnectTimer = null;
+  }
+}
+
+async function refreshHealthDuringReconnect() {
+  try {
+    const health = await fetch("/api/health", { cache: "no-store" }).then((response) => {
+      if (!response.ok) throw new Error(`Health check failed (${response.status})`);
+      return response.json();
+    });
+    if (health.market) updateMarketFeedStatus(health.market);
+  } catch (error) {
+    console.debug("TradeIQ reconnect health check failed", error);
+  }
+}
+
+function scheduleWebSocketReconnect() {
+  if (state.socketReconnectTimer) return;
+  state.socketReconnectAttempt += 1;
+  const delay = Math.min(15000, 1000 * (2 ** Math.min(state.socketReconnectAttempt - 1, 4)));
+  refreshHealthDuringReconnect();
+  state.socketReconnectTimer = setTimeout(() => {
+    state.socketReconnectTimer = null;
+    connectWebSocket();
+  }, delay);
+}
+
+function startSocketWatchdog() {
+  if (state.socketWatchdogTimer) return;
+  state.socketWatchdogTimer = setInterval(() => {
+    const socket = state.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !state.socketLastMessageAt) return;
+    const silentFor = Date.now() - state.socketLastMessageAt;
+    if (silentFor > 12000) {
+      console.warn(`TradeIQ market WebSocket silent for ${Math.round(silentFor / 1000)}s; reconnecting`);
+      try { socket.close(4000, "heartbeat timeout"); } catch (_) { /* no-op */ }
+    }
+  }, 3000);
+}
+
 function connectWebSocket() {
+  if (state.socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(state.socket.readyState)) return;
+  clearSocketReconnectTimer();
+  startSocketWatchdog();
+
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${protocol}://${location.host}/ws/market`);
   state.socket = socket;
-  socket.onopen = () => setConnection(true);
+  const reconnecting = state.socketReconnectAttempt > 0;
+
+  socket.onopen = () => {
+    if (state.socket !== socket) return;
+    state.socketLastMessageAt = Date.now();
+    setConnection(true);
+    state.socketReconnectAttempt = 0;
+    if (reconnecting) {
+      // The server may have accumulated candles while the browser socket was
+      // offline. Reloading the backend snapshot repairs that gap without
+      // resetting the user's saved chart viewport.
+      setTimeout(() => reloadSyncedHistory(), 350);
+    }
+  };
+
   socket.onmessage = async (event) => {
-    const data = JSON.parse(event.data);
+    if (state.socket !== socket) return;
+    state.socketLastMessageAt = Date.now();
+    setConnection(true);
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch (error) {
+      console.error("Invalid market WebSocket payload", error);
+      return;
+    }
+    if (data.component_errors?.length) console.warn("TradeIQ degraded WebSocket components", data.component_errors);
+    if (data.type === "market_stream_error") return;
     if (data.market_opportunities) processMarketOpportunities(data.market_opportunities, data.market_radar || null, true);
     if (state.switchingSymbol) return;
+
     const wasWarming = state.marketWarming;
+    const previousFeedState = state.feedState;
     state.marketWarming = Boolean(data.market?.warming || (data.market?.data_source === "databento" && !data.market?.history_cached));
     state.historyReady = Boolean(data.market?.history_ready ?? data.market?.history_cached);
     state.historySource = data.market?.history_source || state.historySource;
     state.dataQuality = data.market?.data_quality || state.dataQuality;
     state.rawSymbol = data.market?.raw_symbol || state.rawSymbol;
-    if (data.market?.data_source === "databento") {
-      state.dataSource = data.market?.last_error && !data.market?.history_cached ? "DATABENTO ERROR" : state.marketWarming ? "DATABENTO SYNC" : "DATABENTO LIVE";
-      if ($("modeLabel")) $("modeLabel").textContent = state.dataSource;
-    }
+    if (data.market) updateMarketFeedStatus(data.market);
+
     const incomingInstrument = data.market?.instrument;
     if (incomingInstrument && incomingInstrument.symbol !== activeSymbol()) {
       state.baseCandles = [];
@@ -1421,18 +1547,26 @@ function connectWebSocket() {
     if (data.setup && data.meta) renderAll(data.setup, data.meta, data.session);
     else renderSyncingState({ price: candle?.close }, data.session);
     cacheCurrentMarket();
-    if (wasWarming && !state.marketWarming) {
+
+    const feedRecovered = previousFeedState !== "LIVE" && state.feedState === "LIVE";
+    if ((wasWarming && !state.marketWarming) || feedRecovered) {
       await reloadSyncedHistory();
       if (state.currentPage === "chart" && state.claude.enabled && state.claude.auto && !state.claude.busy) {
         startClaudeAnalysis(false);
       }
     }
   };
-  socket.onerror = () => socket.close();
+
+  socket.onerror = () => {
+    try { socket.close(); } catch (_) { /* no-op */ }
+  };
+
   socket.onclose = () => {
-    if (state.socket === socket) state.socket = null;
+    if (state.socket !== socket) return;
+    state.socket = null;
+    state.socketLastMessageAt = 0;
     setConnection(false);
-    setTimeout(connectWebSocket, 2000);
+    scheduleWebSocketReconnect();
   };
 }
 
@@ -1463,10 +1597,7 @@ async function switchMarket(symbol) {
     }
     const selected = await response.json();
     state.marketWarming = Boolean(selected.market?.warming || (selected.market?.data_source === "databento" && !selected.market?.history_cached));
-    state.dataSource = selected.market?.data_source === "databento"
-      ? (selected.market?.last_error && !selected.market?.history_cached ? "DATABENTO ERROR" : state.marketWarming ? "DATABENTO SYNC" : "DATABENTO LIVE")
-      : String(selected.market?.mode || "simulated").toUpperCase();
-    if ($("modeLabel")) $("modeLabel").textContent = state.dataSource;
+    updateMarketFeedStatus(selected.market || {});
     const [snapshot, dashboard] = await Promise.all([
       fetch("/api/market/snapshot?timeframe=1&limit=1400").then((item) => item.json()),
       fetch("/api/dashboard").then(async (item) => item.ok ? item.json() : null),

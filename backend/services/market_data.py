@@ -154,6 +154,24 @@ def _sanitize_candles(candles: list[Candle], max_jump_ratio: float = 0.12) -> li
     return clean
 
 
+def _cme_globex_expected_live(now: datetime | None = None) -> bool:
+    """Return whether the main CME Globex futures session should be producing data.
+
+    This prevents the stale-feed watchdog from restarting continuously during
+    the normal 5–6 PM ET maintenance break and the weekend closure.
+    """
+    local = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
+    weekday = local.weekday()
+    minutes = local.hour * 60 + local.minute
+    if weekday == 5:  # Saturday
+        return False
+    if weekday == 6:  # Sunday opens at 6 PM ET
+        return minutes >= 18 * 60
+    if weekday == 4:  # Friday closes at 5 PM ET
+        return minutes < 17 * 60
+    return not (17 * 60 <= minutes < 18 * 60)
+
+
 def _series_gap_ratio(history: list[Candle], live: list[Candle]) -> float | None:
     if not history or not live:
         return None
@@ -379,10 +397,24 @@ class SimulatedMarketDataService:
         ]
 
     def health(self) -> dict:
+        now = datetime.now(timezone.utc)
+        latest = self.candles[-1].time if self.candles else None
         return {
             "mode": self.mode,
             "data_source": self.data_source,
             "connected": True,
+            "stream_state": "LIVE",
+            "server_time": now,
+            "last_record_at": now,
+            "last_record_age_seconds": 0.0,
+            "last_candle_at": latest,
+            "last_candle_age_seconds": round((now - latest).total_seconds(), 1) if latest else None,
+            "data_fresh": True,
+            "stale_after_seconds": None,
+            "reconnect_attempts": 0,
+            "total_reconnects": 0,
+            "next_retry_at": None,
+            "last_disconnect_reason": None,
             "last_error": self.last_error,
             "symbol": self.symbol,
             "futures_symbol": self.instrument.futures_continuous,
@@ -425,12 +457,25 @@ class DatabentoMarketDataService:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._switch_lock = asyncio.Lock()
+        self._event_loop: asyncio.AbstractEventLoop | None = None
         self._started = False
         self._generation = 0
         self._history_cache: dict[str, _MarketHistoryCache] = {}
         self._history_tasks: dict[str, asyncio.Task] = {}
         self._prewarm_task: asyncio.Task | None = None
+        self._watchdog_task: asyncio.Task | None = None
+        self._recovery_task: asyncio.Task | None = None
         self._live_overlay: dict[datetime, Candle] = {}
+        self._live_stop_event: threading.Event | None = None
+        self.stream_state = "STOPPED"
+        self.stream_started_at: datetime | None = None
+        self.stream_connected_at: datetime | None = None
+        self.last_record_at: datetime | None = None
+        self.last_candle_at: datetime | None = None
+        self.next_retry_at: datetime | None = None
+        self.last_disconnect_reason: str | None = None
+        self.reconnect_attempts = 0
+        self.total_reconnects = 0
 
     @property
     def symbol(self) -> str:
@@ -440,8 +485,13 @@ class DatabentoMarketDataService:
         if self._started:
             return
         self._started = True
+        self._event_loop = asyncio.get_running_loop()
         # The default market is fully loaded before the trade engine starts.
         await self._activate_profile(self.instrument, wait_for_history=True)
+        self._watchdog_task = asyncio.create_task(
+            self._live_watchdog_loop(),
+            name="databento-live-watchdog",
+        )
         if settings.databento_prewarm_markets:
             self._prewarm_task = asyncio.create_task(
                 self._prewarm_remaining_markets(),
@@ -449,17 +499,24 @@ class DatabentoMarketDataService:
             )
 
     async def stop(self) -> None:
+        self._started = False
         self._generation += 1
-        self._stop_live_client()
+        self._stop_live_client(wait=True)
         self.connected = False
+        self.stream_state = "STOPPED"
         tasks = list(self._history_tasks.values())
-        if self._prewarm_task:
-            tasks.append(self._prewarm_task)
+        for task in (self._prewarm_task, self._watchdog_task, self._recovery_task):
+            if task:
+                tasks.append(task)
         for task in tasks:
             if task and not task.done():
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._prewarm_task = None
+        self._watchdog_task = None
+        self._recovery_task = None
+        self._event_loop = None
 
     async def switch_symbol(self, symbol: str) -> dict:
         profile = get_instrument(symbol)
@@ -477,7 +534,7 @@ class DatabentoMarketDataService:
         self._remember_active_cache()
         self._generation += 1
         generation = self._generation
-        self._stop_live_client()
+        self._stop_live_client(wait=True)
 
         cache = self._history_cache.get(profile.symbol)
         cache_age = (datetime.now(timezone.utc) - cache.loaded_at).total_seconds() if cache else None
@@ -488,11 +545,20 @@ class DatabentoMarketDataService:
             self.raw_symbol = cache.raw_symbol if cache else None
             self.connected = False
             self.last_error = None
+            self.stream_state = "CONNECTING"
+            self.stream_started_at = None
+            self.stream_connected_at = None
+            self.last_record_at = None
+            self.last_candle_at = None
+            self.next_retry_at = None
+            self.last_disconnect_reason = None
+            self.reconnect_attempts = 0
             self._live_overlay = {}
             self.candles.clear()
             if cache:
                 self.candles.extend(candle.model_copy(deep=True) for candle in cache.candles[-self.max_candles:])
                 self.current_price = cache.current_price
+                self.last_candle_at = self.candles[-1].time if self.candles else None
                 self.history_cached = True
                 self.history_source = "databento-cache"
                 self.data_quality = "READY"
@@ -640,6 +706,7 @@ class DatabentoMarketDataService:
             self.candles.clear()
             self.candles.extend(values)
             self.current_price = values[-1].close
+            self.last_candle_at = values[-1].time
             self.history_cached = True
             self.history_source = "databento"
             self.data_quality = "READY"
@@ -652,7 +719,10 @@ class DatabentoMarketDataService:
                 loaded_at=datetime.now(timezone.utc),
             )
 
-    def _stop_live_client(self) -> None:
+    def _stop_live_client(self, wait: bool = False) -> None:
+        stop_event = self._live_stop_event
+        if stop_event is not None:
+            stop_event.set()
         client = self._live_client
         self._live_client = None
         if client is not None:
@@ -660,11 +730,28 @@ class DatabentoMarketDataService:
                 client.stop()
             except Exception:
                 logger.debug("Databento live stop failed", exc_info=True)
+        thread = self._thread
+        if (
+            wait
+            and thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=max(0.0, float(settings.databento_stop_join_seconds)))
+        if thread is not None and not thread.is_alive():
+            self._thread = None
+        self._live_stop_event = None
 
     def _start_live(self, profile: InstrumentProfile, generation: int) -> None:
+        stop_event = threading.Event()
+        self._live_stop_event = stop_event
+        with self._lock:
+            self.stream_state = "CONNECTING"
+            self.stream_started_at = datetime.now(timezone.utc)
+            self.next_retry_at = None
         self._thread = threading.Thread(
             target=self._run_live,
-            args=(profile, generation),
+            args=(profile, generation, stop_event),
             name=f"databento-{profile.symbol.lower()}-live",
             daemon=True,
         )
@@ -739,35 +826,269 @@ class DatabentoMarketDataService:
         ]
         return _sanitize_candles(loaded)
 
-    def _run_live(self, profile: InstrumentProfile, generation: int) -> None:
+    def _queue_gap_recovery(
+        self,
+        profile: InstrumentProfile,
+        generation: int,
+        reason: str,
+    ) -> None:
+        loop = self._event_loop
+        if loop is None or not loop.is_running():
+            return
+        loop.call_soon_threadsafe(
+            self._ensure_gap_recovery_task,
+            profile,
+            generation,
+            reason,
+        )
+
+    def _ensure_gap_recovery_task(
+        self,
+        profile: InstrumentProfile,
+        generation: int,
+        reason: str,
+    ) -> None:
+        if not self._started or generation != self._generation:
+            return
+        if self._recovery_task and not self._recovery_task.done():
+            return
+        self._recovery_task = asyncio.create_task(
+            self._recover_active_gap(profile, generation, reason),
+            name=f"databento-gap-recovery-{profile.symbol.lower()}",
+        )
+
+    async def _recover_active_gap(
+        self,
+        profile: InstrumentProfile,
+        generation: int,
+        reason: str,
+    ) -> None:
         try:
-            db = self._import_db()
-            client = db.Live(key=settings.databento_api_key, reconnect_policy="reconnect")
-            if generation != self._generation:
-                return
-            self._live_client = client
-            client.subscribe(
-                dataset=settings.databento_dataset,
-                schema="ohlcv-1s",
-                stype_in="continuous",
-                symbols=[profile.futures_continuous],
+            with self._lock:
+                if generation != self._generation or profile.symbol != self.instrument.symbol:
+                    return
+                start = (
+                    self.candles[-1].time - timedelta(minutes=2)
+                    if self.candles
+                    else datetime.now(timezone.utc) - timedelta(minutes=30)
+                )
+                self.warming = True
+                if self.data_quality == "READY":
+                    self.data_quality = "RECOVERING_GAP"
+            loaded = await asyncio.to_thread(self._load_history_since, profile, start)
+            self._merge_active_incremental_history(profile, loaded, generation)
+            logger.info(
+                "Recovered %s active history after %s (%d bars)",
+                profile.symbol,
+                reason,
+                len(loaded),
             )
-            client.add_callback(
-                lambda record: self._on_record(record, profile, generation),
-                lambda exc: self._on_callback_error(exc, generation),
-            )
-            self.connected = True
-            client.start()
-            client.block_for_close()
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            if generation == self._generation:
+            if generation == self._generation and profile.symbol == self.instrument.symbol:
+                with self._lock:
+                    self.last_error = f"Gap recovery failed: {exc}"
+                    self.data_quality = "RECOVERY_FAILED"
+                    self.warming = False
+            logger.exception("Databento gap recovery failed for %s", profile.symbol)
+
+    def _merge_active_incremental_history(
+        self,
+        profile: InstrumentProfile,
+        loaded: list[Candle],
+        generation: int,
+    ) -> None:
+        with self._lock:
+            if generation != self._generation or profile.symbol != self.instrument.symbol:
+                return
+            merged = {candle.time: candle.model_copy(deep=True) for candle in self.candles}
+            for candle in _sanitize_candles(loaded):
+                merged[candle.time] = candle.model_copy(deep=True)
+            for candle_time, candle in self._live_overlay.items():
+                merged[candle_time] = candle.model_copy(deep=True)
+            values = _sanitize_candles(
+                sorted(merged.values(), key=lambda candle: candle.time)
+            )[-self.max_candles:]
+            if values:
+                self.candles.clear()
+                self.candles.extend(values)
+                self.current_price = values[-1].close
+                self.last_candle_at = values[-1].time
+                self.history_cached = len(values) >= 50
+                self.history_source = "databento-recovered"
+                self.data_quality = "READY" if self.history_cached else "LIVE_ONLY"
+                self.warming = not self.history_cached
+                self._history_cache[profile.symbol] = _MarketHistoryCache(
+                    candles=[item.model_copy(deep=True) for item in values],
+                    current_price=self.current_price,
+                    raw_symbol=self.raw_symbol,
+                    loaded_at=datetime.now(timezone.utc),
+                )
+            else:
+                self.warming = False
+
+    async def _live_watchdog_loop(self) -> None:
+        interval = max(1, int(settings.databento_live_watchdog_seconds))
+        stale_after = max(interval * 2, int(settings.databento_live_stale_seconds))
+        while self._started:
+            await asyncio.sleep(interval)
+            if not self._started:
+                return
+            with self._lock:
+                generation = self._generation
+                profile = self.instrument
+                state = self.stream_state
+                connected = self.connected
+                reference = self.last_record_at or self.stream_connected_at or self.stream_started_at
+                thread_alive = bool(self._thread and self._thread.is_alive())
+            now = datetime.now(timezone.utc)
+            age = (now - reference).total_seconds() if reference else None
+
+            if not _cme_globex_expected_live(now):
+                continue
+            if (
+                state in {"CONNECTING", "RECONNECTING"}
+                and thread_alive
+                and (age is None or age <= stale_after)
+            ):
+                continue
+            if connected and age is not None and age <= stale_after:
+                continue
+
+            reason = (
+                f"No Databento records received for {age:.0f}s"
+                if age is not None and age > stale_after
+                else "Databento live worker stopped"
+            )
+            await self._restart_active_stream(profile, generation, reason)
+
+    async def _restart_active_stream(
+        self,
+        profile: InstrumentProfile,
+        observed_generation: int,
+        reason: str,
+    ) -> None:
+        async with self._switch_lock:
+            if (
+                not self._started
+                or observed_generation != self._generation
+                or profile.symbol != self.instrument.symbol
+            ):
+                return
+            with self._lock:
                 self.connected = False
-                self.last_error = str(exc)
-            logger.exception("Databento live %s stream stopped", profile.symbol)
+                self.stream_state = "STALE"
+                self.last_error = reason
+                self.last_disconnect_reason = reason
+            self._generation += 1
+            generation = self._generation
+            self._stop_live_client(wait=True)
+            with self._lock:
+                self.stream_state = "RECONNECTING"
+                self.next_retry_at = datetime.now(timezone.utc)
+                self.reconnect_attempts += 1
+                self.total_reconnects += 1
+            self._start_live(profile, generation)
+            self._ensure_gap_recovery_task(profile, generation, reason)
+
+    def _run_live(
+        self,
+        profile: InstrumentProfile,
+        generation: int,
+        stop_event: threading.Event,
+    ) -> None:
+        delay = max(0.25, float(settings.databento_reconnect_initial_seconds))
+        maximum_delay = max(delay, float(settings.databento_reconnect_max_seconds))
+        first_attempt = True
+
+        while (
+            self._started
+            and generation == self._generation
+            and not stop_event.is_set()
+        ):
+            client = None
+            try:
+                with self._lock:
+                    self.stream_state = "CONNECTING" if first_attempt else "RECONNECTING"
+                    self.connected = False
+                    self.stream_started_at = datetime.now(timezone.utc)
+                    self.next_retry_at = None
+                db = self._import_db()
+                client = db.Live(key=settings.databento_api_key, reconnect_policy="reconnect")
+                if generation != self._generation or stop_event.is_set():
+                    return
+                self._live_client = client
+                client.subscribe(
+                    dataset=settings.databento_dataset,
+                    schema="ohlcv-1s",
+                    stype_in="continuous",
+                    symbols=[profile.futures_continuous],
+                )
+                client.add_callback(
+                    lambda record: self._on_record(record, profile, generation),
+                    lambda exc: self._on_callback_error(exc, generation),
+                )
+                with self._lock:
+                    self.connected = True
+                    self.stream_state = "LIVE"
+                    self.stream_connected_at = datetime.now(timezone.utc)
+                    self.next_retry_at = None
+                    self.last_error = None
+                    if not first_attempt:
+                        self.total_reconnects += 1
+                if not first_attempt:
+                    self._queue_gap_recovery(profile, generation, "Databento stream reconnected")
+                client.start()
+                client.block_for_close()
+                if generation != self._generation or stop_event.is_set() or not self._started:
+                    break
+                raise RuntimeError("Databento live stream closed unexpectedly")
+            except Exception as exc:
+                if generation != self._generation or stop_event.is_set() or not self._started:
+                    break
+                reason = str(exc) or exc.__class__.__name__
+                retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+                with self._lock:
+                    self.connected = False
+                    self.stream_state = "RECONNECTING"
+                    self.last_error = reason
+                    self.last_disconnect_reason = reason
+                    self.reconnect_attempts += 1
+                    self.next_retry_at = retry_at
+                logger.exception(
+                    "Databento live %s stream stopped; retrying in %.1fs",
+                    profile.symbol,
+                    delay,
+                )
+                if stop_event.wait(delay):
+                    break
+                delay = min(maximum_delay, delay * 2)
+                first_attempt = False
+            finally:
+                if client is not None:
+                    try:
+                        client.stop()
+                    except Exception:
+                        logger.debug("Databento live cleanup failed", exc_info=True)
+                if self._live_client is client:
+                    self._live_client = None
+
+        if generation == self._generation:
+            with self._lock:
+                self.connected = False
+                if self._started and not stop_event.is_set():
+                    self.stream_state = "RECONNECTING"
+                else:
+                    self.stream_state = "STOPPED"
 
     def _on_callback_error(self, exc: Exception, generation: int) -> None:
         if generation == self._generation:
-            self.last_error = str(exc)
+            with self._lock:
+                self.last_error = str(exc)
+                self.last_disconnect_reason = str(exc)
+                if self.stream_state == "LIVE":
+                    self.stream_state = "DEGRADED"
 
     def _on_record(self, record: Any, profile: InstrumentProfile, generation: int) -> None:
         if generation != self._generation or profile.symbol != self.instrument.symbol:
@@ -837,12 +1158,21 @@ class DatabentoMarketDataService:
                 )
                 self.candles.append(candle)
 
+            now = datetime.now(timezone.utc)
             self._live_overlay[minute] = candle.model_copy(deep=True)
             self.current_price = candle.close
             self.connected = True
+            self.stream_state = "LIVE"
+            self.last_record_at = now
+            self.last_candle_at = candle.time
+            self.next_retry_at = None
+            self.reconnect_attempts = 0
             if not self.history_cached:
                 self.history_source = "live-pending-history"
                 self.data_quality = "LIVE_ONLY"
+            elif self.data_quality in {"STALE", "RECOVERING_GAP", "RECOVERY_FAILED"}:
+                self.data_quality = "READY"
+                self.warming = False
             self.last_error = None
 
     def latest_candle(self) -> Candle:
@@ -970,26 +1300,67 @@ class DatabentoMarketDataService:
         ]
 
     def health(self) -> dict:
-        cache = self._history_cache.get(self.instrument.symbol)
-        cache_age = (datetime.now(timezone.utc) - cache.loaded_at).total_seconds() if cache else None
-        return {
-            "mode": self.mode,
-            "data_source": self.data_source,
-            "connected": self.connected,
-            "last_error": self.last_error,
-            "symbol": self.instrument.symbol,
-            "futures_symbol": self.instrument.futures_continuous,
-            "raw_symbol": self.raw_symbol,
-            "candle_count": len(self.candles),
-            "warming": self.warming,
-            "history_cached": self.history_cached,
-            "history_ready": bool(self.history_cached and len(self.candles) >= 50),
-            "history_source": self.history_source,
-            "data_quality": self.data_quality,
-            "cache_age_seconds": round(cache_age, 1) if cache_age is not None else None,
-            "cached_symbols": sorted(self._history_cache),
-            "instrument": self.instrument.public_dict(),
-        }
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            cache = self._history_cache.get(self.instrument.symbol)
+            cache_age = (now - cache.loaded_at).total_seconds() if cache else None
+            last_record_at = self.last_record_at
+            last_candle_at = self.last_candle_at or (self.candles[-1].time if self.candles else None)
+            record_age = (now - last_record_at).total_seconds() if last_record_at else None
+            candle_age = (now - last_candle_at).total_seconds() if last_candle_at else None
+            stale_after = max(
+                int(settings.databento_live_stale_seconds),
+                int(settings.databento_live_watchdog_seconds) * 2,
+            )
+            market_expected_live = _cme_globex_expected_live(now)
+            stale = bool(
+                self._started
+                and market_expected_live
+                and self.stream_state in {"LIVE", "DEGRADED"}
+                and record_age is not None
+                and record_age > stale_after
+            )
+            market_closed = bool(
+                self._started
+                and not market_expected_live
+                and record_age is not None
+                and record_age > stale_after
+            )
+            stream_state = "STALE" if stale else "MARKET_CLOSED" if market_closed else self.stream_state
+            connected = bool(self.connected and not stale)
+            data_fresh = bool(connected and record_age is not None and record_age <= stale_after)
+            return {
+                "mode": self.mode,
+                "data_source": self.data_source,
+                "connected": connected,
+                "stream_state": stream_state,
+                "server_time": now,
+                "last_record_at": last_record_at,
+                "last_record_age_seconds": round(record_age, 1) if record_age is not None else None,
+                "last_candle_at": last_candle_at,
+                "last_candle_age_seconds": round(candle_age, 1) if candle_age is not None else None,
+                "data_fresh": data_fresh,
+                "stale_after_seconds": stale_after,
+                "market_expected_live": market_expected_live,
+                "reconnect_attempts": self.reconnect_attempts,
+                "total_reconnects": self.total_reconnects,
+                "next_retry_at": self.next_retry_at,
+                "last_disconnect_reason": self.last_disconnect_reason,
+                "last_error": self.last_error,
+                "symbol": self.instrument.symbol,
+                "futures_symbol": self.instrument.futures_continuous,
+                "raw_symbol": self.raw_symbol,
+                "candle_count": len(self.candles),
+                "warming": self.warming,
+                "history_cached": self.history_cached,
+                "history_ready": bool(self.history_cached and len(self.candles) >= 50),
+                "history_source": self.history_source,
+                "data_quality": "STALE" if stale else self.data_quality,
+                "cache_age_seconds": round(cache_age, 1) if cache_age is not None else None,
+                "cached_symbols": sorted(self._history_cache),
+                "instrument": self.instrument.public_dict(),
+            }
+
 
 
 market_data_service = DatabentoMarketDataService() if settings.use_databento else SimulatedMarketDataService()

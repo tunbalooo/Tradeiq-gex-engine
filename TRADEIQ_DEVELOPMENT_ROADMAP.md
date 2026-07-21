@@ -1,7 +1,7 @@
 # TradeIQ Development Roadmap
 
-**Product version:** 3.0.4-trade-desk-market-radar  
-**Document version:** 3.0.4  
+**Product version:** 3.0.5-self-healing-market-stream  
+**Document version:** 3.0.5  
 **Status:** Living roadmap
 
 ## Released
@@ -76,3 +76,15 @@
 - Broker order routing remains out of scope until simulation, replay and live paper testing are validated.
 - Claude remains read-only.
 - An inactive-market radar card never becomes an order without active-market deterministic confirmation.
+
+
+### v3.0.5 — Self-Healing Market Stream — Released
+
+- [x] Recreate the Databento client after unexpected closure.
+- [x] Detect silent/stale live streams with a backend watchdog.
+- [x] Respect CME maintenance and weekend closures.
+- [x] Backfill missing candles after reconnect.
+- [x] Add browser WebSocket heartbeat and bounded backoff.
+- [x] Prevent optional payload-component failures from closing `/ws/market`.
+- [x] Separate server status, feed status and data age in the header.
+- [x] Add regression coverage for stale detection, client recreation, gap merge and WebSocket isolation.

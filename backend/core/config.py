@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     databento_prewarm_markets: bool = True
     databento_prewarm_symbols: str = "NQ,ES,GC"
     databento_prewarm_delay_seconds: float = 0.5
+    # Live-feed recovery. The Databento client is recreated when the stream
+    # closes or stops producing records, then missing minute bars are backfilled.
+    databento_live_stale_seconds: int = 45
+    databento_live_watchdog_seconds: int = 5
+    databento_reconnect_initial_seconds: float = 2.0
+    databento_reconnect_max_seconds: float = 30.0
+    databento_stop_join_seconds: float = 2.0
 
     gex_refresh_seconds: int = 300
     gex_reprice_seconds: int = 30

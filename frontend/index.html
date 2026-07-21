@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=304" />
+<link rel="stylesheet" href="/static/styles.css?v=305" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -70,8 +70,9 @@
       <div class="mono g" id="hdrChg">—</div>
       <div class="live">
         <span class="m mono">Time <b id="clock">--:--:--</b></span>
-        <span class="mode-badge" id="modeLabel">CONNECTING</span>
-        <span class="dot" id="liveDot"></span><span class="g" id="connectionLabel">LIVE</span>
+        <span class="mode-badge sync" id="modeLabel">CONNECTING</span>
+        <span class="m mono feed-age" id="dataAgeLabel">DATA —</span>
+        <span class="dot" id="liveDot"></span><span class="g" id="connectionLabel">SERVER LIVE</span>
       </div>
       <button type="button" class="header-analyze" id="headerAnalyze" disabled>Analyze Now</button>
     </div>
@@ -517,7 +518,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=304"></script>
+<script src="/static/boot.js?v=305"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

@@ -1,6 +1,6 @@
 # TradeIQ UI/UX Specification
 
-**Version:** 3.0.4
+**Version:** 3.0.5
 
 ## Design Language
 
@@ -131,3 +131,14 @@ Selecting a card switches the active instrument. Alerts must say **setup forming
 ## Mobile behavior
 
 The existing bottom navigation remains the mobile control surface. Desktop tabs are hidden on small screens so the current mobile Setup/Claude/News pane system remains touch friendly and does not duplicate controls.
+
+
+## Connection and Feed Health (v3.0.5)
+
+The top bar must never combine browser/server connectivity with market-feed health. It displays three independent facts:
+
+- `SERVER LIVE` or `SERVER RECONNECTING` for the browser WebSocket.
+- `DATABENTO LIVE`, `SYNC`, `RECONNECTING`, `STALE`, `DEGRADED`, or `MARKET CLOSED` for the backend feed.
+- `DATA <age>` showing how long ago the latest live market record was received.
+
+A stale or reconnecting feed uses amber/red state styling while the last valid candles remain visible. Recovery must not reset the chart viewport. After the socket or feed returns, the client reloads the authoritative candle snapshot and preserves the user's symbol/timeframe view.

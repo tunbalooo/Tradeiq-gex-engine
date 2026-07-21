@@ -1,4 +1,4 @@
-# TradeIQ Institutional Trade Desk v3.0.4
+# TradeIQ Institutional Trade Desk v3.0.5
 
 
 ## v3.0.2 entry and chart stability
@@ -300,4 +300,31 @@ Current local verification target:
 
 ```text
 126 passed
+```
+
+
+## v3.0.5 Self-Healing Market Stream
+
+- Databento live connections now recreate themselves after unexpected closure.
+- A backend watchdog restarts silent streams during expected Globex trading hours.
+- Missing one-minute bars are backfilled and merged after a reconnect.
+- The normal CME 5–6 PM ET maintenance break and weekend closure are reported as `MARKET CLOSED` rather than a false stale-feed alarm.
+- The browser market socket now has a 12-second heartbeat watchdog, bounded reconnect backoff and automatic snapshot resynchronization.
+- A failure in GEX, radar, session, engine or dashboard metadata no longer closes the complete WebSocket payload loop.
+- The header now displays server connectivity, Databento state and market-data age separately.
+
+Optional overrides (the defaults require no new Railway variables):
+
+```env
+DATABENTO_LIVE_STALE_SECONDS=45
+DATABENTO_LIVE_WATCHDOG_SECONDS=5
+DATABENTO_RECONNECT_INITIAL_SECONDS=2
+DATABENTO_RECONNECT_MAX_SECONDS=30
+DATABENTO_STOP_JOIN_SECONDS=2
+```
+
+Current local verification target:
+
+```text
+132 passed
 ```

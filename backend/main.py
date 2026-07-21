@@ -3,10 +3,13 @@
 # Previous release: 2.6.0-persistent-setup-memory
 # TradeIQ v3.0 adds the deterministic Decision Brain, model ranking, management and analytics.
 import asyncio
+import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -19,6 +22,8 @@ from backend.services.market_data import market_data_service
 from backend.services.multi_market_monitor import multi_market_monitor_service
 from backend.services.session_service import get_session_status
 from backend.services.trade_engine import trade_engine_service
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -42,7 +47,8 @@ async def lifespan(app: FastAPI):
 # Legacy v3.0.1 API release: 3.0.1-chart-candle-hotfix
 # Legacy v3.0.2 API release: 3.0.2-entry-chart-stability
 # Legacy v3.0.3 API release: 3.0.3-fib-pullback-watch-execution
-app = FastAPI(title=settings.app_name, version="3.0.4-trade-desk-market-radar", lifespan=lifespan)
+# Legacy v3.0.4 API release: 3.0.4-trade-desk-market-radar
+app = FastAPI(title=settings.app_name, version="3.0.5-self-healing-market-stream", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
@@ -63,24 +69,73 @@ def service_worker():
 @app.websocket("/ws/market")
 async def market_websocket(websocket: WebSocket):
     await websocket.accept()
-    try:
-        while True:
-            setup = trade_engine_service.current_setup()
-            market = market_data_service.health()
-            candles = market_data_service.snapshot(limit=1)
+    heartbeat = 0
+    while True:
+        component_errors: list[str] = []
+
+        def safe_component(name: str, factory, default):
+            try:
+                return factory()
+            except Exception as exc:
+                component_errors.append(f"{name}: {exc}")
+                logger.exception("WebSocket component %s failed", name)
+                return default
+
+        try:
+            heartbeat += 1
+            setup = safe_component("setup", trade_engine_service.current_setup, None)
+            market = safe_component("market", market_data_service.health, {"connected": False, "stream_state": "ERROR"})
+            candles = safe_component("candle", lambda: market_data_service.snapshot(limit=1), [])
             payload = {
                 "type": "market_update",
+                "server": {
+                    "status": "LIVE",
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "heartbeat": heartbeat,
+                },
                 "candle": candles[-1].model_dump(mode="json") if candles else None,
                 "setup": setup.model_dump(mode="json") if setup else None,
-                "meta": build_dashboard_meta(setup).model_dump(mode="json") if setup else None,
+                "meta": safe_component(
+                    "dashboard_meta",
+                    lambda: build_dashboard_meta(setup).model_dump(mode="json") if setup else None,
+                    None,
+                ),
                 "market": market,
-                "gex_health": gex_service.health(),
-                "session": get_session_status(),
-                "engine": trade_engine_service.snapshot().model_dump(mode="json"),
-                "market_opportunities": [item.model_dump(mode="json") for item in multi_market_monitor_service.snapshot()],
-                "market_radar": multi_market_monitor_service.status(),
+                "gex_health": safe_component("gex", gex_service.health, {"status": "error"}),
+                "session": safe_component("session", get_session_status, None),
+                "engine": safe_component(
+                    "engine",
+                    lambda: trade_engine_service.snapshot().model_dump(mode="json"),
+                    None,
+                ),
+                "market_opportunities": safe_component(
+                    "market_opportunities",
+                    lambda: [item.model_dump(mode="json") for item in multi_market_monitor_service.snapshot()],
+                    [],
+                ),
+                "market_radar": safe_component("market_radar", multi_market_monitor_service.status, None),
+                "component_errors": component_errors,
             }
-            await websocket.send_json(payload)
+            await websocket.send_json(jsonable_encoder(payload))
             await asyncio.sleep(settings.update_interval_seconds)
-    except WebSocketDisconnect:
-        return
+        except WebSocketDisconnect:
+            return
+        except (RuntimeError, ConnectionError):
+            # The browser is gone or the ASGI socket is no longer writable.
+            return
+        except Exception:
+            # A payload component must never terminate the market stream. If an
+            # unexpected loop error occurs, keep the socket alive and retry.
+            logger.exception("Unexpected /ws/market loop error")
+            try:
+                await websocket.send_json({
+                    "type": "market_stream_error",
+                    "server": {
+                        "status": "DEGRADED",
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "heartbeat": heartbeat,
+                    },
+                })
+            except Exception:
+                return
+            await asyncio.sleep(max(1, settings.update_interval_seconds))

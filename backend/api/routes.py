@@ -34,7 +34,12 @@ def require_admin(x_admin_token: str | None = Header(default=None)):
 def health():
     market = market_data_service.health()
     engine = trade_engine_service.snapshot()
-    return {"status": "ok" if market.get("candle_count",0) else "degraded", "mode": market["mode"], "data_source": market["data_source"], "symbol": market.get("symbol"), "instrument": market.get("instrument"), "market": market, "gex": gex_service.health(), "session": get_session_status(), "engine": engine.model_dump(mode="json")}
+    healthy = bool(market.get("candle_count", 0)) and (
+        market.get("data_source") != "databento"
+        or market.get("data_fresh")
+        or market.get("stream_state") == "MARKET_CLOSED"
+    )
+    return {"status": "ok" if healthy else "degraded", "mode": market["mode"], "data_source": market["data_source"], "symbol": market.get("symbol"), "instrument": market.get("instrument"), "market": market, "gex": gex_service.health(), "session": get_session_status(), "engine": engine.model_dump(mode="json")}
 
 
 @router.get("/session")
@@ -115,6 +120,12 @@ def market_snapshot(timeframe: int = Query(1, ge=1, le=240), limit: int = Query(
         "history_source": health.get("history_source", market_data_service.data_source),
         "data_quality": health.get("data_quality", "READY"),
         "warming": health.get("warming", False),
+        "stream_state": health.get("stream_state"),
+        "data_fresh": health.get("data_fresh"),
+        "last_record_at": health.get("last_record_at"),
+        "last_record_age_seconds": health.get("last_record_age_seconds"),
+        "last_candle_at": health.get("last_candle_at"),
+        "last_candle_age_seconds": health.get("last_candle_age_seconds"),
         "candle_count": len(candles),
         "candles": candles,
     }
@@ -216,7 +227,7 @@ def backtest(request: BacktestRequest):
 @router.get("/settings")
 def read_settings():
     profile = instrument_registry.active
-    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "active_symbol": profile.symbol, "supported_symbols": ", ".join(item["symbol"] for item in instrument_registry.list_public()), "dataset": settings.databento_dataset, "futures_symbol": profile.futures_continuous, "options_parent": profile.options_parent, "gex_source": profile.gex_source_label, "tick_size": profile.tick_size, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "entry_model_min_score": settings.entry_model_min_score, "move_stop_to_breakeven_after_tp1": settings.move_stop_to_breakeven_after_tp1, "partial_exit_percent": settings.partial_exit_percent, "multi_market_alerts_enabled": settings.multi_market_alerts_enabled, "multi_market_symbols": settings.multi_market_symbols, "multi_market_scan_seconds": settings.multi_market_scan_seconds, "multi_market_history_refresh_seconds": settings.multi_market_history_refresh_seconds, "multi_market_max_data_age_seconds": settings.multi_market_max_data_age_seconds, "multi_market_min_model_score": settings.multi_market_min_model_score, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled, "finnhub_economic_calendar": finnhub_calendar_service.status()}
+    return {"data_provider": settings.data_provider, "simulated_mode": settings.simulated_mode, "active_symbol": profile.symbol, "supported_symbols": ", ".join(item["symbol"] for item in instrument_registry.list_public()), "dataset": settings.databento_dataset, "futures_symbol": profile.futures_continuous, "options_parent": profile.options_parent, "gex_source": profile.gex_source_label, "tick_size": profile.tick_size, "gex_refresh_seconds": settings.gex_refresh_seconds, "actionable_score": settings.setup_actionable_score, "expiry_minutes": settings.setup_expiry_minutes, "cluster_min_score": settings.cluster_min_score, "entry_model_min_score": settings.entry_model_min_score, "move_stop_to_breakeven_after_tp1": settings.move_stop_to_breakeven_after_tp1, "partial_exit_percent": settings.partial_exit_percent, "multi_market_alerts_enabled": settings.multi_market_alerts_enabled, "multi_market_symbols": settings.multi_market_symbols, "multi_market_scan_seconds": settings.multi_market_scan_seconds, "multi_market_history_refresh_seconds": settings.multi_market_history_refresh_seconds, "multi_market_max_data_age_seconds": settings.multi_market_max_data_age_seconds, "multi_market_min_model_score": settings.multi_market_min_model_score, "databento_live_stale_seconds": settings.databento_live_stale_seconds, "databento_live_watchdog_seconds": settings.databento_live_watchdog_seconds, "databento_reconnect_initial_seconds": settings.databento_reconnect_initial_seconds, "databento_reconnect_max_seconds": settings.databento_reconnect_max_seconds, "database": "postgresql/supabase" if settings.database_url.startswith(("postgres","postgresql")) else "sqlite", "admin_protected": not settings.allow_public_admin, "claude_analysis_enabled": claude_analysis_service.enabled, "claude_model": settings.anthropic_model, "finnhub_news_enabled": finnhub_news_service.enabled, "finnhub_economic_calendar": finnhub_calendar_service.status()}
 
 
 @router.get("/news")

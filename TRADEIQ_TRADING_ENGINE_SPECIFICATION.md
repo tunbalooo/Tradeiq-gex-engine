@@ -1,6 +1,6 @@
 # TradeIQ Trading Engine Specification
 
-**Version:** 3.0.4
+**Version:** 3.0.5
 
 ## Deterministic Pipeline
 
@@ -169,3 +169,12 @@ A radar candidate remains non-executable. When the trader opens the market, the 
 - Cached candles may be shown immediately for continuity, but the backend completes a deterministic engine pass before the symbol-switch API returns.
 - Browser-cached setup content is a temporary visual preview and is replaced by the selected market's authoritative backend response.
 - WebSocket updates are ignored during the critical switch window so the previous symbol cannot overwrite the new chart.
+
+
+## Market-Data Execution Safety (v3.0.5)
+
+- New watches, limit arming and lifecycle advancement must use a fresh active-market feed.
+- A stale Databento transport is reported independently from the browser WebSocket.
+- When the live stream reconnects, missing minute bars are backfilled before the chart and engine are treated as synchronized.
+- Replayed records are merged by minute and do not create retrospective watch touches, fills, stops or targets.
+- Feed recovery never changes an entry, stop, target, confidence score or setup state by itself; it only restores authoritative market observations for the deterministic engine.

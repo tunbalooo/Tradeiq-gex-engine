@@ -1,7 +1,7 @@
 # TradeIQ Master Specification
 
-**Product version:** 3.0.4-trade-desk-market-radar  
-**Document version:** 3.0.4  
+**Product version:** 3.0.5-self-healing-market-stream  
+**Document version:** 3.0.5  
 **Status:** Living source of truth
 
 ## 1. Product Purpose
@@ -33,7 +33,7 @@ Terminal alternatives:
 
 A `WATCHING → WATCHING` event records a deterministic switch to a stronger secondary entry model.
 
-## 4. Implemented v3.0–v3.0.4 Modules
+## 4. Implemented v3.0–v3.0.5 Modules
 
 - Live/historical market data service.
 - GEX service with snapshot-stable dealer levels.
@@ -91,6 +91,19 @@ A `WATCHING → WATCHING` event records a deterministic switch to a stronger sec
 - Inactive-market alerts are labeled **setup forming**, not executable trades. Opening the market is required before the active engine can validate current GEX, confirmation, entry and risk.
 - Radar alerts are recorded in TradeIQ Alerts and can also use browser desktop notifications after explicit permission.
 - Databento inactive-market refreshes use incremental one-minute history updates instead of repeatedly downloading the complete history window.
+
+
+### Self-healing market transport (v3.0.5)
+
+- The Databento live worker recreates the client after an unexpected close instead of terminating permanently.
+- A backend watchdog detects a connected stream that has stopped producing records and restarts the active subscription.
+- Watchdog recovery is suppressed during the normal CME 5–6 PM ET maintenance break and weekend closure.
+- Reconnection performs an incremental historical backfill and merges missing minute bars with verified live overlay bars.
+- Instrument switches stop and briefly join the prior live worker before the replacement subscription starts, reducing overlapping clients.
+- Market health separately records stream state, data freshness, last record/candle time, retry timing, reconnect counts and the exact disconnect reason.
+- The browser WebSocket has a heartbeat watchdog, bounded exponential reconnect and authoritative snapshot resynchronization after recovery.
+- WebSocket payload components are isolated: a Claude, GEX, radar or metadata error cannot silently terminate the market update channel.
+- The header distinguishes server connectivity from Databento feed health and displays market-data age.
 
 ## 5. Entry Models
 

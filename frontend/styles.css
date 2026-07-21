@@ -474,3 +474,11 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 @media(max-width:900px){
   .trade-desk-head,.trade-desk-tabs,.market-radar-panel{display:none!important}
 }
+
+/* TradeIQ v3.0.5 — truthful server/feed health */
+.mode-badge.live{border-color:var(--green);color:var(--green);background:rgba(38,208,124,.06)}
+.mode-badge.sync,.mode-badge.reconnecting{border-color:var(--amber);color:var(--amber);background:rgba(245,185,59,.06)}
+.mode-badge.stale,.mode-badge.error{border-color:var(--red);color:var(--red);background:rgba(255,77,94,.07)}
+.feed-age{padding:2px 5px;border:1px solid var(--line2);border-radius:4px;color:var(--muted);white-space:nowrap}
+.feed-age.stale{border-color:rgba(255,77,94,.45);color:var(--red)}
+@media(max-width:900px){.live .feed-age{display:none}}
