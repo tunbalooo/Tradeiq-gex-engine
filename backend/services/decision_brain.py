@@ -183,6 +183,8 @@ class DecisionBrainService:
                 tp2=setup.take_profit_2,
                 tp2_r=setup.tp2_r,
                 composite_score=cluster["score"],
+                stop_loss=setup.stop_loss,
+                source_model_key=single_primary.key if composite else primary.key,
             )
             if composite and execution.freshness_score < minimum_freshness:
                 cluster_quality_missing.append(

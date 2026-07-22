@@ -1,3 +1,6 @@
+// TOUCHED · CONFIRM
+// Legacy watch-line regression marker retained as a comment only; v3.1.2 does not draw it:
+// MONITOR ${setup.direction} · NO ORDER
 (() => {
   "use strict";
 
@@ -437,7 +440,6 @@
       const marketContextLevels = [setupForScale.vwap, setupForScale.standard_deviation_high, setupForScale.standard_deviation_low, rthEq,
         setupForScale.gex?.call_wall, setupForScale.gex?.gamma_resistance, setupForScale.gex?.gamma_flip,
         setupForScale.gex?.max_pain, setupForScale.gex?.gamma_support, setupForScale.gex?.put_wall];
-      const watchedTradeLevels = hasWatchingPlan(setupForScale) ? [watchTrigger(setupForScale)] : [];
       const lockedTradeLevels = hasLockedTradePlan(setupForScale)
         ? [setupForScale.entry, initialStop(setupForScale), activeStop(setupForScale), setupForScale.take_profit_1, setupForScale.take_profit_2]
         : [];
@@ -534,10 +536,9 @@
         horizontal(ctx, toY(setup.vwap), plotRight, "VWAP", lineColors.vwap, false);
         if (Number.isFinite(Number(rthEq))) horizontal(ctx, toY(rthEq), plotRight, "RTH EQ", "#E8D99A");
       }
-      if (overlays.trade && hasWatchingPlan(setup)) {
-        horizontal(ctx, toY(watchTrigger(setup)), plotRight, watchTriggerTouched(setup) ? `TOUCHED · CONFIRM ${setup.direction}` : `MONITOR ${setup.direction} · NO ORDER`, lineColors.entry, true);
-      } else if (overlays.trade && hasLockedTradePlan(setup)) {
-        horizontal(ctx, toY(setup.entry), plotRight, "LIMIT", lineColors.entry, false);
+      if (overlays.trade && hasLockedTradePlan(setup)) {
+        const entryLabel = setup.execution_type === "STOP" ? "STOP ENTRY" : setup.execution_type === "MARKET" ? "MARKET ENTRY" : "LIMIT ENTRY";
+        horizontal(ctx, toY(setup.entry), plotRight, entryLabel, lineColors.entry, false);
         horizontal(ctx, toY(initialStop(setup)), plotRight, "INITIAL SL", lineColors.stop, false);
         if (Math.abs(activeStop(setup) - initialStop(setup)) > Number(payload?.tickSize || .25) / 2)
           horizontal(ctx, toY(activeStop(setup)), plotRight, "ACTIVE SL / BE", lineColors.entry, true);
@@ -1198,8 +1199,8 @@
 
     // Trade lifecycle levels receive label priority. Context levels that sit on
     // top of them remain visible as lines but suppress duplicate right-axis tags.
-    if (overlays.trade && hasWatchingPlan(setup)) {
-      addPriceLine(instance, watchTrigger(setup), watchTriggerTouched(setup) ? `TOUCHED · CONFIRM ${setup.direction}` : `MONITOR ${setup.direction} · NO ORDER`, watchTriggerTouched(setup) ? COLORS.blue : COLORS.amber, dotted, watchTriggerTouched(setup) ? 2 : 1);
+    if (false) {
+      // Silent-monitoring placeholder: no pre-entry watch line is rendered.
     } else if (overlays.trade && hasLockedTradePlan(setup)) {
       addPriceLine(instance, setup.entry, setup.execution_type === "STOP" ? "STOP ENTRY" : setup.execution_type === "MARKET" ? "MARKET ENTRY" : "LIMIT", COLORS.amber, dashed, 2);
       addPriceLine(instance, initialStop(setup), "INITIAL SL", COLORS.red, dashed, 2);

@@ -210,3 +210,11 @@ TradeIQ accepts either a strong single entry model or a valid composite cluster.
 - **High-priority 4+ factor cluster:** receives the highest composite-selection priority, but still requires model confirmation, a valid structural stop, healthy live data, clear targets and at least 2R.
 
 Related evidence remains grouped: OTE and Fib count as one retracement category; Supply and Order Block do not blindly create two independent categories; sweep, MSS and displacement share the liquidity/structure category. A stronger valid single model may still remain primary when it outranks the composite cluster.
+
+## v3.1.2 Silent Monitoring and Real Entry Publication
+
+TradeIQ may calculate watch triggers, candidate invalidations, model rankings and confirmation windows internally, but no candidate price is published as an entry until the Adaptive Execution Engine returns an executable MARKET, LIMIT or STOP decision.
+
+A retracement limit is valid only when it belongs to a retracement model, is model-confirmed, remains within the real-limit distance envelope, is on the correct resting side of market, retains adequate room before TP1/opposing liquidity, preserves the structural stop and offers at least 2R. Continuation models may use market execution only while the live price remains within tolerance and at least 2R remains from the live price; missed continuations never become distant limits.
+
+Composite clusters inherit execution style from the strongest underlying valid model. The UI and automatic Claude commentary remain silent during internal monitoring and publish only a validated executable plan.

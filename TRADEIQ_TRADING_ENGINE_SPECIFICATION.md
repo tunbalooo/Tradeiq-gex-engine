@@ -217,3 +217,31 @@ The Decision Brain evaluates six independent categories: GEX, zone, retracement,
 A cluster's visible score combines active-category quality, total weighted evidence, breadth and spatial overlap. A separate transparent selection bonus compares the composite interpretation with the strongest individual model. The engine evaluates both paths: when the preferred cluster fails its stricter quality gate but the strongest single model remains valid, TradeIQ executes the single model rather than discarding the trade.
 
 Two-factor clusters cannot trade from touch alone. They require at least one model-native confirmation plus enough additional price-action confirmation, or two independently confirmed entry models. All clusters remain subject to target-not-blocked, minimum 2R, freshness, entry validity, structural invalidation and live-data health gates.
+
+## v3.1.2 Real Entry Routing Contract
+
+### Internal monitoring
+
+`WATCHING` remains an internal lifecycle state. The engine may retain a trigger, invalidation and confirmation deadline for deterministic evaluation, but these values are not trader-facing entries.
+
+### Retracement limit gate
+
+A LIMIT may arm only when:
+
+- the source model is OTE, supply/demand, Fib pullback, FVG, order block, EMA pullback or inverse FVG;
+- model-native confirmation is complete;
+- the entry is a valid resting price on the correct side of current market;
+- distance is no more than `max(0.70 × ATR, 24 ticks)`;
+- execution freshness is at least 25%;
+- TP1/opposing liquidity has at least `max(0.45 × ATR, 12 ticks)` room from entry;
+- target-not-blocked and minimum 2R gates pass.
+
+### Fast continuation gate
+
+Liquidity sweep/MSS, Gamma Flip reclaim, VWAP reclaim, trend continuation and SMT continuation may execute at MARKET only when distance from ideal entry is no more than `max(0.22 × ATR, 8 ticks)` and at least 2R remains from the live price to TP2 using the structural stop.
+
+### Stop gate
+
+Break-and-retest uses STOP only when the trigger is in front of current price and no farther than `max(0.35 × ATR, 12 ticks)`.
+
+A continuation that has left tolerance returns `NONE`; it must not fall back to a distant LIMIT.

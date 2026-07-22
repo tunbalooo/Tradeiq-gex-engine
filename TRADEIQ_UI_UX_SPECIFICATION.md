@@ -183,3 +183,9 @@ The Setup card, Trade Desk rail and Confluence page display the composite tier e
 - `HIGH-PRIORITY 4-FACTOR CLUSTER` or the actual larger category count
 
 The interface also displays the composite score and independent active categories. When a cluster is recognized but its stricter execution-quality gate is incomplete, the explanation states that TradeIQ selected the valid stronger single model instead. Cluster eligibility never implies that an order was filled.
+
+## v3.1.2 Silent Pre-Entry Interface
+
+Before a plan is locked, desktop and mobile display `SCANNING QUIETLY` and no entry, stop, targets, direction, grade, cluster price or developing model ranking. Internal watch triggers are not drawn and do not affect chart autoscaling. Market Radar displays `SCANNING` without a candidate watch price.
+
+After an executable plan is locked, the interface publishes only the exact MARKET, LIMIT or STOP entry, structural stop, TP1, TP2, risk/reward, model and confluence explanation. Automatic Claude analysis starts only for published or previously armed lifecycles; manual Analyze remains available.

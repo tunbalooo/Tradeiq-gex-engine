@@ -149,3 +149,14 @@
 - [x] Fall back to a valid single model when a preferred cluster fails its stricter quality gate.
 - [x] Expose cluster tier and active independent categories to the UI and API.
 - [x] Add regression coverage for two-, three- and four-plus-factor behavior.
+
+## Released — v3.1.2
+
+- [x] Hide watch/monitor prices from desktop and mobile charts.
+- [x] Keep developing direction, confidence and model ranking private until entry publication.
+- [x] Add nearby real-limit distance and freshness gates.
+- [x] Reject limits too close to TP1/opposing liquidity.
+- [x] Prevent continuation models from falling back to distant limits.
+- [x] Route composite clusters through the strongest underlying model family.
+- [x] Delay automatic Claude commentary until a real plan is published.
+- [x] Add regression coverage for silent UI, real limits, fast continuation and cluster execution inheritance.

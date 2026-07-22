@@ -334,14 +334,15 @@ Current local verification target:
 
 TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.
 
-## Current release: v3.1.1
+## Current release: v3.1.2
 
-TradeIQ supports strong single-model execution and flexible institutional cluster tiers:
+TradeIQ now keeps developing setups private and publishes only a validated executable plan:
 
-- exceptional 2-factor clusters with strict confirmation/confidence/freshness gates;
-- standard 3-factor clusters;
-- high-priority 4+ factor clusters;
-- adaptive MARKET, LIMIT, STOP or NO ENTRY execution;
-- fallback to a valid single model when a composite cluster is recognized but not executable.
+- no watch/monitor price line on desktop or mobile;
+- retracement limits must be nearby, fresh, on the correct side of market and clear of opposing liquidity;
+- continuation models use fast market execution only while the live price remains fresh;
+- breakout models use a nearby stop trigger;
+- missed continuation moves are never converted into distant resting limits;
+- automatic Claude commentary begins only after a real entry is published.
 
-See `TRADEIQ_V3.1.1_RELEASE_NOTES.md` for the release contract.
+See `TRADEIQ_V3.1.2_RELEASE_NOTES.md` for the release contract.
