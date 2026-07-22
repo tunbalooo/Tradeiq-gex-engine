@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     event_sequence_max_bars: int = 4
     event_max_age_bars: int = 12
     entry_model_min_score: float = 55.0
+
+    # Institutional market-map clustering. Raw GEX, zone, retracement, value and
+    # liquidity references are grouped into a small ranked ladder so clean mode
+    # can show the important locations without covering the chart in lines.
+    market_map_enabled: bool = True
+    market_map_cluster_tolerance_atr: float = 0.18
+    market_map_cluster_tolerance_ticks: int = 8
+    market_map_min_display_score: float = 62.0
+    market_map_min_actionable_score: float = 72.0
+    market_map_approach_atr: float = 0.70
+    market_map_max_ladder_clusters: int = 7
     move_stop_to_breakeven_after_tp1: bool = True
     partial_exit_percent: float = 50.0
 

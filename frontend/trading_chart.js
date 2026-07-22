@@ -1190,6 +1190,45 @@
     return deduped.slice(0, 3);
   }
 
+  function marketMapColor(cluster, opposing = false) {
+    if (opposing) return COLORS.blue;
+    return cluster?.role === "SUPPORT" ? COLORS.green : COLORS.red;
+  }
+
+  function marketMapTitle(cluster, prefix = "") {
+    if (!cluster) return "";
+    const tier = String(cluster.tier || "CLUSTER").replaceAll("_", " ");
+    const state = String(cluster.state || "").replaceAll("_", " ");
+    const lead = prefix ? `${prefix} · ` : "";
+    return `${lead}${tier} ${cluster.role} · ${Number(cluster.score || 0).toFixed(0)}%${state ? ` · ${state}` : ""}`;
+  }
+
+  function renderCleanMarketMapLines(instance, setup) {
+    const map = setup?.market_map;
+    if (!map) return false;
+    const chosen = [];
+    const add = (cluster, prefix, opposing = false) => {
+      if (!cluster || chosen.some((item) => item.cluster_id === cluster.cluster_id)) return;
+      chosen.push(cluster);
+      addPriceLine(
+        instance,
+        cluster.midpoint,
+        marketMapTitle(cluster, prefix),
+        marketMapColor(cluster, opposing),
+        opposing ? dotted : dashed,
+        opposing ? 1 : 2,
+        true,
+      );
+    };
+    add(map.active_cluster, "ACTIVE CLUSTER", false);
+    add(map.opposing_cluster, "OPPOSING LIQUIDITY", true);
+    if (!map.active_cluster) {
+      add(map.nearest_resistance, "NEAREST RESISTANCE", true);
+      add(map.nearest_support, "NEAREST SUPPORT", true);
+    }
+    return chosen.length > 0;
+  }
+
   function rebuildPriceLines(instance) {
     clearSystemPriceLines(instance);
     const setup = instance.setup;
@@ -1209,6 +1248,10 @@
       addPriceLine(instance, setup.take_profit_1, "TP1", COLORS.green, dashed, 2);
       addPriceLine(instance, setup.take_profit_2, "TP2", COLORS.green, dashed, 2);
     }
+
+    const marketMapVisible = cleanMode && setup.market_map
+      && (overlays.gex || overlays.fib || overlays.zones || overlays.vwap);
+    if (marketMapVisible && renderCleanMarketMapLines(instance, setup)) return;
 
     if (overlays.gex && setup.gex) {
       addPriceLine(instance, setup.gex.call_wall, "GAMMA RES / CALL WALL", COLORS.blue, dashed, 2);
@@ -1293,8 +1336,34 @@
     if (!setup) return;
     const chartWidth = Math.max(0, width - 77);
     const coordinate = (price) => instance.candleSeries.priceToCoordinate(Number(price));
+    const marketMapVisible = cleanMode && setup.market_map
+      && (overlays.gex || overlays.fib || overlays.zones || overlays.vwap);
 
-    if (overlays.gex && setup.gex) {
+    if (marketMapVisible) {
+      const clusters = [];
+      const addCluster = (cluster, opposing = false) => {
+        if (!cluster || clusters.some((item) => item.cluster.cluster_id === cluster.cluster_id)) return;
+        clusters.push({ cluster, opposing });
+      };
+      addCluster(setup.market_map.active_cluster, false);
+      addCluster(setup.market_map.opposing_cluster, true);
+      if (!setup.market_map.active_cluster) {
+        addCluster(setup.market_map.nearest_support, true);
+        addCluster(setup.market_map.nearest_resistance, true);
+      }
+      clusters.forEach(({ cluster, opposing }) => {
+        const top = coordinate(cluster.high);
+        const bottom = coordinate(cluster.low);
+        if (top == null || bottom == null) return;
+        const support = cluster.role === "SUPPORT";
+        ctx.fillStyle = opposing
+          ? "rgba(72,163,255,.045)"
+          : support ? "rgba(38,208,124,.070)" : "rgba(255,77,94,.070)";
+        ctx.fillRect(0, Math.min(top, bottom), chartWidth, Math.max(1, Math.abs(bottom - top)));
+      });
+    }
+
+    if (!marketMapVisible && overlays.gex && setup.gex) {
       const half = Math.max(Number(instance.tickSize || .25) * 3, Number(setup.atr || 0) * .08);
       [
         [setup.gex.call_wall, "rgba(72,163,255,.10)"],
@@ -1310,7 +1379,7 @@
       });
     }
 
-    if (overlays.zones) {
+    if (!marketMapVisible && overlays.zones) {
       const zones = cleanMode ? cleanPriorityZones(instance, setup) : (setup.zones || []).slice(0, instance.id === "chartLarge" ? 9 : 5);
       zones.forEach((zone) => {
         const top = coordinate(zone.high);
@@ -1323,7 +1392,7 @@
       });
     }
 
-    if (overlays.fib) {
+    if (!marketMapVisible && overlays.fib) {
       const fibContinuation = setup.primary_entry_model_key === "FIB_PULLBACK_CONTINUATION";
       const fibPrices = fibContinuation
         ? [setup.signals?.fib_pullback_zone_low, setup.signals?.fib_pullback_zone_high]

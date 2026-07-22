@@ -189,3 +189,8 @@ The interface also displays the composite score and independent active categorie
 Before a plan is locked, desktop and mobile display `SCANNING QUIETLY` and no entry, stop, targets, direction, grade, cluster price or developing model ranking. Internal watch triggers are not drawn and do not affect chart autoscaling. Market Radar displays `SCANNING` without a candidate watch price.
 
 After an executable plan is locked, the interface publishes only the exact MARKET, LIMIT or STOP entry, structural stop, TP1, TP2, risk/reward, model and confluence explanation. Automatic Claude analysis starts only for published or previously armed lifecycles; manual Analyze remains available.
+
+## v3.1.3 Clean Institutional Map
+
+Clean chart mode replaces the raw GEX/Fib/zone/VWAP line stack with the active actionable cluster and nearest opposing liquidity. When no cluster is actionable, only nearest support and resistance are shown. Cluster bands remain contextual and must not use entry language. The Confluence page may show the full compact ladder and contributors. Locked MARKET/LIMIT/STOP, SL, TP1 and TP2 retain visual priority.
+

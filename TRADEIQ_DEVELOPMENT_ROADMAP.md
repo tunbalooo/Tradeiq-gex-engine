@@ -160,3 +160,14 @@
 - [x] Route composite clusters through the strongest underlying model family.
 - [x] Delay automatic Claude commentary until a real plan is published.
 - [x] Add regression coverage for silent UI, real limits, fast continuation and cluster execution inheritance.
+
+## Released — v3.1.3
+
+- [x] Group GEX, supply/demand, OTE/Fib, value and liquidity into ranked clusters.
+- [x] Add 4H zone context to the map.
+- [x] Classify approach, test, rejection and acceptance behavior.
+- [x] Add active/opposing cluster fields and a compact level ladder.
+- [x] Use opposing clusters as deterministic target/barrier candidates.
+- [x] Replace clean-mode line clutter with map overlays.
+- [x] Add `/api/market-map`, Claude context and regression coverage.
+

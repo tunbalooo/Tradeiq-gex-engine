@@ -36,11 +36,11 @@
 
     // Time handling is loaded first so the chart, setup history and alerts use
     // the same browser-detected zone and legacy UTC normalization rules.
-    await loadScript("/static/time.js?v=312");
+    await loadScript("/static/time.js?v=313");
     // trading_chart.js includes a Canvas fallback, so TradeIQ still displays
     // candles if both external chart-library mirrors are unavailable.
-    await loadScript("/static/trading_chart.js?v=312");
-    await loadScript("/static/app.js?v=312");
+    await loadScript("/static/trading_chart.js?v=313");
+    await loadScript("/static/app.js?v=313");
   }
 
   boot().catch((error) => {

@@ -218,3 +218,8 @@ TradeIQ may calculate watch triggers, candidate invalidations, model rankings an
 A retracement limit is valid only when it belongs to a retracement model, is model-confirmed, remains within the real-limit distance envelope, is on the correct resting side of market, retains adequate room before TP1/opposing liquidity, preserves the structural stop and offers at least 2R. Continuation models may use market execution only while the live price remains within tolerance and at least 2R remains from the live price; missed continuations never become distant limits.
 
 Composite clusters inherit execution style from the strongest underlying valid model. The UI and automatic Claude commentary remain silent during internal monitoring and publish only a validated executable plan.
+
+## 12. Institutional Market Map (v3.1.3)
+
+TradeIQ groups nearby GEX, zone, retracement, value and liquidity references into ranked support/resistance clusters. The map publishes a compact ladder, active actionable location, nearest support, nearest resistance and nearest opposing liquidity. Cluster state is `APPROACHING`, `TESTING`, `REJECTING`, `ACCEPTING` or `DISTANT`. A map cluster is context only and cannot bypass model-native confirmation, confidence, target-path, stop, freshness or minimum-2R gates.
+

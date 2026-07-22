@@ -334,15 +334,15 @@ Current local verification target:
 
 TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.
 
-## Current release: v3.1.2
+## Current release: v3.1.3
 
-TradeIQ now keeps developing setups private and publishes only a validated executable plan:
+TradeIQ now builds a ranked institutional market map from GEX, supply/demand, OTE/Fib, VWAP/value and liquidity references:
 
-- no watch/monitor price line on desktop or mobile;
-- retracement limits must be nearby, fresh, on the correct side of market and clear of opposing liquidity;
-- continuation models use fast market execution only while the live price remains fresh;
-- breakout models use a nearby stop trigger;
-- missed continuation moves are never converted into distant resting limits;
-- automatic Claude commentary begins only after a real entry is published.
+- nearby references are grouped into independent-evidence support/resistance clusters;
+- each cluster is classified as approaching, testing, rejecting, accepting or distant;
+- clean mode shows the actionable cluster and nearest opposing liquidity instead of every raw line;
+- opposing clusters participate in target and near-liquidity safety checks;
+- cluster location never bypasses model confirmation, execution freshness, structural stop or minimum-R gates;
+- silent pre-entry publication from v3.1.2 remains unchanged.
 
-See `TRADEIQ_V3.1.2_RELEASE_NOTES.md` for the release contract.
+See `TRADEIQ_V3.1.3_RELEASE_NOTES.md` for the release contract.

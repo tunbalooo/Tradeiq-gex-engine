@@ -51,6 +51,7 @@ State rules:
 - Fallback GEX is an estimate. Fallback or simulated GEX is a reliability limitation only; it does not independently block order arming.
 - Never say an order must wait for GEX to become live unless the supplied deterministic engine state explicitly requires it.
 - The session gate and supplied actionable/order_state fields control execution permission.
+- setup.market_map is location context only. Explain active/opposing clusters when relevant, but never treat a cluster touch as an entry unless the deterministic model and execution fields are already actionable.
 
 Do not repeat entry, stop, TP1, or TP2 in PREVIEW_ONLY or WATCHING. You MAY repeat them in WAITING_FOR_LIMIT, FILLED,
 or TP1_HIT because the user wants a lifecycle explanation of the full locked plan.

@@ -1,3 +1,4 @@
+// Previous cache: tradeiq-v3.1.2-silent-real-entry-routing-shell
 // Previous cache: tradeiq-v3.1.1-flexible-cluster-tiers-shell
 // Previous cache: tradeiq-v3.0.9-chart-pipeline-integrity-shell
 // Previous release declaration: const CACHE_NAME = "tradeiq-v3.0.8-connection-gex-resilience-shell";
@@ -30,14 +31,16 @@
 // TradeIQ v3.1.0: adaptive market/limit/stop execution and institutional confluence clusters.
 // TradeIQ v3.1.1: flexible exceptional 2-factor, standard 3-factor and high-priority 4+ clusters.
 // TradeIQ v3.1.2: silent monitoring, nearby real limits and fast continuation execution.
-const CACHE_NAME = "tradeiq-v3.1.2-silent-real-entry-routing-shell";
+// Previous v3.1.2 asset query: ?v=312
+// TradeIQ v3.1.3: ranked institutional market map and compact clean-chart ladder.
+const CACHE_NAME = "tradeiq-v3.1.3-institutional-market-map-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=312",
-  "/static/boot.js?v=312",
-  "/static/time.js?v=312",
-  "/static/app.js?v=312",
-  "/static/trading_chart.js?v=312",
+  "/static/styles.css?v=313",
+  "/static/boot.js?v=313",
+  "/static/time.js?v=313",
+  "/static/app.js?v=313",
+  "/static/trading_chart.js?v=313",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",

@@ -969,7 +969,16 @@ function clusterTierName(setup) {
   return "INSTITUTIONAL CLUSTER";
 }
 
+function marketMapClusterText(cluster) {
+  if (!cluster) return "—";
+  const tier = String(cluster.tier || "CONTEXT").replaceAll("_", " ");
+  const stateName = String(cluster.state || "DISTANT").replaceAll("_", " ");
+  return `${tier} ${cluster.role} · ${Number(cluster.score || 0).toFixed(0)}% · ${stateName}`;
+}
+
 function clusterDisplay(setup) {
+  const activeMap = setup?.market_map?.active_cluster;
+  if (activeMap) return marketMapClusterText(activeMap);
   if (setup?.composite_cluster_eligible) {
     return `${clusterTierName(setup)} · ${Number(setup.composite_cluster_score || 0).toFixed(0)}%`;
   }
@@ -1033,7 +1042,7 @@ function renderTradeSetup(setup) {
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
   $("setupCluster").textContent = lockedPlan ? clusterDisplay(setup) : "—";
-  $("setupCluster").className = `v ${setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
+  $("setupCluster").className = `v ${setup.market_map?.active_cluster?.actionable_location || setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
   $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : lockedPlan ? "Valid Until" : "Entry State";
@@ -1092,7 +1101,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupStatus").textContent = statusText;
   $("chartSetupStatus").className = setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a";
   $("chartSetupCluster").textContent = lockedPlan ? clusterDisplay(setup) : "—";
-  $("chartSetupCluster").className = setup.signals.gex_ote_zone_cluster ? "g" : "a";
+  $("chartSetupCluster").className = setup.market_map?.active_cluster?.actionable_location || setup.signals.gex_ote_zone_cluster ? "g" : "a";
   renderModelRanking(setup, "chartModelRanking");
   $("chartSetupSession").textContent = state.session?.display_name || "—";
   $("chartSetupSession").className = marketClosed ? "r" : "g";
@@ -1957,7 +1966,16 @@ function renderConfluencePage(setup) {
   const activeClusterCategories = Array.isArray(setup.composite_cluster_active_categories)
     ? setup.composite_cluster_active_categories.map((item) => String(item).replaceAll("_", " ")).join(" · ")
     : "—";
-  $("clusterCard").innerHTML = `<div class="cluster-box page-kv">${pageRow("Institutional grade",setup.confidence_grade || "—",Number(setup.confidence)>=85?'g':Number(setup.confidence)>=70?'a':'r')}${pageRow("Primary model",setup.primary_entry_model || "—",'b')}${pageRow("Model score",`${Number(setup.primary_model_score||0).toFixed(1)}%`)}${pageRow("Backup models",(setup.alternative_entry_models||[]).slice(0,3).join(" · ")||"—")}${pageRow("Composite tier",setup.composite_cluster_eligible?clusterTierName(setup):"Not selected",setup.composite_cluster_eligible?'g':'a')}${pageRow("Composite score",`${Number(setup.composite_cluster_score||0).toFixed(1)}%`,setup.composite_cluster_eligible?'g':'a')}${pageRow("Independent categories",activeClusterCategories)}${pageRow("Spatial cluster",`${Math.round(Number(setup.cluster_score||0)*100)}%`,setup.cluster_score>=.65?'g':'a')}${pageRow("Cluster range",setup.cluster_low!=null?`${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)}`:'—')}${pageRow("GEX level",fmt(setup.cluster_gex_level))}${pageRow("GEX type",setup.cluster_gex_type||'—')}${pageRow("Zone timeframe",setup.selected_zone_timeframe||'—')}${pageRow("Ordered sequence",setup.signals?.ordered_sequence?'Confirmed':'Not confirmed',setup.signals?.ordered_sequence?'g':'a')}</div>`;
+  const activeMap = setup.market_map?.active_cluster;
+  const opposingMap = setup.market_map?.opposing_cluster;
+  const ladder = Array.isArray(setup.market_map?.ladder) ? setup.market_map.ladder : [];
+  const mapRows = ladder.length ? `<div class="market-map-ladder">${ladder.map((cluster) => {
+    const contributors = Array.isArray(cluster.contributors)
+      ? cluster.contributors.slice(0, 4).map((item) => escapeHtml(item.label)).join(" · ")
+      : "";
+    return `<div class="market-map-step ${String(cluster.role || "").toLowerCase()}"><span>${fmt(cluster.midpoint)}</span><b>${escapeHtml(String(cluster.tier || "CONTEXT").replaceAll("_", " "))} ${escapeHtml(cluster.role || "")}</b><strong>${Number(cluster.score || 0).toFixed(0)}%</strong><small>${escapeHtml(String(cluster.state || "DISTANT").replaceAll("_", " "))}${contributors ? ` · ${contributors}` : ""}</small></div>`;
+  }).join("")}</div>` : '<p class="note">Institutional map is still building.</p>';
+  $("clusterCard").innerHTML = `<div class="cluster-box page-kv">${pageRow("Institutional grade",setup.confidence_grade || "—",Number(setup.confidence)>=85?'g':Number(setup.confidence)>=70?'a':'r')}${pageRow("Primary model",setup.primary_entry_model || "—",'b')}${pageRow("Model score",`${Number(setup.primary_model_score||0).toFixed(1)}%`)}${pageRow("Backup models",(setup.alternative_entry_models||[]).slice(0,3).join(" · ")||"—")}${pageRow("Active market-map cluster",marketMapClusterText(activeMap),activeMap?.actionable_location?'g':'a')}${pageRow("Active range",activeMap?`${fmt(activeMap.low)}–${fmt(activeMap.high)}`:'—')}${pageRow("Opposing liquidity",marketMapClusterText(opposingMap),opposingMap?'b':'a')}${pageRow("Opposing range",opposingMap?`${fmt(opposingMap.low)}–${fmt(opposingMap.high)}`:'—')}${pageRow("Composite tier",setup.composite_cluster_eligible?clusterTierName(setup):"Not selected",setup.composite_cluster_eligible?'g':'a')}${pageRow("Composite score",`${Number(setup.composite_cluster_score||0).toFixed(1)}%`,setup.composite_cluster_eligible?'g':'a')}${pageRow("Independent categories",activeClusterCategories)}${pageRow("Ordered sequence",setup.signals?.ordered_sequence?'Confirmed':'Not confirmed',setup.signals?.ordered_sequence?'g':'a')}</div>${mapRows}`;
   const modelReason = setup.model_selection_reason ? `<div class="rationale-item">◆ ${escapeHtml(setup.model_selection_reason)}</div>` : "";
   $("rationale").innerHTML = modelReason + ((setup.rationale || []).map((reason) => `<div class="rationale-item">✓ ${escapeHtml(reason)}</div>`).join("") || '<p class="note">No active rationale yet.</p>');
 }

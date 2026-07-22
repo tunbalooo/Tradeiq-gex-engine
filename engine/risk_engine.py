@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from backend.models.schemas import GexSummary, Zone
+from backend.models.schemas import GexSummary, MarketMapCluster, Zone
 from engine.confluence_cluster import ClusterResult
 
 
@@ -37,6 +37,7 @@ def _collect_targets(
     session_high: float,
     session_low: float,
     tick_size: float,
+    market_map_clusters: list[MarketMapCluster] | None = None,
 ) -> list[TargetCandidate]:
     raw: list[tuple[float, str]] = []
     if direction == "LONG":
@@ -47,6 +48,11 @@ def _collect_targets(
         ])
         raw.extend((level.price, level.type) for level in gex.levels if level.price > entry)
         raw.extend((zone.low, f"{zone.timeframe} Supply Zone") for zone in zones if zone.kind == "SUPPLY" and zone.low > entry)
+        raw.extend(
+            (cluster.low, f"{cluster.tier.title()} Institutional Resistance Cluster")
+            for cluster in (market_map_clusters or [])
+            if cluster.role == "RESISTANCE" and not cluster.accepted_through and cluster.low > entry
+        )
     else:
         raw.extend([
             (gex.put_wall, "Put Wall"),
@@ -55,6 +61,11 @@ def _collect_targets(
         ])
         raw.extend((level.price, level.type) for level in gex.levels if level.price < entry)
         raw.extend((zone.high, f"{zone.timeframe} Demand Zone") for zone in zones if zone.kind == "DEMAND" and zone.high < entry)
+        raw.extend(
+            (cluster.high, f"{cluster.tier.title()} Institutional Support Cluster")
+            for cluster in (market_map_clusters or [])
+            if cluster.role == "SUPPORT" and not cluster.accepted_through and cluster.high < entry
+        )
 
     unique: dict[float, TargetCandidate] = {}
     for price, source in raw:
@@ -93,6 +104,7 @@ def build_trade_levels(
     tick_size: float = 0.25,
     preferred_entry: float | None = None,
     preferred_invalidation: float | None = None,
+    market_map_clusters: list[MarketMapCluster] | None = None,
 ) -> dict:
     direction = direction.upper()
     if direction not in {"LONG", "SHORT"}:
@@ -150,6 +162,7 @@ def build_trade_levels(
         session_high=session_high,
         session_low=session_low,
         tick_size=tick_size,
+        market_map_clusters=market_map_clusters,
     )
 
     nearest_barrier = candidates[0] if candidates else None

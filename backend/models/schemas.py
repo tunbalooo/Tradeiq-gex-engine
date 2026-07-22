@@ -76,6 +76,49 @@ class FibLevel(BaseModel):
     label: str
 
 
+class MarketMapContributor(BaseModel):
+    label: str
+    source_group: str
+    role: Literal["SUPPORT", "RESISTANCE"]
+    low: float
+    high: float
+    midpoint: float
+    quality: float = Field(ge=0, le=1)
+    fresh: bool = True
+    timeframe: str | None = None
+
+
+class MarketMapCluster(BaseModel):
+    cluster_id: str
+    role: Literal["SUPPORT", "RESISTANCE"]
+    low: float
+    high: float
+    midpoint: float
+    score: float = Field(ge=0, le=100)
+    tier: str = "CONTEXT"
+    state: str = "DISTANT"
+    distance_points: float = 0.0
+    distance_atr: float = 0.0
+    independent_categories: int = 0
+    source_groups: list[str] = Field(default_factory=list)
+    contributors: list[MarketMapContributor] = Field(default_factory=list)
+    freshness: float = Field(default=0.0, ge=0, le=100)
+    actionable_location: bool = False
+    accepted_through: bool = False
+    display_priority: float = 0.0
+
+
+class InstitutionalMarketMap(BaseModel):
+    generated_at: datetime
+    current_price: float
+    tolerance_points: float
+    active_cluster: MarketMapCluster | None = None
+    opposing_cluster: MarketMapCluster | None = None
+    nearest_support: MarketMapCluster | None = None
+    nearest_resistance: MarketMapCluster | None = None
+    ladder: list[MarketMapCluster] = Field(default_factory=list)
+
+
 class MarketOverviewItem(BaseModel):
     symbol: str
     price: float
@@ -267,6 +310,7 @@ class TradeSetup(BaseModel):
     vwap: float
     standard_deviation_high: float
     standard_deviation_low: float
+    market_map: InstitutionalMarketMap | None = None
 
     cluster_score: float = 0.0
     cluster_low: float | None = None

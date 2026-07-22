@@ -4,7 +4,7 @@ import threading
 from uuid import uuid4
 
 from backend.core.config import settings
-from backend.models.schemas import GexSummary, TradeSetup
+from backend.models.schemas import FibLevel, GexSummary, InstitutionalMarketMap, TradeSetup
 from backend.services.databento_gex import gex_service
 from backend.services.decision_brain import decision_brain_service
 from backend.services.market_data import market_data_service, rth_candles
@@ -19,6 +19,7 @@ from engine.market_structure import analyze_market_structure
 from engine.model_confirmations import evaluate_model_confirmations
 from engine.entry_models import ModelContext, rank_entry_models
 from engine.institutional_confidence import CATEGORY_WEIGHTS, calculate_institutional_confidence
+from engine.institutional_level_map import build_institutional_market_map
 from engine.risk_engine import build_trade_levels
 from engine.supply_demand import detect_supply_demand
 
@@ -188,6 +189,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     candles_5m = aggregate_candles(base_candles, 5)
     candles_15m = aggregate_candles(base_candles, 15)
     candles_60m = aggregate_candles(base_candles, 60)
+    candles_240m = aggregate_candles(base_candles, 240)
     current_price = base_candles[-1].close
 
     structure = analyze_market_structure(candles_5m)
@@ -197,6 +199,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         + detect_supply_demand(candles_60m, timeframe="1H", lookback=45)
     )
     zones = sorted(zones, key=lambda z: (z.fresh, z.strength, z.created_at or base_candles[0].time), reverse=True)[:12]
+    map_zones = zones + detect_supply_demand(candles_240m, timeframe="4H", lookback=40)
 
     gex = gex_override
     # Native GEX belongs to the currently selected market. Background radar
@@ -213,7 +216,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     if swing_high <= swing_low:
         swing_high = swing_low + 20
     fib_points = calculate_fib_levels(swing_low, swing_high, direction)
-    fib_levels = [{"ratio": p.ratio, "price": p.price, "label": p.label} for p in fib_points]
+    fib_levels = [FibLevel(ratio=p.ratio, price=p.price, label=p.label) for p in fib_points]
     ote_low, ote_high = ote_zone(swing_low, swing_high, direction)
     ideal_ote = next(p.price for p in fib_points if abs(p.ratio - .705) < .001)
     atr = average_true_range(candles_5m)
@@ -223,6 +226,31 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     session_high, session_low = max(c.high for c in session), min(c.low for c in session)
     vwap = calculate_vwap(session)
     std_low, std_high = standard_deviation_levels(session, vwap)
+    market_map = (
+        build_institutional_market_map(
+            current_price=current_price,
+            atr=atr,
+            tick_size=profile.tick_size,
+            candles=candles_5m,
+            gex=gex,
+            zones=map_zones,
+            fib_levels=fib_levels,
+            vwap=vwap,
+            std_low=std_low,
+            std_high=std_high,
+            session_low=session_low,
+            session_high=session_high,
+            previous_liquidity_low=structure.get("previous_liquidity_low"),
+            previous_liquidity_high=structure.get("previous_liquidity_high"),
+            direction=direction,
+        )
+        if settings.market_map_enabled
+        else InstitutionalMarketMap(
+            generated_at=datetime.now(timezone.utc),
+            current_price=round(float(current_price), profile.price_precision),
+            tolerance_points=0.0,
+        )
+    )
     previous_volumes = [float(c.volume) for c in candles_5m[-21:-1]]
     average_volume = sum(previous_volumes) / len(previous_volumes) if previous_volumes else max(float(candles_5m[-1].volume), 1.0)
     volume_ratio = float(candles_5m[-1].volume) / max(average_volume, 1.0)
@@ -247,6 +275,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         session_high=session_high, session_low=session_low,
         sweep_price=structure["sweep_price"] if direction_sweep else None,
         tick_size=profile.tick_size,
+        market_map_clusters=market_map.ladder,
     )
 
     analysis_price = levels["entry"] if levels["entry"] is not None else current_price
@@ -330,6 +359,12 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         "fib_pullback_confirmation_entry": fib_pullback.confirmation_entry,
         "fib_pullback_entry_fresh": fib_pullback.entry_fresh,
         "fib_pullback_confirmation_candle_time": fib_pullback.confirmation_candle_time.isoformat() if fib_pullback.confirmation_candle_time else None,
+        "market_map_active_cluster": market_map.active_cluster.model_dump(mode="json") if market_map.active_cluster else None,
+        "market_map_opposing_cluster": market_map.opposing_cluster.model_dump(mode="json") if market_map.opposing_cluster else None,
+        "market_map_active_score": market_map.active_cluster.score if market_map.active_cluster else 0.0,
+        "market_map_active_state": market_map.active_cluster.state if market_map.active_cluster else "NONE",
+        "market_map_actionable_location": bool(market_map.active_cluster and market_map.active_cluster.actionable_location),
+        "market_map_opposing_distance": market_map.opposing_cluster.distance_points if market_map.opposing_cluster else None,
     }
 
     # Every entry model owns its confirmation contract. Locations may qualify a
@@ -389,6 +424,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
             tick_size=profile.tick_size,
             preferred_entry=preliminary_primary.trigger_price,
             preferred_invalidation=preliminary_primary.invalidation_price,
+            market_map_clusters=market_map.ladder,
         )
 
     signals.update({
@@ -408,6 +444,18 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     if cluster.score >= settings.cluster_min_score:
         zone_name = f"{cluster.zone.timeframe} {cluster.zone.kind.lower()}" if cluster.zone else "zone"
         rationale.append(f"OTE, {zone_name}, and {cluster.gex_type or 'GEX'} cluster around {cluster.low:,.2f}–{cluster.high:,.2f}.")
+    if market_map.active_cluster:
+        active = market_map.active_cluster
+        rationale.append(
+            f"The institutional map ranks a {active.tier.lower()} {active.role.lower()} cluster at "
+            f"{active.low:,.2f}–{active.high:,.2f} ({active.score:.0f}%, {active.state.lower()})."
+        )
+    if market_map.opposing_cluster:
+        opposing = market_map.opposing_cluster
+        rationale.append(
+            f"Nearest opposing liquidity is the {opposing.role.lower()} cluster around "
+            f"{opposing.low:,.2f}–{opposing.high:,.2f}."
+        )
     if preliminary_primary:
         rationale.append(f"{preliminary_primary.name} is the current primary entry model at {preliminary_primary.score:.1f}%.")
     if preliminary_primary and preliminary_primary.key == "FIB_PULLBACK_CONTINUATION":
@@ -437,6 +485,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         tp1_r=levels["tp1_r"], tp2_r=levels["tp2_r"], target_sources=levels["target_sources"],
         status=status, rationale=rationale, gex=gex, zones=zones, fib_levels=fib_levels,
         atr=round(atr, 2), vwap=round(vwap, 2), standard_deviation_high=round(std_high, 2), standard_deviation_low=round(std_low, 2),
+        market_map=market_map,
         cluster_score=round(cluster.score, 3), cluster_low=cluster.low, cluster_high=cluster.high,
         cluster_gex_level=cluster.gex_level, cluster_gex_type=cluster.gex_type,
         selected_zone_low=selected_zone.low if selected_zone else None,

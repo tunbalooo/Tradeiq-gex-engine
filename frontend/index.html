@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=312" />
+<link rel="stylesheet" href="/static/styles.css?v=313" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -194,7 +194,7 @@
             <div class="setup-row"><span class="k">TP2 Source</span><span class="v m" id="setupTp2Source">—</span></div>
             <div class="setup-row"><span class="k">Risk / Reward</span><span class="v" id="setupRr">—</span></div>
             <div class="setup-row"><span class="k">Setup Status</span><span class="v a" id="setupStatus">—</span></div>
-            <div class="setup-row"><span class="k">Cluster</span><span class="v" id="setupCluster">—</span></div>
+            <div class="setup-row"><span class="k">Market Map</span><span class="v" id="setupCluster">—</span></div>
             <div class="setup-row"><span class="k">Session</span><span class="v" id="setupSession">—</span></div>
             <div class="setup-row"><span class="k" id="validLabel">Valid Until</span><span class="v" id="setupValid">—</span></div>
             <div class="model-ranking-block">
@@ -346,7 +346,7 @@
                   <div class="chart-setup-row"><span>TP2 Source</span><b id="chartSetupTp2Source">—</b></div>
                   <div class="chart-setup-row"><span>Risk / Reward</span><b id="chartSetupRr">—</b></div>
                   <div class="chart-setup-row"><span>Setup Status</span><b class="a" id="chartSetupStatus">Scanning</b></div>
-                  <div class="chart-setup-row"><span>Cluster</span><b id="chartSetupCluster">—</b></div>
+                  <div class="chart-setup-row"><span>Market Map</span><b id="chartSetupCluster">—</b></div>
                   <div class="chart-setup-session">
                     <div><span>Session</span><b id="chartSetupSession">—</b></div>
                     <div><span id="chartValidLabel">Valid Until</span><b id="chartSetupValid">—</b></div>
@@ -519,7 +519,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=312"></script>
+<script src="/static/boot.js?v=313"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

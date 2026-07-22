@@ -245,3 +245,8 @@ Liquidity sweep/MSS, Gamma Flip reclaim, VWAP reclaim, trend continuation and SM
 Break-and-retest uses STOP only when the trigger is in front of current price and no farther than `max(0.35 × ATR, 12 ticks)`.
 
 A continuation that has left tolerance returns `NONE`; it must not fall back to a distant LIMIT.
+
+## v3.1.3 Institutional Market-Map Contract
+
+The map uses ATR/tick-aware spatial clustering and caps related evidence by source group. GEX, zone, retracement, liquidity and value each contribute at most one group-quality maximum per cluster. A location is actionable only with at least two independent groups, minimum configured score, a nearby approach/test/rejection state and no accepted-through condition. Opposing clusters are valid target/barrier candidates; accepted-through clusters are excluded. The map never independently selects direction or execution.
+
