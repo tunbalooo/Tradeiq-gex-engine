@@ -129,3 +129,12 @@
 - [x] Keep contiguous price-regime corruption protection.
 - [x] Stop simulated data from appearing live.
 - [x] Bound Databento reconnect-overlay memory.
+
+## Released — v3.1.0
+
+- [x] Institutional Confluence Cluster
+- [x] Single-model/composite selection
+- [x] Adaptive MARKET/LIMIT/STOP/NONE execution
+- [x] Execution freshness and distance
+- [x] Target-reached-before-fill cancellation
+- [x] No-chase departure rule

@@ -925,6 +925,15 @@ function renderModelRanking(setup, targetId) {
   }).join("") : '<div class="timeline-empty">No ranked models yet.</div>';
 }
 
+
+function executionName(setup) {
+  const type = String(setup?.execution_type || "NONE").toUpperCase();
+  if (type === "MARKET") return "Market Entry";
+  if (type === "STOP") return "Stop Entry";
+  if (type === "LIMIT") return "Limit Entry";
+  return "No Entry";
+}
+
 function renderTradeSetup(setup) {
   const confidence = Math.max(0, Math.min(100, Number(setup.confidence)));
   const circumference = 307.9;
@@ -942,7 +951,7 @@ function renderTradeSetup(setup) {
   const marketClosed = state.session && !state.session.is_open;
   const quality = triggerTouched ? `Confirming ${setup.direction.charAt(0)}${setup.direction.slice(1).toLowerCase()}` : watchingPlan ? `Monitoring ${setup.direction.charAt(0)}${setup.direction.slice(1).toLowerCase()}` :
     setup.order_state === "PREVIEW_ONLY" ? (setup.status === "WATCH_EXPIRED" ? "Watch Expired" : "Scanning") :
-    setup.order_state === "WAITING_FOR_LIMIT" ? "Limit Armed" :
+    setup.order_state === "WAITING_FOR_LIMIT" ? `${executionName(setup)} Armed` :
     setup.order_state === "FILLED" ? "Position Filled" :
     setup.order_state === "TP1_HIT" ? "TP1 Hit — Running" :
     setup.order_state === "UNCONFIRMED_TOUCH" ? "No Trade — Trigger Touched Early" :
@@ -976,14 +985,14 @@ function renderTradeSetup(setup) {
   $("setupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 3).join(" · ") || "—";
   $("setupGrade").textContent = setup.confidence_grade || "—";
   $("setupGrade").className = `v ${confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r"}`;
-  $("entryLabel").textContent = triggerTouched ? "Watch Touched · Awaiting Confirmation" : watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
+  $("entryLabel").textContent = triggerTouched ? "Watch Touched · Awaiting Confirmation" : watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `Locked ${executionName(setup)}` : `${executionName(setup)} Filled`) : "Entry";
   $("setupEntry").textContent = watchingPlan ? fmt(watchTrigger(setup)) : lockedPlan ? fmt(setup.entry) : "—";
   if ($("stopLabel")) $("stopLabel").textContent = watchingPlan ? "Structural Invalidation" : "Initial Stop";
   $("setupStop").textContent = watchingPlan && Number.isFinite(Number(setup.watch_invalidation))
     ? fmt(setup.watch_invalidation)
     : lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
   $("setupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
-  $("setupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : triggerTouched ? activeModelConfirmation(setup).label.toUpperCase() : watchingPlan ? "WAITING FOR PRICE" : "—";
+  $("setupManagement").textContent = lockedPlan ? `${String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ")} · FRESH ${Number(setup.execution_freshness_score || 0).toFixed(0)}%` : triggerTouched ? activeModelConfirmation(setup).label.toUpperCase() : watchingPlan ? "WAITING FOR PRICE" : "—";
   $("setupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("setupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("setupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
@@ -994,7 +1003,7 @@ function renderTradeSetup(setup) {
     setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
-  $("setupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
+  $("setupCluster").textContent = setup.composite_cluster_eligible ? `INSTITUTIONAL CLUSTER · ${Number(setup.composite_cluster_score || 0).toFixed(0)}%` : setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "Single-model setup";
   $("setupCluster").className = `v ${setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
@@ -1048,14 +1057,14 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 2).join(" · ") || "—";
   $("chartSetupGrade").textContent = setup.confidence_grade || "—";
   $("chartSetupGrade").className = confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r";
-  $("chartEntryLabel").textContent = triggerTouched ? "Watch Touched · Awaiting Confirmation" : watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? "Locked Limit Entry" : "Filled Entry") : "Entry";
+  $("chartEntryLabel").textContent = triggerTouched ? "Watch Touched · Awaiting Confirmation" : watchingPlan ? "Watch Trigger · Not an Order" : lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `Locked ${executionName(setup)}` : `${executionName(setup)} Filled`) : "Entry";
   $("chartSetupEntry").textContent = watchingPlan ? fmt(watchTrigger(setup)) : lockedPlan ? fmt(setup.entry) : "—";
   if ($("chartStopLabel")) $("chartStopLabel").textContent = watchingPlan ? "Structural Invalidation" : "Initial Stop";
   $("chartSetupStop").textContent = watchingPlan && Number.isFinite(Number(setup.watch_invalidation))
     ? fmt(setup.watch_invalidation)
     : lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
   $("chartSetupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
-  $("chartSetupManagement").textContent = lockedPlan ? String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ") : triggerTouched ? activeModelConfirmation(setup).label.toUpperCase() : watchingPlan ? "WAITING FOR PRICE" : "—";
+  $("chartSetupManagement").textContent = lockedPlan ? `${String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ")} · FRESH ${Number(setup.execution_freshness_score || 0).toFixed(0)}%` : triggerTouched ? activeModelConfirmation(setup).label.toUpperCase() : watchingPlan ? "WAITING FOR PRICE" : "—";
   $("chartSetupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
@@ -1063,7 +1072,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
   $("chartSetupStatus").textContent = statusText;
   $("chartSetupStatus").className = setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a";
-  $("chartSetupCluster").textContent = setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "No 3-way cluster";
+  $("chartSetupCluster").textContent = setup.composite_cluster_eligible ? `INSTITUTIONAL CLUSTER · ${Number(setup.composite_cluster_score || 0).toFixed(0)}%` : setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "Single-model setup";
   $("chartSetupCluster").className = setup.signals.gex_ote_zone_cluster ? "g" : "a";
   renderModelRanking(setup, "chartModelRanking");
   $("chartSetupSession").textContent = state.session?.display_name || "—";

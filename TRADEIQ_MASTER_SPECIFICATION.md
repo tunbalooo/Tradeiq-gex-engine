@@ -196,3 +196,7 @@ The active lifecycle object survives backend restarts. Every transition is store
 ## v3.0.9 Chart Pipeline Integrity
 
 TradeIQ must preserve valid history across genuine session breaks while still rejecting contiguous mixed-contract or corrupt price regimes. Simulated data must never be presented as a live market feed. Temporary live overlays used during reconnection must remain memory-bounded.
+
+## v3.1.0 Adaptive Execution
+
+TradeIQ supports both strong single-model setups and composite institutional confluence clusters. The Decision Brain chooses the stronger valid interpretation, while the Adaptive Execution Engine selects MARKET, LIMIT, STOP, or NONE based on model type, confirmation, freshness, remaining reward, target status, and market-data health.

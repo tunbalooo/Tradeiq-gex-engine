@@ -1,3 +1,4 @@
+# Previous release: 3.0.9-chart-pipeline-integrity
 # Previous release: 3.0.8-connection-gex-resilience
 # Previous release: 3.0.6-timezone-aware-history
 # Legacy release reference: 2.4.0-stable-mobile-clear-execution
@@ -52,7 +53,7 @@ async def lifespan(app: FastAPI):
 # Legacy v3.0.3 API release: 3.0.3-fib-pullback-watch-execution
 # Legacy v3.0.4 API release: 3.0.4-trade-desk-market-radar
 # Legacy v3.0.5 API release: 3.0.5-self-healing-market-stream
-app = FastAPI(title=settings.app_name, version="3.0.9-chart-pipeline-integrity", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="3.1.0-adaptive-execution-clusters", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 

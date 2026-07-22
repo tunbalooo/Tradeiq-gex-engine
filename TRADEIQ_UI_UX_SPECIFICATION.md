@@ -169,3 +169,7 @@ The GEX Analysis page must render from the latest independent GEX summary even w
 ## v3.0.9 Feed truth and chart continuity
 
 The chart may show a price gap across a valid session break without deleting the earlier session. The header must label local generated data as `SIMULATED`; only verified Databento records may display a live/fresh state.
+
+## v3.1.0 Execution Display
+
+The setup card displays the chosen execution type, freshness percentage, distance from ideal entry, and institutional cluster score. Labels distinguish Market Entry, Limit Entry, Stop Entry, and No Entry. Missed setups explicitly state that analysis was correct but no chase is allowed.

@@ -195,3 +195,9 @@ A radar candidate remains non-executable. When the trader opens the market, the 
 - The latest deterministic setup object remains authoritative regardless of transport.
 - GEX context can be serialized independently while a setup is warming so chart context does not disappear, but no executable plan may be inferred from GEX alone.
 - Recovered candles are merged through the existing ordering, deduplication and plausibility guards before the engine evaluates them.
+
+## v3.1.0 Execution Contract
+
+Confirmed setups pass through an execution selector. Market execution is permitted only near the ideal entry with at least 2R remaining. Limit execution is preferred for retracement models. Stop execution is preferred when continuation must be proven through a trigger. No-entry is mandatory after TP1/TP2 is reached before fill, freshness falls below tolerance, or risk/reward deteriorates.
+
+Composite clusters use independent categories: GEX, zone, retracement, imbalance, liquidity/structure, and trend/value. Related labels are not double-counted.

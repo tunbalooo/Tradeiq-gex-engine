@@ -263,6 +263,8 @@ class TradeEngineService:
         return True, None
 
     def _primary_model_eligible(self, candidate: TradeSetup) -> bool:
+        if candidate.primary_entry_model_key == "INSTITUTIONAL_CONFLUENCE_CLUSTER":
+            return bool(candidate.composite_cluster_eligible)
         return any(
             item.key == candidate.primary_entry_model_key and item.eligible
             for item in candidate.entry_model_scores
@@ -433,46 +435,86 @@ class TradeEngineService:
     ) -> TradeSetup:
         now = self._utcnow()
         execution_candle = execution_candle or candle
+        execution_type = str(candidate.execution_type or "LIMIT").upper()
+        legacy_default_execution = execution_type == "NONE" and candidate.actionable
+        if legacy_default_execution:
+            execution_type = "LIMIT"
+        if execution_type not in {"MARKET", "LIMIT", "STOP"}:
+            return self._preview(candidate, "NO_FRESH_EXECUTION")
+
+        state = "FILLED" if execution_type == "MARKET" else "WAITING_FOR_LIMIT"
+        status = "FILLED" if execution_type == "MARKET" else f"WAITING_FOR_{execution_type}"
+        entry = float(execution_candle.close) if execution_type == "MARKET" else candidate.entry
+        stop = self._finite_number(candidate.stop_loss)
+        tp1 = self._finite_number(candidate.take_profit_1)
+        tp2 = self._finite_number(candidate.take_profit_2)
+        if entry is None or stop is None or tp1 is None or tp2 is None:
+            return self._preview(candidate, "INCOMPLETE_EXECUTION_LEVELS")
+
+        risk = abs(float(entry) - stop)
+        reward1 = abs(tp1 - float(entry))
+        reward2 = abs(tp2 - float(entry))
+        if risk <= 0:
+            return self._preview(candidate, "INVALID_EXECUTION_RISK")
+        tp1_r = round(reward1 / risk, 2)
+        tp2_r = round(reward2 / risk, 2)
+        effective_tp2_r = max(tp2_r, float(candidate.tp2_r or 0.0))
+        if effective_tp2_r < 2.0:
+            return self._preview(candidate, "EXECUTION_RR_DEGRADED")
+        tp2_r = effective_tp2_r
+
+        execution_detail = candidate.execution_reason
+        if legacy_default_execution or not execution_detail or str(execution_detail).startswith("No execution"):
+            execution_detail = "The confirmed entry, protective stop, TP1 and TP2 are locked."
         transition_reason = (
-            "The deterministic engine received the remaining mandatory confirmations. "
-            "The limit entry, protective stop, TP1, TP2 and risk box are now complete and locked."
+            f"The deterministic engine selected {execution_type} execution. "
+            f"{execution_detail}"
         )
-        armed = candidate.model_copy(deep=True, update={
+        action_name = "MARKET_FILLED" if execution_type == "MARKET" else f"{execution_type}_ARMED"
+        management_state = "POSITION_ACTIVE" if execution_type == "MARKET" else f"{execution_type}_ARMED"
+        updates = {
             "setup_id": setup_id or str(uuid4()),
             "timestamp": timestamp or now,
             "valid_until": now + timedelta(minutes=settings.setup_expiry_minutes),
             "watch_started_at": watch_started_at,
             "watch_expires_at": watch_expires_at,
-            "watch_phase": "PLAN_ARMED",
+            "watch_phase": "PLAN_FILLED" if execution_type == "MARKET" else "PLAN_ARMED",
             "watch_touch_at": watch_touch_at,
             "watch_touch_price": watch_touch_price,
             "watch_touch_candle_time": watch_touch_candle_time,
             "watch_confirmation_expires_at": None,
-            "order_state": "WAITING_FOR_LIMIT",
-            "status": "WAITING_FOR_LIMIT",
+            "order_state": state,
+            "status": status,
             "actionable": True,
             "armed_at": now,
             "armed_candle_time": execution_candle.time,
+            "entry": round(float(entry), 8),
+            "risk_reward": tp2_r,
+            "tp1_r": tp1_r,
+            "tp2_r": tp2_r,
             **self._execution_observation_updates(execution_candle),
             "last_transition_from": previous_state,
-            "last_transition_to": "WAITING_FOR_LIMIT",
+            "last_transition_to": state,
             "last_transition_reason": transition_reason,
             "last_transition_at": now,
-            "last_transition_price": armed_entry if (armed_entry := self._finite_number(candidate.entry)) is not None else self._finite_number(candle.close),
+            "last_transition_price": float(entry),
             "last_processed_candle_time": candle.time,
-            "initial_stop_loss": candidate.stop_loss,
-            "active_stop_loss": candidate.stop_loss,
-            "management_state": "LIMIT_ARMED",
+            "initial_stop_loss": stop,
+            "active_stop_loss": stop,
+            "management_state": management_state,
             "partial_exit_percent": settings.partial_exit_percent,
-            "runner_active": False,
+            "runner_active": execution_type == "MARKET",
+            "filled_at": now if execution_type == "MARKET" else None,
+            "filled_candle_time": execution_candle.time if execution_type == "MARKET" else None,
+            "outcome": "OPEN" if execution_type == "MARKET" else None,
             "management_actions": [
-                {"at": now.isoformat(), "action": "LIMIT_ARMED", "detail": "Entry, initial stop and targets locked."}
+                {"at": now.isoformat(), "action": action_name, "detail": transition_reason}
             ],
-        })
+        }
+        armed = candidate.model_copy(deep=True, update=updates)
         storage_service.transition(
-            armed, previous_state, "WAITING_FOR_LIMIT", armed.entry, execution_candle.time,
-            transition_reason,
-            "positive",
+            armed, previous_state, state, float(entry), execution_candle.time,
+            transition_reason, "positive",
         )
         return armed
 
@@ -904,8 +946,37 @@ class TradeEngineService:
             )
 
         if state == "WAITING_FOR_LIMIT":
+            # Never keep an unfilled order alive after the expected move has already
+            # reached a target. Correct analysis is not permission to chase.
+            target_completed_before_fill = bool(
+                (active.direction == "LONG" and (float(candle.close) >= float(active.take_profit_1 or float("inf"))))
+                or (active.direction == "SHORT" and (float(candle.close) <= float(active.take_profit_1 or float("-inf"))))
+            )
+            if target_completed_before_fill:
+                return self._transition(
+                    active, "EXPIRED", candle,
+                    "The setup moved to its target path before the selected execution could fill. Analysis was correct, but the entry was missed; no chase is allowed.",
+                    actionable=False, closed_at=now, outcome="TARGET_REACHED_BEFORE_FILL", **observation,
+                )
+
+            # Cancel stale departures even before the formal timer expires.
+            entry_number = self._finite_number(active.entry)
+            if entry_number is not None:
+                departure = abs(float(candle.close) - entry_number)
+                departure_limit = max(float(active.atr or 0.0) * 0.35, get_instrument(active.symbol).tick_size * 12)
+                moved_in_trade_direction = bool(
+                    (active.direction == "LONG" and float(candle.close) > entry_number)
+                    or (active.direction == "SHORT" and float(candle.close) < entry_number)
+                )
+                if moved_in_trade_direction and departure > departure_limit:
+                    return self._transition(
+                        active, "EXPIRED", candle,
+                        f"The {active.execution_type.lower()} entry became stale after price moved {departure:.2f} points away without filling. No chase; scanning for a secondary continuation model.",
+                        actionable=False, closed_at=now, outcome="MISSED_ENTRY_DEPARTURE", **observation,
+                    )
+
             touched_entry = touched(active.entry)
-            # A locked resting limit is evaluated before fresh context can cancel it.
+            # A locked resting limit/stop is evaluated before fresh context can cancel it.
             # This prevents the exact fill interval from being mislabeled INVALIDATED.
             if not touched_entry:
                 if candidate.direction != active.direction and candidate.confidence >= settings.setup_actionable_score:

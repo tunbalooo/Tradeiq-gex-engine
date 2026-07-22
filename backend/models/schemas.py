@@ -181,6 +181,15 @@ class TradeSetup(BaseModel):
     model_selection_reason: str | None = None
     model_selected_at: datetime | None = None
     model_switch_count: int = 0
+    composite_cluster_score: float = 0.0
+    composite_cluster_eligible: bool = False
+    composite_cluster_categories: dict[str, float] = Field(default_factory=dict)
+    composite_cluster_contributors: list[str] = Field(default_factory=list)
+    execution_type: str = "NONE"
+    execution_reason: str | None = None
+    execution_freshness_score: float = 0.0
+    execution_distance_points: float | None = None
+    execution_selected_at: datetime | None = None
     confidence_grade: str = "AVOID"
     institutional_confidence_components: dict[str, float] = Field(default_factory=dict)
     institutional_confidence_maximums: dict[str, float] = Field(default_factory=dict)

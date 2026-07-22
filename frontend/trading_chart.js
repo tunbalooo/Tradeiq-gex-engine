@@ -1201,7 +1201,7 @@
     if (overlays.trade && hasWatchingPlan(setup)) {
       addPriceLine(instance, watchTrigger(setup), watchTriggerTouched(setup) ? `TOUCHED · CONFIRM ${setup.direction}` : `MONITOR ${setup.direction} · NO ORDER`, watchTriggerTouched(setup) ? COLORS.blue : COLORS.amber, dotted, watchTriggerTouched(setup) ? 2 : 1);
     } else if (overlays.trade && hasLockedTradePlan(setup)) {
-      addPriceLine(instance, setup.entry, "LIMIT", COLORS.amber, dashed, 2);
+      addPriceLine(instance, setup.entry, setup.execution_type === "STOP" ? "STOP ENTRY" : setup.execution_type === "MARKET" ? "MARKET ENTRY" : "LIMIT", COLORS.amber, dashed, 2);
       addPriceLine(instance, initialStop(setup), "INITIAL SL", COLORS.red, dashed, 2);
       if (Math.abs(activeStop(setup) - initialStop(setup)) > Number(instance.tickSize || .25) / 2)
         addPriceLine(instance, activeStop(setup), "ACTIVE SL / BE", COLORS.amber, dotted, 2);

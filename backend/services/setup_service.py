@@ -297,6 +297,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     confidence, institutional_components, confidence_grade = calculate_institutional_confidence(institutional_evidence)
     nearest_wall = gex.call_wall if direction == "LONG" else gex.put_wall
     signals = {
+        "current_price": round(float(current_price), profile.price_precision),
         "trend_alignment": bool(trend_alignment), "gex_alignment": bool(gex_alignment),
         "liquidity_sweep": bool(direction_sweep), "displacement": bool(direction_displacement),
         "directional_fvg": bool(direction_fvg), "ordered_sequence": bool(ordered_sequence),
