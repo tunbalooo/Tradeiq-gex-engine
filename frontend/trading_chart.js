@@ -9,6 +9,8 @@
   const MAX_CACHED_HISTORY_BARS = 5000;
   const ACTIVE_TRADE_STATES = new Set(["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"]);
   const MAX_SERIES_REGIME_GAP = 0.08;
+  const SESSION_BREAK_MULTIPLIER = 3;
+  const MIN_SESSION_BREAK_MS = 60 * 60 * 1000;
 
   function median(values = []) {
     const clean = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
@@ -28,13 +30,42 @@
     return Math.abs(b - a) / a;
   }
 
+  function seriesTime(value) {
+    if (value == null) return null;
+    if (typeof value === "number") return value < 1e12 ? value * 1000 : value;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function medianSpacing(candles = []) {
+    const times = candles.map((item) => seriesTime(item?.time)).filter((value) => value != null);
+    if (times.length < 3) return null;
+    const deltas = [];
+    for (let index = 1; index < times.length; index += 1) {
+      const delta = times[index] - times[index - 1];
+      if (delta > 0) deltas.push(delta);
+    }
+    return median(deltas);
+  }
+
   function latestCoherentSegment(candles = [], maxGap = MAX_SERIES_REGIME_GAP) {
     if (candles.length < 2) return candles;
+    // A price step only means a corrupt/mixed data regime when the two bars are
+    // contiguous in time. Legitimate session breaks (weekend reopen, the daily
+    // CME halt or a continuous-contract rollover) may also step in price and
+    // must not cause the earlier chart history to be discarded.
+    const spacing = medianSpacing(candles);
+    const breakAfter = Math.max(Number(spacing || 0) * SESSION_BREAK_MULTIPLIER, MIN_SESSION_BREAK_MS);
     let start = 0;
     for (let index = 1; index < candles.length; index += 1) {
       const previous = Number(candles[index - 1]?.close);
       const current = Number(candles[index]?.open);
       if (!Number.isFinite(previous) || !Number.isFinite(current) || previous <= 0) continue;
+      const previousTime = seriesTime(candles[index - 1]?.time);
+      const currentTime = seriesTime(candles[index]?.time);
+      const sessionBreak =
+        previousTime != null && currentTime != null && currentTime - previousTime > breakAfter;
+      if (sessionBreak) continue;
       if (Math.abs(current - previous) / previous > maxGap) start = index;
     }
     return candles.slice(start);

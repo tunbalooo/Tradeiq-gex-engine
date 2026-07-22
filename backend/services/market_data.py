@@ -403,13 +403,14 @@ class SimulatedMarketDataService:
             "mode": self.mode,
             "data_source": self.data_source,
             "connected": True,
-            "stream_state": "LIVE",
+            # Honest reporting: this is the local generator, not a live feed.
+            "stream_state": "SIMULATED",
             "server_time": now,
             "last_record_at": now,
             "last_record_age_seconds": 0.0,
             "last_candle_at": latest,
             "last_candle_age_seconds": round((now - latest).total_seconds(), 1) if latest else None,
-            "data_fresh": True,
+            "data_fresh": False,
             "stale_after_seconds": None,
             "reconnect_attempts": 0,
             "total_reconnects": 0,
@@ -1185,6 +1186,13 @@ class DatabentoMarketDataService:
 
             now = datetime.now(timezone.utc)
             self._live_overlay[minute] = candle.model_copy(deep=True)
+            # Keep only the recent overlay needed for reconnect/history merges.
+            # Without this bound, a long-running process accumulates one entry
+            # per minute indefinitely.
+            if len(self._live_overlay) > self.max_candles:
+                overflow = len(self._live_overlay) - self.max_candles
+                for stale in sorted(self._live_overlay)[:overflow]:
+                    self._live_overlay.pop(stale, None)
             self.current_price = candle.close
             self.connected = True
             self.stream_state = "LIVE"

@@ -1,3 +1,4 @@
+// Previous release declaration: const CACHE_NAME = "tradeiq-v3.0.8-connection-gex-resilience-shell";
 // Previous cache: tradeiq-v3.0.6-timezone-aware-history-shell
 // Legacy v2.5 asset query: ?v=25
 // Legacy v2.5 cache reference: CACHE_NAME = "tradeiq-v2.5-shell"
@@ -24,8 +25,8 @@
 // Legacy v2.2 assets: /static/styles.css?v=22 /static/boot.js?v=22 /static/app.js?v=22 /static/trading_chart.js?v=22
 // Legacy v2.3 assets: /static/styles.css?v=23 /static/boot.js?v=23 /static/app.js?v=23 /static/trading_chart.js?v=23
 // TradeIQ v3.0.7: model-native confirmation contracts for every entry model.
-// TradeIQ v3.0.8: WebSocket handshake timeout, REST live fallback and independent GEX rendering.
-const CACHE_NAME = "tradeiq-v3.0.8-connection-gex-resilience-shell";
+// TradeIQ v3.0.9: time-aware chart regime filtering and honest market-source health.
+const CACHE_NAME = "tradeiq-v3.0.9-chart-pipeline-integrity-shell";
 const APP_SHELL = [
   "/",
   "/static/styles.css?v=308",

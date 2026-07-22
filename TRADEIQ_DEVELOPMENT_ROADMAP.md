@@ -122,3 +122,10 @@
 - Railway log correlation ID for each market connection cycle.
 - Live NQ/ES/GC soak test across repeated symbol switches and the CME maintenance window.
 - Per-symbol native GEX snapshot cache for instant inactive-market GEX pages.
+
+## Completed in v3.0.9
+
+- [x] Preserve chart history across genuine session gaps.
+- [x] Keep contiguous price-regime corruption protection.
+- [x] Stop simulated data from appearing live.
+- [x] Bound Databento reconnect-overlay memory.

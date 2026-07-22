@@ -165,3 +165,7 @@ The header presents one of three truthful server transport states:
 The Databento badge and data-age badge remain separate. REST fallback must update both the Overview chart and the full Trade Desk chart without resetting zoom or pan.
 
 The GEX Analysis page must render from the latest independent GEX summary even when the current setup is unavailable. GEX overlays remain available on the chart during setup-engine warmup. A short syncing explanation replaces an empty page when no market price exists yet.
+
+## v3.0.9 Feed truth and chart continuity
+
+The chart may show a price gap across a valid session break without deleting the earlier session. The header must label local generated data as `SIMULATED`; only verified Databento records may display a live/fresh state.
