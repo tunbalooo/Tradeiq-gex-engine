@@ -223,3 +223,9 @@ Composite clusters inherit execution style from the strongest underlying valid m
 
 TradeIQ groups nearby GEX, zone, retracement, value and liquidity references into ranked support/resistance clusters. The map publishes a compact ladder, active actionable location, nearest support, nearest resistance and nearest opposing liquidity. Cluster state is `APPROACHING`, `TESTING`, `REJECTING`, `ACCEPTING` or `DISTANT`. A map cluster is context only and cannot bypass model-native confirmation, confidence, target-path, stop, freshness or minimum-2R gates.
 
+
+## 13. Executable Bracket Plans (v3.1.4)
+
+TradeIQ separates analysis from publication. Internal monitoring can evaluate unlimited levels and models, but the user-facing chart remains silent until the engine locks a real plan. At that point, the chart publishes one direction-aware order action and a bracket showing exact risk and reward boundaries.
+
+The bracket does not imply broker execution. It is the deterministic TradeIQ plan visualization and remains subject to the platform's execution integration status.

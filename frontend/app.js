@@ -958,6 +958,12 @@ function executionName(setup) {
   return "No Entry";
 }
 
+function executionOrderName(setup) {
+  const side = setup?.direction === "SHORT" ? "SELL" : "BUY";
+  const type = String(setup?.execution_type || "NONE").toUpperCase();
+  return ["MARKET", "LIMIT", "STOP"].includes(type) ? `${side} ${type}` : "NO ENTRY";
+}
+
 function clusterTierName(setup) {
   const tier = String(setup?.composite_cluster_tier || "NONE").toUpperCase();
   const count = Array.isArray(setup?.composite_cluster_active_categories)
@@ -1017,7 +1023,7 @@ function renderTradeSetup(setup) {
     ? `${aligned} / ${coreKeys.length} core confluences aligned — executable plan locked`
     : "Confluence is being evaluated internally — no entry published yet";
 
-  const label = lockedPlan ? `${setup.direction} ${setup.order_state.replaceAll("_", " ")}` : "SCANNING QUIETLY";
+  const label = lockedPlan ? `${executionOrderName(setup)} · ${setup.order_state.replaceAll("_", " ")}` : "SCANNING QUIETLY";
   $("setupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
   $("setupLabel").className = `${syncing || marketClosed || !lockedPlan ? "a" : classForDirection(setup.direction)} mono setup-side-label`;
   $("setupDirection").textContent = lockedPlan ? `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}` : "WAITING";
@@ -1026,7 +1032,7 @@ function renderTradeSetup(setup) {
   $("setupBackups").textContent = lockedPlan ? ((setup.alternative_entry_models || []).slice(0, 3).join(" · ") || "—") : "—";
   $("setupGrade").textContent = lockedPlan ? (setup.confidence_grade || "—") : "—";
   $("setupGrade").className = `v ${lockedPlan ? (confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r") : "a"}`;
-  $("entryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `Locked ${executionName(setup)}` : `${executionName(setup)} Filled`) : "Entry";
+  $("entryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `${executionOrderName(setup)} Armed` : `${executionOrderName(setup)} Filled`) : "Entry";
   $("setupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";
   if ($("stopLabel")) $("stopLabel").textContent = "Initial Stop";
   $("setupStop").textContent = lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
@@ -1087,7 +1093,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupBackups").textContent = lockedPlan ? ((setup.alternative_entry_models || []).slice(0, 2).join(" · ") || "—") : "—";
   $("chartSetupGrade").textContent = lockedPlan ? (setup.confidence_grade || "—") : "—";
   $("chartSetupGrade").className = lockedPlan ? (confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r") : "a";
-  $("chartEntryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `Locked ${executionName(setup)}` : `${executionName(setup)} Filled`) : "Entry";
+  $("chartEntryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `${executionOrderName(setup)} Armed` : `${executionOrderName(setup)} Filled`) : "Entry";
   $("chartSetupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";
   if ($("chartStopLabel")) $("chartStopLabel").textContent = "Initial Stop";
   $("chartSetupStop").textContent = lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";

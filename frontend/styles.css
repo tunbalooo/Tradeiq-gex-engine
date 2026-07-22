@@ -498,3 +498,6 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 .market-map-step.support{border-left:3px solid #26d07c}
 .market-map-step.resistance{border-left:3px solid #ff4d5e}
 @media(max-width:700px){.market-map-step{grid-template-columns:74px minmax(0,1fr) 42px;padding:8px}.market-map-step b{font-size:10px}}
+
+
+/* v3.1.4 executable bracket-plan overlay is rendered by trading_chart.js. */

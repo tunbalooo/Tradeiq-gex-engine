@@ -194,3 +194,17 @@ After an executable plan is locked, the interface publishes only the exact MARKE
 
 Clean chart mode replaces the raw GEX/Fib/zone/VWAP line stack with the active actionable cluster and nearest opposing liquidity. When no cluster is actionable, only nearest support and resistance are shown. Cluster bands remain contextual and must not use entry language. The Confluence page may show the full compact ladder and contributors. Locked MARKET/LIMIT/STOP, SL, TP1 and TP2 retain visual priority.
 
+
+## v3.1.4 Executable Bracket Visualization
+
+When a plan is locked, the chart uses a two-zone bracket:
+
+- green from entry to TP2;
+- red from entry to initial SL;
+- dashed TP1 guide;
+- amber entry line and badge;
+- exact right-axis labels for entry, SL, TP1 and TP2.
+
+The entry badge uses direction-aware language such as `BUY LIMIT · ARMED` or `SELL MARKET · FILLED`. On smaller screens, the label is truncated before it is allowed to cover the price scale. The bracket begins near the arm timestamp when visible and otherwise uses a responsive width that remains usable on mobile.
+
+No bracket, order label, stop or target is shown during silent scanning or monitoring.

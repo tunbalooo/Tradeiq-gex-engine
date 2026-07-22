@@ -250,3 +250,18 @@ A continuation that has left tolerance returns `NONE`; it must not fall back to 
 
 The map uses ATR/tick-aware spatial clustering and caps related evidence by source group. GEX, zone, retracement, liquidity and value each contribute at most one group-quality maximum per cluster. A location is actionable only with at least two independent groups, minimum configured score, a nearby approach/test/rejection state and no accepted-through condition. Opposing clusters are valid target/barrier candidates; accepted-through clusters are excluded. The map never independently selects direction or execution.
 
+
+## v3.1.4 Executable Bracket-Plan Contract
+
+The deterministic engine remains the sole source of entry, stop and target values. The frontend may draw a bracket only when the setup is in a locked active state and all required prices are finite.
+
+A published bracket contains:
+
+1. direction-aware order action (`BUY` or `SELL`);
+2. engine-selected execution type (`MARKET`, `LIMIT`, or `STOP`);
+3. entry price;
+4. structural initial stop;
+5. TP1 and TP2;
+6. lifecycle state and available risk/reward metadata.
+
+The bracket is a visualization of an existing executable plan. It cannot create, move, widen, narrow or otherwise modify the engine's levels. `PREVIEW_ONLY` and `WATCHING` remain silent.

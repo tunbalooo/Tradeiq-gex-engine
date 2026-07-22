@@ -171,3 +171,15 @@
 - [x] Replace clean-mode line clutter with map overlays.
 - [x] Add `/api/market-map`, Claude context and regression coverage.
 
+
+## Released — v3.1.4
+
+- Exact BUY/SELL MARKET, LIMIT and STOP chart wording.
+- Professional entry/SL/TP bracket overlay.
+- Direction-independent green reward and red risk geometry.
+- Responsive mobile/desktop anchoring.
+- Silent monitoring preserved.
+
+## Next validation priority
+
+Replay the production decision engine over months of historical Databento data and measure performance by model, cluster tier, execution type, higher-timeframe alignment and market regime. The visual bracket is complete; the strategy weights remain unproven until production-parity backtesting is completed.

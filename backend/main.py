@@ -1,4 +1,5 @@
 # Previous release: 3.1.2-silent-real-entry-routing
+# Previous release: 3.1.3-institutional-market-map
 # Previous release: 3.1.1-flexible-cluster-tiers
 # Previous release: 3.0.9-chart-pipeline-integrity
 # Previous release: 3.0.8-connection-gex-resilience
@@ -9,6 +10,7 @@
 # TradeIQ v3.0 adds the deterministic Decision Brain, model ranking, management and analytics.
 # TradeIQ v3.1.2 adds silent monitoring and real-entry execution routing.
 # TradeIQ v3.1.3 adds a ranked institutional market map and compact level ladder.
+# TradeIQ v3.1.4 adds executable bracket-plan visualization with exact BUY/SELL order labels.
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -57,7 +59,7 @@ async def lifespan(app: FastAPI):
 # Legacy v3.0.3 API release: 3.0.3-fib-pullback-watch-execution
 # Legacy v3.0.4 API release: 3.0.4-trade-desk-market-radar
 # Legacy v3.0.5 API release: 3.0.5-self-healing-market-stream
-app = FastAPI(title=settings.app_name, version="3.1.3-institutional-market-map", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="3.1.4-executable-bracket-plans", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 

@@ -334,15 +334,18 @@ Current local verification target:
 
 TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.
 
-## Current release: v3.1.3
+## Current release: v3.1.4
 
-TradeIQ now builds a ranked institutional market map from GEX, supply/demand, OTE/Fib, VWAP/value and liquidity references:
+TradeIQ now renders each published executable plan as a professional bracket directly on the chart:
 
-- nearby references are grouped into independent-evidence support/resistance clusters;
-- each cluster is classified as approaching, testing, rejecting, accepting or distant;
-- clean mode shows the actionable cluster and nearest opposing liquidity instead of every raw line;
-- opposing clusters participate in target and near-liquidity safety checks;
-- cluster location never bypasses model confirmation, execution freshness, structural stop or minimum-R gates;
-- silent pre-entry publication from v3.1.2 remains unchanged.
+- exact `BUY/SELL MARKET`, `BUY/SELL LIMIT`, or `BUY/SELL STOP` labels;
+- a green reward area from entry to TP2;
+- a red risk area from entry to the structural stop;
+- a dashed TP1 guide inside the bracket;
+- exact entry, SL, TP1 and TP2 prices on the right scale;
+- ARMED, FILLED and TP1 HIT lifecycle labels;
+- no bracket while TradeIQ is silently scanning or only monitoring a theoretical level.
 
-See `TRADEIQ_V3.1.3_RELEASE_NOTES.md` for the release contract.
+The v3.1.3 institutional market map and all v3.1.2 real-entry publication gates remain unchanged. A bracket is a display of an already-qualified deterministic plan, not a new signal source.
+
+See `TRADEIQ_V3.1.4_RELEASE_NOTES.md` for the release contract.

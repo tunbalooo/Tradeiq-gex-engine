@@ -153,6 +153,29 @@
       .every((value) => Number.isFinite(Number(value)));
   }
 
+  function executionOrderLabel(setup, includeState = false) {
+    if (!setup) return "ENTRY";
+    const side = setup.direction === "SHORT" ? "SELL" : "BUY";
+    const type = String(setup.execution_type || "LIMIT").toUpperCase();
+    let label = `${side} ${type}`;
+    if (!includeState) return label;
+    if (setup.order_state === "WAITING_FOR_LIMIT") label += " · ARMED";
+    else if (setup.order_state === "FILLED") label += " · FILLED";
+    else if (setup.order_state === "TP1_HIT") label += " · TP1 HIT";
+    return label;
+  }
+
+  function tradePlanRrLabel(setup) {
+    const rr = Number(setup?.risk_reward ?? setup?.tp2_r);
+    return Number.isFinite(rr) && rr > 0 ? `1:${rr.toFixed(1)}` : "";
+  }
+
+  function tradePlanStartRatio(instance) {
+    const width = Number(instance?.host?.clientWidth || 0);
+    if (width < 700) return 0.43;
+    return instance?.id === "chartLarge" ? 0.56 : 0.60;
+  }
+
   function installCanvasFallback() {
     console.warn("Lightweight Charts was unavailable; TradeIQ is using its built-in Canvas chart fallback.");
     const fallbackInstances = new Map();
@@ -537,13 +560,57 @@
         if (Number.isFinite(Number(rthEq))) horizontal(ctx, toY(rthEq), plotRight, "RTH EQ", "#E8D99A");
       }
       if (overlays.trade && hasLockedTradePlan(setup)) {
-        const entryLabel = setup.execution_type === "STOP" ? "STOP ENTRY" : setup.execution_type === "MARKET" ? "MARKET ENTRY" : "LIMIT ENTRY";
-        horizontal(ctx, toY(setup.entry), plotRight, entryLabel, lineColors.entry, false);
-        horizontal(ctx, toY(initialStop(setup)), plotRight, "INITIAL SL", lineColors.stop, false);
+        const entryY = toY(setup.entry);
+        const stopY = toY(initialStop(setup));
+        const tp1Y = toY(setup.take_profit_1);
+        const tp2Y = toY(setup.take_profit_2);
+        const startX = Math.max(12, plotRight * tradePlanStartRatio(instance));
+        const boxWidth = Math.max(80, plotRight - startX);
+        const rewardTop = Math.min(entryY, tp2Y);
+        const rewardHeight = Math.max(1, Math.abs(tp2Y - entryY));
+        const riskTop = Math.min(entryY, stopY);
+        const riskHeight = Math.max(1, Math.abs(stopY - entryY));
+
+        ctx.save();
+        ctx.fillStyle = "rgba(38,208,124,.14)";
+        ctx.fillRect(startX, rewardTop, boxWidth, rewardHeight);
+        ctx.strokeStyle = "rgba(38,208,124,.62)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(startX + .5, rewardTop + .5, Math.max(0, boxWidth - 1), Math.max(0, rewardHeight - 1));
+        ctx.fillStyle = "rgba(255,77,94,.15)";
+        ctx.fillRect(startX, riskTop, boxWidth, riskHeight);
+        ctx.strokeStyle = "rgba(255,77,94,.65)";
+        ctx.strokeRect(startX + .5, riskTop + .5, Math.max(0, boxWidth - 1), Math.max(0, riskHeight - 1));
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = "rgba(38,208,124,.85)";
+        ctx.beginPath(); ctx.moveTo(startX, tp1Y); ctx.lineTo(plotRight, tp1Y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.strokeStyle = lineColors.entry;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(startX, entryY); ctx.lineTo(plotRight, entryY); ctx.stroke();
+
+        const rr = tradePlanRrLabel(setup);
+        const badge = `${executionOrderLabel(setup, true)}${rr ? ` · ${rr}` : ""}`;
+        ctx.font = "700 10px ui-monospace, monospace";
+        const badgeWidth = Math.min(boxWidth - 8, ctx.measureText(badge).width + 14);
+        const badgeY = Math.max(plotTop + 2, Math.min(plotBottom - 20, entryY - 19));
+        ctx.fillStyle = lineColors.entry;
+        ctx.fillRect(startX + 4, badgeY, Math.max(54, badgeWidth), 18);
+        ctx.fillStyle = "#071019";
+        ctx.fillText(badge, startX + 11, badgeY + 13);
+        ctx.font = "700 9px ui-monospace, monospace";
+        ctx.fillStyle = "rgba(210,255,231,.82)";
+        if (rewardHeight > 24) ctx.fillText("REWARD", startX + 8, rewardTop + 15);
+        ctx.fillStyle = "rgba(255,220,224,.82)";
+        if (riskHeight > 24) ctx.fillText("RISK", startX + 8, riskTop + 15);
+        ctx.restore();
+
+        horizontal(ctx, entryY, plotRight, executionOrderLabel(setup), lineColors.entry, false);
+        horizontal(ctx, stopY, plotRight, "SL", lineColors.stop, false);
         if (Math.abs(activeStop(setup) - initialStop(setup)) > Number(payload?.tickSize || .25) / 2)
           horizontal(ctx, toY(activeStop(setup)), plotRight, "ACTIVE SL / BE", lineColors.entry, true);
-        horizontal(ctx, toY(setup.take_profit_1), plotRight, "TP1", lineColors.target);
-        horizontal(ctx, toY(setup.take_profit_2), plotRight, "TP2", lineColors.target, false);
+        horizontal(ctx, tp1Y, plotRight, "TP1", lineColors.target);
+        horizontal(ctx, tp2Y, plotRight, "TP2", lineColors.target, false);
       }
       ctx.fillStyle = "#7788A3";
       ctx.font = "500 9px ui-monospace, monospace";
@@ -629,6 +696,42 @@
   function unixTime(value) {
     const timestamp = Math.floor(new Date(value).getTime() / 1000);
     return Number.isFinite(timestamp) ? timestamp : null;
+  }
+
+  function tradePlanStartX(instance, chartWidth) {
+    const fallback = chartWidth * tradePlanStartRatio(instance);
+    const eventTime = unixTime(instance?.setup?.armed_at || instance?.setup?.filled_at);
+    const eventX = eventTime != null ? instance?.chart?.timeScale?.().timeToCoordinate?.(eventTime) : null;
+    const proposed = Number.isFinite(Number(eventX)) ? Number(eventX) : fallback;
+    const minimum = Math.max(8, chartWidth * 0.08);
+    const minimumBoxWidth = instance?.host?.clientWidth < 700
+      ? Math.min(190, chartWidth * 0.48)
+      : Math.min(300, chartWidth * 0.44);
+    const maximum = Math.max(minimum, chartWidth - minimumBoxWidth);
+    return Math.max(minimum, Math.min(maximum, proposed));
+  }
+
+  function drawCanvasTag(ctx, x, y, text, background, foreground, maxWidth = 260) {
+    if (!text) return { width: 0, height: 0 };
+    ctx.save();
+    ctx.font = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace";
+    let label = String(text);
+    const paddingX = 8;
+    const height = 20;
+    while (label.length > 8 && ctx.measureText(label).width + paddingX * 2 > maxWidth) {
+      label = `${label.slice(0, -2)}…`;
+    }
+    const width = Math.max(54, Math.min(maxWidth, ctx.measureText(label).width + paddingX * 2));
+    ctx.fillStyle = background;
+    ctx.fillRect(x, y, width, height);
+    ctx.strokeStyle = "rgba(255,255,255,.16)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + .5, y + .5, Math.max(0, width - 1), height - 1);
+    ctx.fillStyle = foreground;
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, x + paddingX, y + height / 2 + .5);
+    ctx.restore();
+    return { width, height };
   }
 
   function normaliseCandles(candles = []) {
@@ -1241,8 +1344,8 @@
     if (false) {
       // Silent-monitoring placeholder: no pre-entry watch line is rendered.
     } else if (overlays.trade && hasLockedTradePlan(setup)) {
-      addPriceLine(instance, setup.entry, setup.execution_type === "STOP" ? "STOP ENTRY" : setup.execution_type === "MARKET" ? "MARKET ENTRY" : "LIMIT", COLORS.amber, dashed, 2);
-      addPriceLine(instance, initialStop(setup), "INITIAL SL", COLORS.red, dashed, 2);
+      addPriceLine(instance, setup.entry, executionOrderLabel(setup), COLORS.amber, dashed, 2);
+      addPriceLine(instance, initialStop(setup), "SL", COLORS.red, dashed, 2);
       if (Math.abs(activeStop(setup) - initialStop(setup)) > Number(instance.tickSize || .25) / 2)
         addPriceLine(instance, activeStop(setup), "ACTIVE SL / BE", COLORS.amber, dotted, 2);
       addPriceLine(instance, setup.take_profit_1, "TP1", COLORS.green, dashed, 2);
@@ -1409,13 +1512,60 @@
     if (overlays.trade && hasLockedTradePlan(setup)) {
       const entry = coordinate(setup.entry);
       const stop = coordinate(initialStop(setup));
-      const target = coordinate(setup.take_profit_2);
-      if (entry != null && stop != null && target != null) {
-        const startX = chartWidth * (instance.id === "chartLarge" ? 0.68 : 0.72);
-        ctx.fillStyle = "rgba(38,208,124,.07)";
-        ctx.fillRect(startX, Math.min(entry, target), chartWidth - startX, Math.abs(target - entry));
-        ctx.fillStyle = "rgba(255,77,94,.08)";
-        ctx.fillRect(startX, Math.min(entry, stop), chartWidth - startX, Math.abs(stop - entry));
+      const tp1 = coordinate(setup.take_profit_1);
+      const tp2 = coordinate(setup.take_profit_2);
+      if ([entry, stop, tp1, tp2].every((value) => value != null)) {
+        const startX = tradePlanStartX(instance, chartWidth);
+        const endX = Math.max(startX + 1, chartWidth - 1);
+        const boxWidth = Math.max(1, endX - startX);
+        const rewardTop = Math.min(entry, tp2);
+        const rewardHeight = Math.max(1, Math.abs(tp2 - entry));
+        const riskTop = Math.min(entry, stop);
+        const riskHeight = Math.max(1, Math.abs(stop - entry));
+
+        ctx.save();
+        ctx.fillStyle = "rgba(38,208,124,.13)";
+        ctx.fillRect(startX, rewardTop, boxWidth, rewardHeight);
+        ctx.strokeStyle = "rgba(38,208,124,.58)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(startX + .5, rewardTop + .5, Math.max(0, boxWidth - 1), Math.max(0, rewardHeight - 1));
+
+        ctx.fillStyle = "rgba(255,77,94,.14)";
+        ctx.fillRect(startX, riskTop, boxWidth, riskHeight);
+        ctx.strokeStyle = "rgba(255,77,94,.62)";
+        ctx.strokeRect(startX + .5, riskTop + .5, Math.max(0, boxWidth - 1), Math.max(0, riskHeight - 1));
+
+        ctx.strokeStyle = "rgba(38,208,124,.92)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath(); ctx.moveTo(startX, tp1); ctx.lineTo(endX, tp1); ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.strokeStyle = COLORS.amber;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(startX, entry); ctx.lineTo(endX, entry); ctx.stroke();
+
+        const precision = Number(instance.pricePrecision || 2);
+        const rr = tradePlanRrLabel(setup);
+        const orderText = `${executionOrderLabel(setup, true)} @ ${formatPrice(setup.entry, precision)}${rr ? ` · ${rr}` : ""}`;
+        const labelY = entry - 24 >= 4 ? entry - 24 : entry + 4;
+        drawCanvasTag(ctx, startX + 5, labelY, orderText, COLORS.amber, "#071019", Math.max(86, boxWidth - 10));
+
+        ctx.font = "700 9px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.textBaseline = "top";
+        if (rewardHeight > 28) {
+          ctx.fillStyle = "rgba(206,255,230,.90)";
+          ctx.fillText(`TP2 ${formatPrice(setup.take_profit_2, precision)}`, startX + 8, rewardTop + 7);
+        }
+        if (Math.abs(tp1 - entry) > 18) {
+          ctx.fillStyle = "rgba(192,255,220,.78)";
+          ctx.fillText(`TP1 ${formatPrice(setup.take_profit_1, precision)}`, startX + 8, Math.max(rewardTop + 7, tp1 - 14));
+        }
+        if (riskHeight > 28) {
+          ctx.fillStyle = "rgba(255,218,222,.90)";
+          ctx.fillText(`SL ${formatPrice(initialStop(setup), precision)}`, startX + 8, riskTop + 7);
+        }
+        ctx.restore();
       }
     }
   }

@@ -33,14 +33,17 @@
 // TradeIQ v3.1.2: silent monitoring, nearby real limits and fast continuation execution.
 // Previous v3.1.2 asset query: ?v=312
 // TradeIQ v3.1.3: ranked institutional market map and compact clean-chart ladder.
-const CACHE_NAME = "tradeiq-v3.1.3-institutional-market-map-shell";
+// Previous cache: tradeiq-v3.1.3-institutional-market-map-shell
+// Previous v3.1.3 asset query: ?v=313
+// TradeIQ v3.1.4: executable BUY/SELL bracket plans with exact entry, stop and targets.
+const CACHE_NAME = "tradeiq-v3.1.4-executable-bracket-plans-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=313",
-  "/static/boot.js?v=313",
-  "/static/time.js?v=313",
-  "/static/app.js?v=313",
-  "/static/trading_chart.js?v=313",
+  "/static/styles.css?v=314",
+  "/static/boot.js?v=314",
+  "/static/time.js?v=314",
+  "/static/app.js?v=314",
+  "/static/trading_chart.js?v=314",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",
