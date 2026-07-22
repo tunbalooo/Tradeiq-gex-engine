@@ -173,3 +173,13 @@ The chart may show a price gap across a valid session break without deleting the
 ## v3.1.0 Execution Display
 
 The setup card displays the chosen execution type, freshness percentage, distance from ideal entry, and institutional cluster score. Labels distinguish Market Entry, Limit Entry, Stop Entry, and No Entry. Missed setups explicitly state that analysis was correct but no chase is allowed.
+
+## v3.1.1 Cluster Tier Display
+
+The Setup card, Trade Desk rail and Confluence page display the composite tier explicitly:
+
+- `EXCEPTIONAL 2-FACTOR CLUSTER`
+- `STANDARD 3-FACTOR CLUSTER`
+- `HIGH-PRIORITY 4-FACTOR CLUSTER` or the actual larger category count
+
+The interface also displays the composite score and independent active categories. When a cluster is recognized but its stricter execution-quality gate is incomplete, the explanation states that TradeIQ selected the valid stronger single model instead. Cluster eligibility never implies that an order was filled.

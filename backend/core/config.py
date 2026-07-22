@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     watch_confirmation_minutes: int = 5
     cluster_min_score: float = 0.65
     cluster_tolerance_atr: float = 0.25
+    # Flexible institutional-cluster tiers. A very strong two-category cluster
+    # is allowed only with exceptional confirmation and execution freshness;
+    # three categories are standard; four or more receive high-priority status.
+    cluster_two_factor_min_score: float = 76.0
+    cluster_two_factor_min_confidence: float = 75.0
+    cluster_two_factor_min_freshness: float = 70.0
+    cluster_three_factor_min_score: float = 72.0
+    cluster_three_factor_min_confidence: float = 60.0
+    cluster_three_factor_min_freshness: float = 45.0
+    cluster_four_factor_min_score: float = 70.0
+    cluster_four_factor_min_freshness: float = 30.0
     nq_tick_size: float = 0.25  # deprecated: instrument registry supplies tick sizes
     event_sequence_max_bars: int = 4
     event_max_age_bars: int = 12

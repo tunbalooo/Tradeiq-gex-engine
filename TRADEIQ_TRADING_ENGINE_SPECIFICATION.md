@@ -201,3 +201,19 @@ A radar candidate remains non-executable. When the trader opens the market, the 
 Confirmed setups pass through an execution selector. Market execution is permitted only near the ideal entry with at least 2R remaining. Limit execution is preferred for retracement models. Stop execution is preferred when continuation must be proven through a trigger. No-entry is mandatory after TP1/TP2 is reached before fill, freshness falls below tolerance, or risk/reward deteriorates.
 
 Composite clusters use independent categories: GEX, zone, retracement, imbalance, liquidity/structure, and trend/value. Related labels are not double-counted.
+
+## v3.1.1 Flexible Cluster Selection Contract
+
+The Decision Brain evaluates six independent categories: GEX, zone, retracement, imbalance, liquidity/structure and trend/value. Category values must reach 0.60 to count as active.
+
+### Cluster tiers
+
+| Tier | Independent categories | Minimum composite score | Extra execution requirements |
+|---|---:|---:|---|
+| Exceptional 2-factor | 2 | 76 | confirmation strength 2, confidence 75%, freshness 70% |
+| Standard 3-factor | 3 | 72 | confirmation strength 1, confidence 60%, freshness 45% |
+| High-priority 4+ | 4 or more | 70 | confirmation strength 1, normal confidence floor, freshness 30% |
+
+A cluster's visible score combines active-category quality, total weighted evidence, breadth and spatial overlap. A separate transparent selection bonus compares the composite interpretation with the strongest individual model. The engine evaluates both paths: when the preferred cluster fails its stricter quality gate but the strongest single model remains valid, TradeIQ executes the single model rather than discarding the trade.
+
+Two-factor clusters cannot trade from touch alone. They require at least one model-native confirmation plus enough additional price-action confirmation, or two independently confirmed entry models. All clusters remain subject to target-not-blocked, minimum 2R, freshness, entry validity, structural invalidation and live-data health gates.

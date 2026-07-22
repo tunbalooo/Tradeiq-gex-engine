@@ -182,7 +182,10 @@ class TradeSetup(BaseModel):
     model_selected_at: datetime | None = None
     model_switch_count: int = 0
     composite_cluster_score: float = 0.0
+    composite_cluster_selection_score: float = 0.0
     composite_cluster_eligible: bool = False
+    composite_cluster_tier: str = "NONE"
+    composite_cluster_active_categories: list[str] = Field(default_factory=list)
     composite_cluster_categories: dict[str, float] = Field(default_factory=dict)
     composite_cluster_contributors: list[str] = Field(default_factory=list)
     execution_type: str = "NONE"

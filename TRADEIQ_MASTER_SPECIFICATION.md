@@ -200,3 +200,13 @@ TradeIQ must preserve valid history across genuine session breaks while still re
 ## v3.1.0 Adaptive Execution
 
 TradeIQ supports both strong single-model setups and composite institutional confluence clusters. The Decision Brain chooses the stronger valid interpretation, while the Adaptive Execution Engine selects MARKET, LIMIT, STOP, or NONE based on model type, confirmation, freshness, remaining reward, target status, and market-data health.
+
+## v3.1.1 Flexible Institutional Cluster Tiers
+
+TradeIQ accepts either a strong single entry model or a valid composite cluster. The engine does not require a fixed number of confluences and does not automatically prefer a larger label count.
+
+- **Exceptional 2-factor cluster:** allowed only when two independent categories are exceptionally strong, model-native confirmation strength is at least 2, institutional confidence is at least 75%, execution freshness is at least 70%, the structural stop is valid, data is healthy, the target path is clear and at least 2R remains.
+- **Standard 3-factor cluster:** normal institutional cluster with at least one model-native confirmation, at least 60% institutional confidence and at least 45% execution freshness.
+- **High-priority 4+ factor cluster:** receives the highest composite-selection priority, but still requires model confirmation, a valid structural stop, healthy live data, clear targets and at least 2R.
+
+Related evidence remains grouped: OTE and Fib count as one retracement category; Supply and Order Block do not blindly create two independent categories; sweep, MSS and displacement share the liquidity/structure category. A stronger valid single model may still remain primary when it outranks the composite cluster.

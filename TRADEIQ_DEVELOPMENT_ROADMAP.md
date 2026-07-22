@@ -138,3 +138,14 @@
 - [x] Execution freshness and distance
 - [x] Target-reached-before-fill cancellation
 - [x] No-chase departure rule
+
+## Released — v3.1.1
+
+- [x] Allow exceptional two-category institutional clusters.
+- [x] Add standard three-factor and high-priority four-plus cluster tiers.
+- [x] Prevent related labels from double-counting evidence.
+- [x] Add tier-specific confidence, confirmation-strength and freshness gates.
+- [x] Compare composite selection strength with the strongest valid single model.
+- [x] Fall back to a valid single model when a preferred cluster fails its stricter quality gate.
+- [x] Expose cluster tier and active independent categories to the UI and API.
+- [x] Add regression coverage for two-, three- and four-plus-factor behavior.

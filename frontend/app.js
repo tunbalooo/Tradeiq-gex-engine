@@ -905,7 +905,7 @@ function confirmationWaitingText(setup) {
 }
 
 function previewExplanation(setup, { syncing = false, marketClosed = false } = {}) {
-  if (watchTriggerTouched(setup)) return `Price touched the ${setup.direction.toLowerCase()} watch level at ${fmt(watchTrigger(setup))}. No order was filled. ${setup.primary_entry_model || "The selected model"} is waiting for ${confirmationWaitingText(setup)} before it can lock a limit plan.`;
+  if (watchTriggerTouched(setup)) return `Price touched the ${setup.direction.toLowerCase()} watch level at ${fmt(watchTrigger(setup))}. No order was filled. ${setup.primary_entry_model || "The selected model"} is waiting for ${confirmationWaitingText(setup)} before it can select a market, limit, stop, or no-entry execution plan.`;
   if (hasWatchingPlan(setup)) return `Monitoring ${setup.direction.toLowerCase()} near ${fmt(watchTrigger(setup))}. This trigger is not an entry and no limit order is armed. Wait for LIMIT READY before considering the plan.`;
   if (syncing) return "Temporary levels from local placeholder data while Databento history syncs. Do not trade this preview.";
   if (marketClosed) return "Watch-only candidate from the latest closed data. It can change or disappear when live trading resumes.";
@@ -932,6 +932,27 @@ function executionName(setup) {
   if (type === "STOP") return "Stop Entry";
   if (type === "LIMIT") return "Limit Entry";
   return "No Entry";
+}
+
+function clusterTierName(setup) {
+  const tier = String(setup?.composite_cluster_tier || "NONE").toUpperCase();
+  const count = Array.isArray(setup?.composite_cluster_active_categories)
+    ? setup.composite_cluster_active_categories.length
+    : 0;
+  if (tier === "EXCEPTIONAL_2_FACTOR") return "EXCEPTIONAL 2-FACTOR CLUSTER";
+  if (tier === "STANDARD_3_FACTOR") return "STANDARD 3-FACTOR CLUSTER";
+  if (tier === "HIGH_PRIORITY_4_PLUS") return `HIGH-PRIORITY ${Math.max(4, count)}-FACTOR CLUSTER`;
+  return "INSTITUTIONAL CLUSTER";
+}
+
+function clusterDisplay(setup) {
+  if (setup?.composite_cluster_eligible) {
+    return `${clusterTierName(setup)} · ${Number(setup.composite_cluster_score || 0).toFixed(0)}%`;
+  }
+  if (setup?.cluster_low != null) {
+    return `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(Number(setup.cluster_score || 0) * 100).toFixed(0)}%`;
+  }
+  return "Single-model setup";
 }
 
 function renderTradeSetup(setup) {
@@ -1003,7 +1024,7 @@ function renderTradeSetup(setup) {
     setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
-  $("setupCluster").textContent = setup.composite_cluster_eligible ? `INSTITUTIONAL CLUSTER · ${Number(setup.composite_cluster_score || 0).toFixed(0)}%` : setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "Single-model setup";
+  $("setupCluster").textContent = clusterDisplay(setup);
   $("setupCluster").className = `v ${setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
@@ -1072,7 +1093,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartSetupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
   $("chartSetupStatus").textContent = statusText;
   $("chartSetupStatus").className = setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a";
-  $("chartSetupCluster").textContent = setup.composite_cluster_eligible ? `INSTITUTIONAL CLUSTER · ${Number(setup.composite_cluster_score || 0).toFixed(0)}%` : setup.cluster_low != null ? `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(setup.cluster_score * 100).toFixed(0)}%` : "Single-model setup";
+  $("chartSetupCluster").textContent = clusterDisplay(setup);
   $("chartSetupCluster").className = setup.signals.gex_ote_zone_cluster ? "g" : "a";
   renderModelRanking(setup, "chartModelRanking");
   $("chartSetupSession").textContent = state.session?.display_name || "—";
@@ -1935,7 +1956,10 @@ function renderGexPage(setupOrGex = null) {
 function renderConfluencePage(setup) {
   if (!setup || !$("confluencePage")) return;
   renderScorePage("confluencePage", setup.institutional_confidence_components || setup.confidence_components, setup.institutional_confidence_maximums || setup.confidence_maximums);
-  $("clusterCard").innerHTML = `<div class="cluster-box page-kv">${pageRow("Institutional grade",setup.confidence_grade || "—",Number(setup.confidence)>=85?'g':Number(setup.confidence)>=70?'a':'r')}${pageRow("Primary model",setup.primary_entry_model || "—",'b')}${pageRow("Model score",`${Number(setup.primary_model_score||0).toFixed(1)}%`)}${pageRow("Backup models",(setup.alternative_entry_models||[]).slice(0,3).join(" · ")||"—")}${pageRow("Cluster score",`${Math.round(Number(setup.cluster_score||0)*100)}%`,setup.cluster_score>=.65?'g':'a')}${pageRow("Cluster range",setup.cluster_low!=null?`${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)}`:'—')}${pageRow("GEX level",fmt(setup.cluster_gex_level))}${pageRow("GEX type",setup.cluster_gex_type||'—')}${pageRow("Zone timeframe",setup.selected_zone_timeframe||'—')}${pageRow("Ordered sequence",setup.signals?.ordered_sequence?'Confirmed':'Not confirmed',setup.signals?.ordered_sequence?'g':'a')}</div>`;
+  const activeClusterCategories = Array.isArray(setup.composite_cluster_active_categories)
+    ? setup.composite_cluster_active_categories.map((item) => String(item).replaceAll("_", " ")).join(" · ")
+    : "—";
+  $("clusterCard").innerHTML = `<div class="cluster-box page-kv">${pageRow("Institutional grade",setup.confidence_grade || "—",Number(setup.confidence)>=85?'g':Number(setup.confidence)>=70?'a':'r')}${pageRow("Primary model",setup.primary_entry_model || "—",'b')}${pageRow("Model score",`${Number(setup.primary_model_score||0).toFixed(1)}%`)}${pageRow("Backup models",(setup.alternative_entry_models||[]).slice(0,3).join(" · ")||"—")}${pageRow("Composite tier",setup.composite_cluster_eligible?clusterTierName(setup):"Not selected",setup.composite_cluster_eligible?'g':'a')}${pageRow("Composite score",`${Number(setup.composite_cluster_score||0).toFixed(1)}%`,setup.composite_cluster_eligible?'g':'a')}${pageRow("Independent categories",activeClusterCategories)}${pageRow("Spatial cluster",`${Math.round(Number(setup.cluster_score||0)*100)}%`,setup.cluster_score>=.65?'g':'a')}${pageRow("Cluster range",setup.cluster_low!=null?`${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)}`:'—')}${pageRow("GEX level",fmt(setup.cluster_gex_level))}${pageRow("GEX type",setup.cluster_gex_type||'—')}${pageRow("Zone timeframe",setup.selected_zone_timeframe||'—')}${pageRow("Ordered sequence",setup.signals?.ordered_sequence?'Confirmed':'Not confirmed',setup.signals?.ordered_sequence?'g':'a')}</div>`;
   const modelReason = setup.model_selection_reason ? `<div class="rationale-item">◆ ${escapeHtml(setup.model_selection_reason)}</div>` : "";
   $("rationale").innerHTML = modelReason + ((setup.rationale || []).map((reason) => `<div class="rationale-item">✓ ${escapeHtml(reason)}</div>`).join("") || '<p class="note">No active rationale yet.</p>');
 }

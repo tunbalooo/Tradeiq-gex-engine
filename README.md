@@ -333,3 +333,15 @@ Current local verification target:
 ## v3.0.6 Timezone-Aware Setup History
 
 TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.
+
+## Current release: v3.1.1
+
+TradeIQ supports strong single-model execution and flexible institutional cluster tiers:
+
+- exceptional 2-factor clusters with strict confirmation/confidence/freshness gates;
+- standard 3-factor clusters;
+- high-priority 4+ factor clusters;
+- adaptive MARKET, LIMIT, STOP or NO ENTRY execution;
+- fallback to a valid single model when a composite cluster is recognized but not executable.
+
+See `TRADEIQ_V3.1.1_RELEASE_NOTES.md` for the release contract.
