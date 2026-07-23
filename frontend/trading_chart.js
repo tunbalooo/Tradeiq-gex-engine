@@ -1,6 +1,7 @@
 // TOUCHED · CONFIRM
-// Legacy watch-line regression marker retained as a comment only; v3.1.2 does not draw it:
+// Legacy watch-line regression marker retained as a comment only:
 // MONITOR ${setup.direction} · NO ORDER
+// v3.1.5 restores an optional SCAN ONLY line, while exact entry/SL/TP remain locked until executable.
 (() => {
   "use strict";
 
@@ -507,8 +508,14 @@
       const setup = payload?.setup || {};
       const overlays = payload?.overlays || {};
 
+      if (overlays.scan && !hasLockedTradePlan(setup) && hasWatchingPlan(setup)) {
+        const scanPrice = watchTrigger(setup);
+        const scanModel = String(setup.primary_entry_model || "candidate").toUpperCase();
+        horizontal(ctx, toY(scanPrice), plotRight, `SCAN ${setup.direction} · ${scanModel} · NO ORDER`, lineColors.entry, true);
+      }
+
       if (overlays.zones) {
-        (setup.zones || []).slice(0, 4).forEach((zone) => {
+        (setup.zones || []).forEach((zone) => {
           const top = toY(zone.high), bottom = toY(zone.low);
           ctx.fillStyle = zone.kind === "DEMAND" ? "rgba(38,208,124,.075)" : "rgba(255,77,94,.075)";
           ctx.fillRect(0, Math.min(top, bottom), plotRight, Math.abs(bottom - top));
@@ -553,13 +560,13 @@
         horizontal(ctx, toY(setup.gex.gamma_flip), plotRight, "GAMMA FLIP", lineColors.entry);
         if (Number.isFinite(Number(setup.gex.max_pain))) horizontal(ctx, toY(setup.gex.max_pain), plotRight, "MAX PAIN", "#D85CFF");
         horizontal(ctx, toY(setup.gex.put_wall), plotRight, "PUT SUPPORT / WALL", lineColors.stop);
-        (setup.gex.levels || []).slice(0, 4).forEach((level) => horizontal(ctx, toY(level.price), plotRight, level.type || "GEX", Number(level.gex || 0) >= 0 ? "#21875A" : "#9D3542"));
+        (setup.gex.levels || []).forEach((level) => horizontal(ctx, toY(level.price), plotRight, level.type || "GEX", Number(level.gex || 0) >= 0 ? "#21875A" : "#9D3542"));
       }
       if (overlays.vwap) {
         horizontal(ctx, toY(setup.vwap), plotRight, "VWAP", lineColors.vwap, false);
         if (Number.isFinite(Number(rthEq))) horizontal(ctx, toY(rthEq), plotRight, "RTH EQ", "#E8D99A");
       }
-      if (overlays.trade && hasLockedTradePlan(setup)) {
+      if (Boolean(overlays.trade) && hasLockedTradePlan(setup)) {
         const entryY = toY(setup.entry);
         const stopY = toY(initialStop(setup));
         const tp1Y = toY(setup.take_profit_1);
@@ -1341,9 +1348,13 @@
 
     // Trade lifecycle levels receive label priority. Context levels that sit on
     // top of them remain visible as lines but suppress duplicate right-axis tags.
-    if (false) {
-      // Silent-monitoring placeholder: no pre-entry watch line is rendered.
-    } else if (overlays.trade && hasLockedTradePlan(setup)) {
+    if (overlays.scan && !hasLockedTradePlan(setup) && hasWatchingPlan(setup)) {
+      const scanPrice = watchTrigger(setup);
+      const scanModel = String(setup.primary_entry_model || "candidate").toUpperCase();
+      const scanState = watchTriggerTouched(setup) ? "CONFIRMING" : "SCANNING";
+      addPriceLine(instance, scanPrice, `${scanState} ${setup.direction} · ${scanModel} · NO ORDER`, COLORS.amber, dotted, 1, true);
+    }
+    if (overlays.trade && hasLockedTradePlan(setup)) {
       addPriceLine(instance, setup.entry, executionOrderLabel(setup), COLORS.amber, dashed, 2);
       addPriceLine(instance, initialStop(setup), "SL", COLORS.red, dashed, 2);
       if (Math.abs(activeStop(setup) - initialStop(setup)) > Number(instance.tickSize || .25) / 2)
@@ -1352,9 +1363,8 @@
       addPriceLine(instance, setup.take_profit_2, "TP2", COLORS.green, dashed, 2);
     }
 
-    const marketMapVisible = cleanMode && setup.market_map
-      && (overlays.gex || overlays.fib || overlays.zones || overlays.vwap);
-    if (marketMapVisible && renderCleanMarketMapLines(instance, setup)) return;
+    const marketMapVisible = overlays.map && setup.market_map;
+    if (marketMapVisible) renderCleanMarketMapLines(instance, setup);
 
     if (overlays.gex && setup.gex) {
       addPriceLine(instance, setup.gex.call_wall, "GAMMA RES / CALL WALL", COLORS.blue, dashed, 2);
@@ -1364,7 +1374,7 @@
       if (Number.isFinite(Number(setup.gex.max_pain))) addPriceLine(instance, setup.gex.max_pain, "MAX PAIN", "#D85CFF", dashed, 2);
       addPriceLine(instance, setup.gex.put_wall, "PUT SUPPORT / WALL", COLORS.red, dashed, 2);
       if (!cleanMode) {
-        (setup.gex.levels || []).slice(0, instance.host.clientWidth < 700 ? 2 : instance.id === "chartLarge" ? 6 : 3).forEach((level) => {
+        (setup.gex.levels || []).forEach((level) => {
           addPriceLine(instance, level.price, level.type || "GEX", Number(level.gex || 0) >= 0 ? "#21875A" : "#9D3542", dotted, 1);
         });
       }
@@ -1404,7 +1414,7 @@
     if (overlays.zones) {
       const zones = cleanMode
         ? cleanPriorityZones(instance, setup)
-        : (setup.zones || []).slice(0, instance.host.clientWidth < 700 ? 3 : instance.id === "chartLarge" ? 7 : 4);
+        : (setup.zones || []);
       zones.forEach((zone) => {
         const color = zone.kind === "DEMAND" ? "#21875A" : "#9D3542";
         const selected = setup.selected_zone_low != null && Math.abs(Number(zone.low) - Number(setup.selected_zone_low)) <= Number(instance.tickSize || .25);
@@ -1439,8 +1449,7 @@
     if (!setup) return;
     const chartWidth = Math.max(0, width - 77);
     const coordinate = (price) => instance.candleSeries.priceToCoordinate(Number(price));
-    const marketMapVisible = cleanMode && setup.market_map
-      && (overlays.gex || overlays.fib || overlays.zones || overlays.vwap);
+    const marketMapVisible = overlays.map && setup.market_map;
 
     if (marketMapVisible) {
       const clusters = [];
@@ -1466,7 +1475,7 @@
       });
     }
 
-    if (!marketMapVisible && overlays.gex && setup.gex) {
+    if (overlays.gex && setup.gex) {
       const half = Math.max(Number(instance.tickSize || .25) * 3, Number(setup.atr || 0) * .08);
       [
         [setup.gex.call_wall, "rgba(72,163,255,.10)"],
@@ -1482,8 +1491,8 @@
       });
     }
 
-    if (!marketMapVisible && overlays.zones) {
-      const zones = cleanMode ? cleanPriorityZones(instance, setup) : (setup.zones || []).slice(0, instance.id === "chartLarge" ? 9 : 5);
+    if (overlays.zones) {
+      const zones = cleanMode ? cleanPriorityZones(instance, setup) : (setup.zones || []);
       zones.forEach((zone) => {
         const top = coordinate(zone.high);
         const bottom = coordinate(zone.low);
@@ -1495,7 +1504,7 @@
       });
     }
 
-    if (!marketMapVisible && overlays.fib) {
+    if (overlays.fib) {
       const fibContinuation = setup.primary_entry_model_key === "FIB_PULLBACK_CONTINUATION";
       const fibPrices = fibContinuation
         ? [setup.signals?.fib_pullback_zone_low, setup.signals?.fib_pullback_zone_high]
@@ -1748,3 +1757,6 @@
   });
   window.TradeIQChartManager = { render, reset, marketChanged, resize, refresh, instances };
 })();
+
+// Legacy v2.1 regression marker only: else if (overlays.trade && hasLockedTradePlan(setup))
+// Legacy v3.1.3 regression marker only: if (marketMapVisible && renderCleanMarketMapLines(instance, setup)) return;

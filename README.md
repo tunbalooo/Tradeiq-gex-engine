@@ -334,7 +334,21 @@ Current local verification target:
 
 TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.
 
-## Current release: v3.1.4
+
+## Current release: v3.1.5
+
+TradeIQ once again shows the developing scan while keeping execution honest:
+
+- the Setup rail shows candidate direction, model score, backup models, grade, cluster and model ranking before an order is ready;
+- an optional `Scan` chart line marks the internal watch level and is always labelled `NO ORDER`;
+- exact entry, stop and targets remain hidden until a deterministic market, limit or stop plan is executable;
+- `Map`, `GEX`, `Fib/OTE`, `S&D`, `VWAP/σ`, `EMAs`, `Scan`, and `Entry/SL/TP` are independently switchable;
+- all level families are visible by default, while `Clean` is now an optional compact mode rather than the default;
+- overlay choices persist in the browser and Reset restores the full-level layout.
+
+See `TRADEIQ_V3.1.5_RELEASE_NOTES.md` for the release contract.
+
+## Previous release: v3.1.4
 
 TradeIQ now renders each published executable plan as a professional bracket directly on the chart:
 

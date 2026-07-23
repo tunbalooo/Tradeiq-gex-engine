@@ -2,6 +2,7 @@
 // Structural Invalidation
 // Watch expired — waiting for a new candidate
 // Legacy silent-monitoring regression markers retained as comments only; v3.1.2 never renders them:
+// overlays: { clean: true
 // score preserved, no new order
 // not an armed order
 // MONITORING ${setup.direction}
@@ -49,6 +50,39 @@ const COLORS = {
   purple: "#A98BFF", muted: "#455468", text: "#D8E2F0", line: "#1A2636",
 };
 const ACTIVE_TRADE_STATES = new Set(["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"]);
+const DEFAULT_OVERLAYS = {
+  clean: false,
+  scan: true,
+  map: true,
+  emas: true,
+  gex: true,
+  fib: true,
+  zones: true,
+  trade: true,
+  vwap: true,
+};
+
+function loadOverlayPreferences() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("tradeiq-chart-overlays") || "{}");
+    return { ...DEFAULT_OVERLAYS, ...(saved && typeof saved === "object" ? saved : {}) };
+  } catch (_error) {
+    return { ...DEFAULT_OVERLAYS };
+  }
+}
+
+function saveOverlayPreferences() {
+  try { localStorage.setItem("tradeiq-chart-overlays", JSON.stringify(state.overlays)); }
+  catch (_error) { /* Storage can be unavailable in private browser modes. */ }
+}
+
+function syncOverlayButtons() {
+  document.querySelectorAll(".overlay-btn").forEach((button) => {
+    const name = button.dataset.overlay;
+    button.classList.toggle("active", Boolean(state.overlays[name]));
+    button.setAttribute("aria-pressed", String(Boolean(state.overlays[name])));
+  });
+}
 
 function hasWatchingPlan(setup) {
   return Boolean(
@@ -106,7 +140,7 @@ const state = {
   feedState: "CONNECTING",
   feedRecordAgeSeconds: null,
   feedLastRecordAt: null,
-  overlays: { clean: true, emas: true, gex: true, fib: true, zones: true, trade: true, vwap: true },
+  overlays: loadOverlayPreferences(),
   claude: {
     enabled: false, auto: true, busy: false, source: null, text: "", model: "—",
     lastStartedAt: 0, pendingLifecycle: false, lastLifecycleKey: null,
@@ -930,23 +964,23 @@ function confirmationWaitingText(setup) {
 
 function previewExplanation(setup, { syncing = false, marketClosed = false } = {}) {
   if (syncing) return "TradeIQ is syncing Databento history. No entry will be published until live data and every safety gate are valid.";
-  if (marketClosed) return "TradeIQ is evaluating the latest closed data silently. No actionable entry is published while the market is closed.";
-  return "TradeIQ is monitoring price, confluence and confirmation internally. A price appears here only after a real market, limit or stop entry passes confirmation, freshness, liquidity-room and minimum-R gates.";
+  if (marketClosed) return "TradeIQ is evaluating the latest closed data. Scanning information remains visible, but no executable entry is published while the market is closed.";
+  const model = setup?.primary_entry_model || "the strongest developing model";
+  const direction = ["LONG", "SHORT"].includes(setup?.direction) ? setup.direction.toLowerCase() : "directional";
+  const reason = String(setup?.model_selection_reason || "").trim();
+  const base = `TradeIQ is live-scanning a ${direction} ${model} candidate. This is analysis only — no order, entry, stop or targets are published until confirmation, freshness, liquidity-room and minimum-R gates pass.`;
+  return reason ? `${base} ${reason}` : base;
 }
 
 function renderModelRanking(setup, targetId) {
   const target = $(targetId);
   if (!target) return;
-  if (!hasLockedTradePlan(setup)) {
-    target.innerHTML = '<div class="timeline-empty">Scanning internally — rankings publish with a validated entry.</div>';
-    return;
-  }
-  const models = Array.isArray(setup.entry_model_scores) ? setup.entry_model_scores.slice(0, 5) : [];
+  const models = Array.isArray(setup?.entry_model_scores) ? setup.entry_model_scores.slice(0, 5) : [];
   target.innerHTML = models.length ? models.map((model, index) => {
     const stateClass = model.eligible ? (index === 0 ? "primary" : "eligible") : "developing";
     const missing = Array.isArray(model.missing) && model.missing.length ? ` · needs ${escapeHtml(model.missing.join(", "))}` : "";
     return `<div class="model-rank ${stateClass}"><span>${index + 1}</span><b>${escapeHtml(model.name)}</b><strong>${Number(model.score || 0).toFixed(0)}%</strong><small>${model.eligible ? "qualified" : "developing"}${missing}</small></div>`;
-  }).join("") : '<div class="timeline-empty">No ranked models yet.</div>';
+  }).join("") : '<div class="timeline-empty">No ranked models yet — scanning live price and level reactions.</div>';
 }
 
 
@@ -994,15 +1028,41 @@ function clusterDisplay(setup) {
   return "Single-model setup";
 }
 
+function hasVisibleScan(setup) {
+  return Boolean(
+    setup
+    && !hasLockedTradePlan(setup)
+    && ["LONG", "SHORT"].includes(setup.direction)
+    && setup.primary_entry_model
+  );
+}
+
+function scanPhaseText(setup) {
+  if (hasWatchingPlan(setup) && watchTriggerTouched(setup)) return `Confirming ${setup.direction}`;
+  if (hasWatchingPlan(setup)) return `Scanning ${setup.direction}`;
+  if (hasVisibleScan(setup)) return `Developing ${setup.direction}`;
+  return "Scanning Market";
+}
+
+function scanManagementText(setup) {
+  if (hasWatchingPlan(setup) && watchTriggerTouched(setup)) return "AWAITING MODEL CONFIRMATION";
+  if (hasWatchingPlan(setup)) return "WAITING FOR PRICE REACTION";
+  return "LIVE MODEL SCAN";
+}
+
 function renderTradeSetup(setup) {
-  const confidence = Math.max(0, Math.min(100, Number(setup.confidence)));
+  const confidence = Math.max(0, Math.min(100, Number(setup.confidence || 0)));
   const lockedPlan = hasLockedTradePlan(setup);
-  const publishedConfidence = lockedPlan ? confidence : 0;
+  const visibleScan = hasVisibleScan(setup);
+  const displayConfidence = lockedPlan || visibleScan ? confidence : 0;
   const circumference = 307.9;
-  $("gaugeArc").style.strokeDashoffset = String(circumference * (1 - publishedConfidence / 100));
-  const gaugeColor = lockedPlan ? (setup.actionable ? COLORS.green : confidence >= 55 ? COLORS.amber : COLORS.red) : COLORS.muted;
+  $("gaugeArc").style.strokeDashoffset = String(circumference * (1 - displayConfidence / 100));
+  const gaugeColor = lockedPlan
+    ? (setup.actionable ? COLORS.green : confidence >= 55 ? COLORS.amber : COLORS.red)
+    : visibleScan ? (confidence >= 72 ? COLORS.green : confidence >= 55 ? COLORS.amber : COLORS.blue)
+      : COLORS.muted;
   $("gaugeArc").style.stroke = gaugeColor;
-  $("confidencePct").textContent = lockedPlan ? `${Math.round(confidence)}%` : "—";
+  $("confidencePct").textContent = lockedPlan || visibleScan ? `${Math.round(confidence)}%` : "—";
   $("confidencePct").style.color = gaugeColor;
 
   const activeStates = [...ACTIVE_TRADE_STATES];
@@ -1010,109 +1070,110 @@ function renderTradeSetup(setup) {
   const triggerTouched = watchTriggerTouched(setup);
   const syncing = state.marketWarming || setup.status === "DATA_SYNCING";
   const marketClosed = state.session && !state.session.is_open;
-  const quality = !lockedPlan ? "Scanning Quietly" :
-    setup.order_state === "WAITING_FOR_LIMIT" ? `${executionName(setup)} Armed` :
-    setup.order_state === "FILLED" ? "Position Filled" :
-    setup.order_state === "TP1_HIT" ? "TP1 Hit — Running" :
-    setup.order_state.replaceAll("_", " ");
+  const quality = lockedPlan
+    ? setup.order_state === "WAITING_FOR_LIMIT" ? `${executionName(setup)} Armed`
+      : setup.order_state === "FILLED" ? "Position Filled"
+        : setup.order_state === "TP1_HIT" ? "TP1 Hit — Running"
+          : setup.order_state.replaceAll("_", " ")
+    : scanPhaseText(setup);
   $("probabilityLabel").textContent = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : quality;
   $("probabilityLabel").style.color = gaugeColor;
+
   const coreKeys = ["trend_alignment", "gex_alignment", "ote_overlap", "supply_demand", "gex_ote_zone_cluster"];
-  const aligned = coreKeys.filter((key) => setup.signals[key]).length;
+  const aligned = coreKeys.filter((key) => setup.signals?.[key]).length;
   $("coreAlignment").textContent = lockedPlan
     ? `${aligned} / ${coreKeys.length} core confluences aligned — executable plan locked`
-    : "Confluence is being evaluated internally — no entry published yet";
+    : `${aligned} / ${coreKeys.length} core confluences aligned — live scan only, no order`;
 
-  const label = lockedPlan ? `${executionOrderName(setup)} · ${setup.order_state.replaceAll("_", " ")}` : "SCANNING QUIETLY";
+  const scanLabel = visibleScan
+    ? `${triggerTouched ? "CONFIRM" : "SCAN"} ${setup.direction} · NO ORDER`
+    : "SCANNING MARKET";
+  const label = lockedPlan ? `${executionOrderName(setup)} · ${setup.order_state.replaceAll("_", " ")}` : scanLabel;
   $("setupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
-  $("setupLabel").className = `${syncing || marketClosed || !lockedPlan ? "a" : classForDirection(setup.direction)} mono setup-side-label`;
-  $("setupDirection").textContent = lockedPlan ? `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}` : "WAITING";
-  $("setupDirection").className = `v ${lockedPlan ? classForDirection(setup.direction) : "a"}`;
-  $("setupModel").textContent = lockedPlan && setup.primary_entry_model ? `${setup.primary_entry_model} · ${Number(setup.primary_model_score || 0).toFixed(0)}%` : "—";
-  $("setupBackups").textContent = lockedPlan ? ((setup.alternative_entry_models || []).slice(0, 3).join(" · ") || "—") : "—";
-  $("setupGrade").textContent = lockedPlan ? (setup.confidence_grade || "—") : "—";
-  $("setupGrade").className = `v ${lockedPlan ? (confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r") : "a"}`;
-  $("entryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `${executionOrderName(setup)} Armed` : `${executionOrderName(setup)} Filled`) : "Entry";
+  $("setupLabel").className = `${syncing || marketClosed ? "a" : visibleScan || lockedPlan ? classForDirection(setup.direction) : "a"} mono setup-side-label`;
+  $("setupDirection").textContent = lockedPlan || visibleScan ? `${setup.direction} ${setup.direction === "LONG" ? "↑" : "↓"}` : "WAITING";
+  $("setupDirection").className = `v ${lockedPlan || visibleScan ? classForDirection(setup.direction) : "a"}`;
+  $("setupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · ${Number(setup.primary_model_score || 0).toFixed(0)}%` : "—";
+  $("setupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 3).join(" · ") || "—";
+  $("setupGrade").textContent = setup.confidence_grade || "—";
+  $("setupGrade").className = `v ${confidence >= 85 ? "g" : confidence >= 70 ? "a" : visibleScan ? "b" : "r"}`;
+  $("entryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `${executionOrderName(setup)} Armed` : `${executionOrderName(setup)} Filled`) : "Entry (publishes when valid)";
   $("setupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";
   if ($("stopLabel")) $("stopLabel").textContent = "Initial Stop";
   $("setupStop").textContent = lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
   $("setupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
-  $("setupManagement").textContent = lockedPlan ? `${String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ")} · FRESH ${Number(setup.execution_freshness_score || 0).toFixed(0)}%` : "SILENT SCAN";
+  $("setupManagement").textContent = lockedPlan
+    ? `${String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ")} · FRESH ${Number(setup.execution_freshness_score || 0).toFixed(0)}%`
+    : scanManagementText(setup);
   $("setupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("setupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("setupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
   $("setupTp2Source").textContent = lockedPlan ? (setup.target_sources?.tp2 || "—") : "—";
   $("setupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
-  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : !lockedPlan ? "Scanning quietly — no actionable entry yet" :
-    setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase());
+  const statusText = syncing ? "Data Syncing" : marketClosed ? "Market Closed"
+    : lockedPlan ? setup.status.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (x) => x.toUpperCase())
+      : visibleScan ? `${scanPhaseText(setup)} — ${setup.primary_entry_model || "evaluating models"}`
+        : "Scanning for a valid setup";
   $("setupStatus").textContent = statusText;
-  $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a"}`;
-  $("setupCluster").textContent = lockedPlan ? clusterDisplay(setup) : "—";
-  $("setupCluster").className = `v ${setup.market_map?.active_cluster?.actionable_location || setup.signals.gex_ote_zone_cluster ? "g" : "a"}`;
+  $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : visibleScan ? "b" : "a"}`;
+  $("setupCluster").textContent = clusterDisplay(setup);
+  $("setupCluster").className = `v ${setup.market_map?.active_cluster?.actionable_location || setup.signals?.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupSession").textContent = state.session?.display_name || "—";
   $("setupSession").className = `v ${marketClosed ? "r" : "g"}`;
-  $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : lockedPlan ? "Valid Until" : "Entry State";
-  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : lockedPlan ? formatAppTime(setup.valid_until) : "WAITING";
+  $("validLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : lockedPlan ? "Valid Until" : watchingPlan ? "Scan Expires" : "Entry State";
+  $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : lockedPlan ? formatAppTime(setup.valid_until) : watchingPlan ? formatAppTime(setup.watch_expires_at || setup.valid_until) : "SCANNING";
   renderModelRanking(setup, "setupModelRanking");
   renderChartTradeSetup(setup, {
-    confidence,
-    gaugeColor,
-    marketClosed,
-    syncing,
-    quality,
-    aligned,
-    coreCount: coreKeys.length,
-    label,
-    statusText,
-    activeStates,
-    watchingPlan,
-    triggerTouched,
-    lockedPlan,
+    confidence, gaugeColor, marketClosed, syncing, quality, aligned,
+    coreCount: coreKeys.length, label, statusText, activeStates,
+    watchingPlan, triggerTouched, lockedPlan, visibleScan,
   });
 }
 
 function renderChartTradeSetup(setup, context) {
   if (!$("chartSetupPanel")) return;
-  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, coreCount, label, statusText, activeStates, watchingPlan, triggerTouched, lockedPlan } = context;
+  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, coreCount, label, statusText, activeStates, watchingPlan, lockedPlan, visibleScan } = context;
   const ring = $("chartConfidenceRing");
-  ring.style.setProperty("--chart-confidence", `${(lockedPlan ? confidence : 0) * 3.6}deg`);
+  ring.style.setProperty("--chart-confidence", `${(lockedPlan || visibleScan ? confidence : 0) * 3.6}deg`);
   ring.style.setProperty("--chart-confidence-color", gaugeColor);
-  $("chartConfidencePct").textContent = lockedPlan ? `${Math.round(confidence)}%` : "—";
+  $("chartConfidencePct").textContent = lockedPlan || visibleScan ? `${Math.round(confidence)}%` : "—";
   $("chartConfidencePct").style.color = gaugeColor;
   $("chartProbabilityLabel").textContent = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : quality;
   $("chartProbabilityLabel").style.color = gaugeColor;
   $("chartCoreAlignment").textContent = lockedPlan
     ? `${aligned} / ${coreCount} aligned — executable plan locked`
-    : "Confluence is being evaluated internally — no entry published yet";
+    : `${aligned} / ${coreCount} aligned — live scan only, no order`;
 
   $("chartSetupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
-  $("chartSetupLabel").className = `${syncing || marketClosed || !lockedPlan ? "a" : classForDirection(setup.direction)} mono`;
-  $("chartSetupDirection").textContent = lockedPlan ? `${setup.direction} ${setup.direction === "LONG" ? "↑" : setup.direction === "SHORT" ? "↓" : ""}` : "WAITING";
-  $("chartSetupDirection").className = lockedPlan ? classForDirection(setup.direction) : "a";
-  $("chartSetupModel").textContent = lockedPlan && setup.primary_entry_model ? `${setup.primary_entry_model} · ${Number(setup.primary_model_score || 0).toFixed(0)}%` : "—";
-  $("chartSetupBackups").textContent = lockedPlan ? ((setup.alternative_entry_models || []).slice(0, 2).join(" · ") || "—") : "—";
-  $("chartSetupGrade").textContent = lockedPlan ? (setup.confidence_grade || "—") : "—";
-  $("chartSetupGrade").className = lockedPlan ? (confidence >= 85 ? "g" : confidence >= 70 ? "a" : "r") : "a";
-  $("chartEntryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `${executionOrderName(setup)} Armed` : `${executionOrderName(setup)} Filled`) : "Entry";
+  $("chartSetupLabel").className = `${syncing || marketClosed ? "a" : visibleScan || lockedPlan ? classForDirection(setup.direction) : "a"} mono`;
+  $("chartSetupDirection").textContent = lockedPlan || visibleScan ? `${setup.direction} ${setup.direction === "LONG" ? "↑" : "↓"}` : "WAITING";
+  $("chartSetupDirection").className = lockedPlan || visibleScan ? classForDirection(setup.direction) : "a";
+  $("chartSetupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · ${Number(setup.primary_model_score || 0).toFixed(0)}%` : "—";
+  $("chartSetupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 2).join(" · ") || "—";
+  $("chartSetupGrade").textContent = setup.confidence_grade || "—";
+  $("chartSetupGrade").className = confidence >= 85 ? "g" : confidence >= 70 ? "a" : visibleScan ? "b" : "r";
+  $("chartEntryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `${executionOrderName(setup)} Armed` : `${executionOrderName(setup)} Filled`) : "Entry (publishes when valid)";
   $("chartSetupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";
   if ($("chartStopLabel")) $("chartStopLabel").textContent = "Initial Stop";
   $("chartSetupStop").textContent = lockedPlan ? fmt(setup.initial_stop_loss ?? setup.stop_loss) : "—";
   $("chartSetupActiveStop").textContent = lockedPlan ? fmt(setup.active_stop_loss ?? setup.stop_loss) : "—";
-  $("chartSetupManagement").textContent = lockedPlan ? `${String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ")} · FRESH ${Number(setup.execution_freshness_score || 0).toFixed(0)}%` : "SILENT SCAN";
+  $("chartSetupManagement").textContent = lockedPlan
+    ? `${String(setup.management_state || "LIMIT_ARMED").replaceAll("_", " ")} · FRESH ${Number(setup.execution_freshness_score || 0).toFixed(0)}%`
+    : scanManagementText(setup);
   $("chartSetupTp1").textContent = lockedPlan ? fmt(setup.take_profit_1) + (setup.tp1_r ? ` (${Number(setup.tp1_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp2").textContent = lockedPlan ? fmt(setup.take_profit_2) + (setup.tp2_r ? ` (${Number(setup.tp2_r).toFixed(1)}R)` : "") : "—";
   $("chartSetupTp1Source").textContent = lockedPlan ? (setup.target_sources?.tp1 || "—") : "—";
   $("chartSetupTp2Source").textContent = lockedPlan ? (setup.target_sources?.tp2 || "—") : "—";
   $("chartSetupRr").textContent = lockedPlan && setup.risk_reward ? `1 : ${Number(setup.risk_reward).toFixed(1)}` : "—";
   $("chartSetupStatus").textContent = statusText;
-  $("chartSetupStatus").className = setup.actionable || activeStates.includes(setup.order_state) ? "g" : "a";
-  $("chartSetupCluster").textContent = lockedPlan ? clusterDisplay(setup) : "—";
-  $("chartSetupCluster").className = setup.market_map?.active_cluster?.actionable_location || setup.signals.gex_ote_zone_cluster ? "g" : "a";
+  $("chartSetupStatus").className = setup.actionable || activeStates.includes(setup.order_state) ? "g" : visibleScan ? "b" : "a";
+  $("chartSetupCluster").textContent = clusterDisplay(setup);
+  $("chartSetupCluster").className = setup.market_map?.active_cluster?.actionable_location || setup.signals?.gex_ote_zone_cluster ? "g" : "a";
   renderModelRanking(setup, "chartModelRanking");
   $("chartSetupSession").textContent = state.session?.display_name || "—";
   $("chartSetupSession").className = marketClosed ? "r" : "g";
-  $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : lockedPlan ? "Valid Until" : "Entry State";
-  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : lockedPlan ? formatAppTime(setup.valid_until) : "WAITING";
+  $("chartValidLabel").textContent = syncing ? "History" : marketClosed ? "Opens In" : lockedPlan ? "Valid Until" : watchingPlan ? "Scan Expires" : "Entry State";
+  $("chartSetupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : lockedPlan ? formatAppTime(setup.valid_until) : watchingPlan ? formatAppTime(setup.watch_expires_at || setup.valid_until) : "SCANNING";
   const previewNotice = $("chartPreviewNotice");
   if (previewNotice) {
     const informational = setup.order_state === "PREVIEW_ONLY" || watchingPlan;
@@ -1121,10 +1182,14 @@ function renderChartTradeSetup(setup, context) {
     previewNotice.classList.toggle("closed", Boolean(marketClosed));
     previewNotice.classList.toggle("watching", Boolean(watchingPlan));
     const title = $("chartPreviewTitle");
-    if (title) title.textContent = "SCANNING QUIETLY — NO ACTIONABLE ENTRY";
+    if (title) title.textContent = visibleScan ? "LIVE SCAN — NO ORDER" : "SCANNING MARKET — NO ORDER";
     if (informational && $("chartPreviewReason")) $("chartPreviewReason").textContent = previewExplanation(setup, { syncing, marketClosed });
   }
 }
+// Legacy v3.1.2 UI strings retained only for compatibility tests:
+// SCANNING QUIETLY — NO ACTIONABLE ENTRY
+// rankings publish with a validated entry
+
 function renderGexSummary(setup) {
   const gex = setup.gex;
   $("gexRegime").textContent = `${gex.regime.charAt(0)}${gex.regime.slice(1).toLowerCase()} Gamma`;
@@ -2031,8 +2096,9 @@ async function refreshGexCache() {
 
 $("indicatorToggle").addEventListener("click", () => $("indicatorStrip").classList.toggle("hidden"));
 $("templateReset").addEventListener("click", () => {
-  Object.keys(state.overlays).forEach((key) => { state.overlays[key] = true; });
-  document.querySelectorAll(".overlay-btn").forEach((button) => button.classList.add("active"));
+  state.overlays = { ...DEFAULT_OVERLAYS };
+  saveOverlayPreferences();
+  syncOverlayButtons();
   state.timeframe = 5;
   document.querySelectorAll(".tf").forEach((button) => button.classList.toggle("active", Number(button.dataset.tf) === 5));
   $("chartCaption").textContent = chartFeedLabel();
@@ -2042,10 +2108,13 @@ $("templateReset").addEventListener("click", () => {
   window.TradeIQChartManager?.reset("chartLarge");
 });
 document.querySelectorAll(".overlay-btn").forEach((button) => button.addEventListener("click", () => {
-  const name = button.dataset.overlay; state.overlays[name] = !state.overlays[name];
-  document.querySelectorAll(`.overlay-btn[data-overlay="${name}"]`).forEach((item) => item.classList.toggle("active", state.overlays[name]));
+  const name = button.dataset.overlay;
+  state.overlays[name] = !state.overlays[name];
+  saveOverlayPreferences();
+  syncOverlayButtons();
   drawChart(); if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
 }));
+syncOverlayButtons();
 if ($("mobileIndicatorsButton")) $("mobileIndicatorsButton").addEventListener("click", () => {
   document.querySelector(".chart-overlay-toggles")?.classList.toggle("mobile-expanded");
 });
