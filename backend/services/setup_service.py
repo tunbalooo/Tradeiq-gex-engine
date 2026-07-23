@@ -325,8 +325,27 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     }
     confidence, institutional_components, confidence_grade = calculate_institutional_confidence(institutional_evidence)
     nearest_wall = gex.call_wall if direction == "LONG" else gex.put_wall
+
+    # A stable event key lets the lifecycle distinguish a genuinely new market
+    # structure event from the same thesis being rediscovered by a polling timer.
+    sequence_time = structure.get("bullish_sequence_time") if direction == "LONG" else structure.get("bearish_sequence_time")
+    direction_displacement_time = structure.get("bullish_displacement_time") if direction == "LONG" else structure.get("bearish_displacement_time")
+    direction_sweep_time = structure.get("sell_side_sweep_time") if direction == "LONG" else structure.get("buy_side_sweep_time")
+    event_time = sequence_time or direction_displacement_time or direction_sweep_time
+    event_time_text = event_time.isoformat() if hasattr(event_time, "isoformat") else str(event_time or "NONE")
+    fvg_low_key = structure.get("bullish_fvg_low") if direction == "LONG" else structure.get("bearish_fvg_low")
+    fvg_high_key = structure.get("bullish_fvg_high") if direction == "LONG" else structure.get("bearish_fvg_high")
+    structure_event_key = "|".join([
+        direction,
+        event_time_text,
+        f"SWEEP:{round(float(structure.get('sweep_price') or 0.0), profile.price_precision)}",
+        f"FVG:{round(float(fvg_low_key or 0.0), profile.price_precision)}-{round(float(fvg_high_key or 0.0), profile.price_precision)}",
+        f"SEQ:{int(bool(ordered_sequence))}",
+    ])
     signals = {
         "current_price": round(float(current_price), profile.price_precision),
+        "structure_event_key": structure_event_key,
+        "structure_event_time": event_time_text,
         "trend_alignment": bool(trend_alignment), "gex_alignment": bool(gex_alignment),
         "liquidity_sweep": bool(direction_sweep), "displacement": bool(direction_displacement),
         "directional_fvg": bool(direction_fvg), "ordered_sequence": bool(ordered_sequence),

@@ -10,6 +10,11 @@ from backend.models.db_models import TradeSetupRecord
 
 
 class AnalyticsService:
+    @staticmethod
+    def _is_trade(row: TradeSetupRecord) -> bool:
+        snapshot = row.setup_snapshot or {}
+        return bool(row.filled_at or snapshot.get("filled_at"))
+
     def summary(self, limit: int = 1000) -> dict:
         with SessionLocal() as db:
             rows = list(db.scalars(
@@ -19,19 +24,26 @@ class AnalyticsService:
             ))
 
         model_groups: dict[str, list[float]] = defaultdict(list)
-        outcomes: dict[str, int] = defaultdict(int)
-        cancellations: dict[str, int] = defaultdict(int)
+        trade_outcomes: dict[str, int] = defaultdict(int)
+        scan_outcomes: dict[str, int] = defaultdict(int)
         completed = 0
+        trades_considered = 0
+        scans_considered = 0
         for row in rows:
             snapshot = row.setup_snapshot or {}
-            model = snapshot.get("primary_entry_model") or "Unclassified"
-            if row.result_r is not None:
-                model_groups[model].append(float(row.result_r))
-                completed += 1
+            is_trade = self._is_trade(row)
             outcome = row.outcome or row.order_state or "UNKNOWN"
-            outcomes[outcome] += 1
-            if row.order_state in {"EXPIRED", "INVALIDATED", "UNCONFIRMED_TOUCH"} or outcome in {"WATCH_EXPIRED", "CONFLUENCE_LOST", "OPPOSITE_SETUP"}:
-                cancellations[outcome] += 1
+            if is_trade:
+                trades_considered += 1
+                trigger_model = snapshot.get("trigger_entry_model") or snapshot.get("primary_entry_model") or "Unclassified"
+                if row.result_r is not None:
+                    model_groups[trigger_model].append(float(row.result_r))
+                    completed += 1
+                trade_outcomes[outcome] += 1
+            else:
+                scans_considered += 1
+                if row.order_state != "PREVIEW_ONLY" or snapshot.get("watch_started_at"):
+                    scan_outcomes[outcome] += 1
 
         leaderboard = []
         for model, results in model_groups.items():
@@ -47,12 +59,17 @@ class AnalyticsService:
             })
         leaderboard.sort(key=lambda item: (item["average_r"], item["win_rate"], item["trades"]), reverse=True)
         return {
-            "setups_considered": len(rows),
+            "records_considered": len(rows),
+            "trades_considered": trades_considered,
+            "scans_considered": scans_considered,
             "completed_results": completed,
             "model_leaderboard": leaderboard,
-            "outcomes": dict(sorted(outcomes.items())),
-            "cancellations": dict(sorted(cancellations.items())),
-            "note": "Analytics are descriptive. They do not change live model scores or trade decisions.",
+            "trade_outcomes": dict(sorted(trade_outcomes.items())),
+            "scan_outcomes": dict(sorted(scan_outcomes.items())),
+            # Backward compatibility for older clients.
+            "outcomes": dict(sorted(trade_outcomes.items())),
+            "cancellations": dict(sorted(scan_outcomes.items())),
+            "note": "Trade analytics contain published executions only. Scanner outcomes are reported separately and never counted as trades.",
         }
 
 

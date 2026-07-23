@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Previous asset query: ?v=315 -->
 <!-- Previous v3.1.4 asset query: ?v=314 -->
 <html lang="en">
 <head>
@@ -16,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=315" />
+<link rel="stylesheet" href="/static/styles.css?v=316" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -186,7 +187,7 @@
             <div class="setup-row"><span class="k">Direction</span><span class="v" id="setupDirection">—</span></div>
             <div class="setup-row"><span class="k">Primary Entry Model</span><span class="v b" id="setupModel">—</span></div>
             <div class="setup-row"><span class="k">Backup Models</span><span class="v m" id="setupBackups">—</span></div>
-            <div class="setup-row"><span class="k">Confidence Grade</span><span class="v" id="setupGrade">—</span></div>
+            <div class="setup-row"><span class="k" id="setupGradeLabel">Location Grade</span><span class="v" id="setupGrade">—</span></div>
             <div class="setup-row"><span class="k" id="entryLabel">Limit Entry</span><span class="v a" id="setupEntry">—</span></div>
             <div class="setup-row"><span class="k" id="stopLabel">Initial Stop</span><span class="v r" id="setupStop">—</span></div>
             <div class="setup-row"><span class="k">Active Stop</span><span class="v a" id="setupActiveStop">—</span></div>
@@ -340,7 +341,7 @@
                   <div class="chart-setup-row"><span>Direction</span><b id="chartSetupDirection">—</b></div>
                   <div class="chart-setup-row"><span>Entry Model</span><b class="b" id="chartSetupModel">—</b></div>
                   <div class="chart-setup-row"><span>Backup Models</span><b id="chartSetupBackups">—</b></div>
-                  <div class="chart-setup-row"><span>Grade</span><b id="chartSetupGrade">—</b></div>
+                  <div class="chart-setup-row"><span id="chartSetupGradeLabel">Location Grade</span><b id="chartSetupGrade">—</b></div>
                   <div class="chart-setup-row"><span id="chartEntryLabel">Limit Entry</span><b class="a" id="chartSetupEntry">—</b></div>
                   <div class="chart-setup-row"><span id="chartStopLabel">Initial Stop</span><b class="r" id="chartSetupStop">—</b></div>
                   <div class="chart-setup-row"><span>Active Stop</span><b class="a" id="chartSetupActiveStop">—</b></div>
@@ -476,8 +477,9 @@
 
     <section class="page" id="page-setups">
       <div class="page-shell">
-        <div class="panel page-panel"><div class="panel-h"><div><h3>Setup History</h3><small id="setupHistoryTimezone">AUTO · detecting browser time zone…</small></div><button class="mini-btn" id="reloadSetups">Reload</button></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th id="setupHistoryTimeHeader">Time</th><th>Direction</th><th>Model</th><th>Grade</th><th>Confidence</th><th>Entry</th><th>Initial SL</th><th>Active SL</th><th>TP1</th><th>TP2</th><th>State</th><th>Management</th><th>Result R</th></tr></thead><tbody id="setupsTable"></tbody></table></div></div>
-        <div class="panel page-panel"><div class="panel-h"><h3>Entry Model Performance</h3><span class="source-chip">READ ONLY</span></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th>Model</th><th>Trades</th><th>Win Rate</th><th>Average R</th><th>Net R</th><th>Profit Factor</th></tr></thead><tbody id="modelLeaderboard"><tr><td colspan="6" class="m">No completed model results yet.</td></tr></tbody></table><p class="note">Historical analytics never alter live model ranking or confidence.</p></div></div>
+        <div class="panel page-panel"><div class="panel-h"><div><h3>Trade Log · Published Entries</h3><small id="setupHistoryTimezone">AUTO · detecting browser time zone…</small></div><button class="mini-btn" id="reloadSetups">Reload</button></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th id="setupHistoryTimeHeader">Time</th><th>Direction</th><th>Trigger Model</th><th>Composite Context</th><th>Trade Grade</th><th>Trade Quality</th><th>Entry</th><th>Initial SL</th><th>Active SL</th><th>TP1</th><th>TP2</th><th>State</th><th>Result R</th></tr></thead><tbody id="setupsTable"></tbody></table><p class="note">Only published market, limit or stop executions appear here. Scanner watches never count as trades.</p></div></div>
+        <div class="panel page-panel"><div class="panel-h"><div><h3>Scanner Log · Unique Theses</h3><small>Timer refreshes are collapsed into one lifecycle row per thesis.</small></div><span class="source-chip">NO ORDERS</span></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th>Time</th><th>Direction</th><th>Trigger Model</th><th>Location</th><th>Confirmation</th><th>Stage</th><th>State</th><th>Reason</th></tr></thead><tbody id="scansTable"><tr><td colspan="8" class="m">No scanner theses yet.</td></tr></tbody></table></div></div>
+        <div class="panel page-panel"><div class="panel-h"><h3>Entry Trigger Performance</h3><span class="source-chip">TRADES ONLY</span></div><div class="panel-b table-pad scroll-table"><table><thead><tr><th>Trigger Model</th><th>Trades</th><th>Win Rate</th><th>Average R</th><th>Net R</th><th>Profit Factor</th></tr></thead><tbody id="modelLeaderboard"><tr><td colspan="6" class="m">No completed model results yet.</td></tr></tbody></table><p class="note">Performance uses the actual trigger model and excludes all scanner-only outcomes.</p></div></div>
       </div>
     </section>
 
@@ -524,7 +526,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=315"></script>
+<script src="/static/boot.js?v=316"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

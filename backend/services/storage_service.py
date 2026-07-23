@@ -118,59 +118,182 @@ class StorageService:
             logger.exception("Unable to read setup timeline")
             return []
 
-    def recent_setups(self, limit: int = 100) -> list[dict]:
+    @staticmethod
+    def _history_payload(record: TradeSetupRecord) -> dict:
+        snapshot = record.setup_snapshot or {}
+        return {
+            "setup_id": record.setup_id,
+            "created_at": utc_iso(record.created_at),
+            "updated_at": utc_iso(record.updated_at),
+            "symbol": record.symbol,
+            "direction": record.direction,
+            "confidence": record.confidence,
+            "confidence_grade": snapshot.get("confidence_grade", "—"),
+            "trade_grade": snapshot.get("trade_grade", "—"),
+            "quality_stage": snapshot.get("quality_stage", "LOCATION_ONLY"),
+            "location_quality_score": snapshot.get("location_quality_score", 0),
+            "confirmation_quality_score": snapshot.get("confirmation_quality_score", 0),
+            "execution_quality_score": snapshot.get("execution_quality_score", 0),
+            "trade_quality_score": snapshot.get("trade_quality_score", 0),
+            "primary_entry_model": snapshot.get("primary_entry_model"),
+            "trigger_entry_model": snapshot.get("trigger_entry_model") or snapshot.get("primary_entry_model"),
+            "trigger_entry_model_key": snapshot.get("trigger_entry_model_key") or snapshot.get("primary_entry_model_key"),
+            "thesis_fingerprint": snapshot.get("thesis_fingerprint"),
+            "structure_event_key": snapshot.get("structure_event_key"),
+            "primary_model_score": snapshot.get("primary_model_score", 0),
+            "entry": record.entry,
+            "stop_loss": record.stop_loss,
+            "active_stop_loss": snapshot.get("active_stop_loss"),
+            "take_profit_1": record.take_profit_1,
+            "take_profit_2": record.take_profit_2,
+            "risk_reward": record.risk_reward,
+            "status": record.status,
+            "order_state": record.order_state,
+            "management_state": snapshot.get("management_state", "FLAT"),
+            "outcome": record.outcome,
+            "result_r": record.result_r,
+            "mfe_points": snapshot.get("max_favorable_excursion_points", 0),
+            "mae_points": snapshot.get("max_adverse_excursion_points", 0),
+            "target_sources": record.target_sources or {},
+            "watch_trigger": snapshot.get("watch_trigger"),
+            "watch_phase": snapshot.get("watch_phase"),
+            "last_transition_reason": snapshot.get("last_transition_reason"),
+            "armed_at": utc_iso(record.armed_at),
+            "filled_at": utc_iso(record.filled_at),
+            "closed_at": utc_iso(record.closed_at),
+        }
+
+    @staticmethod
+    def _scan_signature(record: TradeSetupRecord) -> tuple:
+        snapshot = record.setup_snapshot or {}
+        fingerprint = snapshot.get("thesis_fingerprint")
+        if fingerprint:
+            return (record.symbol, fingerprint)
+        trigger_model = snapshot.get("trigger_entry_model_key") or snapshot.get("primary_entry_model_key") or snapshot.get("primary_entry_model")
+        structure_key = snapshot.get("structure_event_key") or "LEGACY"
+        location = snapshot.get("watch_trigger")
+        if location is None:
+            low, high = snapshot.get("cluster_low"), snapshot.get("cluster_high")
+            if low is not None and high is not None:
+                location = (float(low) + float(high)) / 2
+        if location is None:
+            location = record.entry
+        bucket = round(float(location) / 5.0) if location is not None else None
+        return (record.symbol, record.direction, trigger_model, bucket, structure_key)
+
+    @staticmethod
+    def _is_published_trade(record: TradeSetupRecord) -> bool:
+        snapshot = record.setup_snapshot or {}
+        return bool(record.armed_at or record.filled_at or snapshot.get("armed_at") or snapshot.get("filled_at"))
+
+    @staticmethod
+    def _is_filled_trade(record: TradeSetupRecord) -> bool:
+        snapshot = record.setup_snapshot or {}
+        return bool(record.filled_at or snapshot.get("filled_at"))
+
+    def recent_trades(self, limit: int = 100) -> list[dict]:
+        """Return the execution/trade log only.
+
+        Scanner-only watches, invalidations and expiries are intentionally kept
+        out of this table so performance is not polluted by non-trades.
+        """
         try:
             with SessionLocal() as db:
-                # Fetch extra rows because preview/scanning records are intentionally
-                # hidden from Setup History. The page now represents actual lifecycle
-                # candidates, not every transient engine refresh.
                 rows = list(db.scalars(
                     select(TradeSetupRecord)
                     .order_by(TradeSetupRecord.updated_at.desc())
-                    .limit(max(limit * 5, limit))
+                    .limit(max(limit * 8, limit))
                 ))
-                results = []
-                seen_recent: dict[tuple, datetime] = {}
-                for r in rows:
-                    snapshot = r.setup_snapshot or {}
-                    meaningful = bool(
-                        r.order_state != "PREVIEW_ONLY"
-                        or snapshot.get("watch_started_at")
-                        or r.armed_at
-                        or r.filled_at
-                        or r.closed_at
-                    )
-                    if not meaningful:
-                        continue
-                    signature = (
-                        r.symbol, r.direction, snapshot.get("primary_entry_model"), r.order_state,
-                        round(float(r.entry), 2) if r.entry is not None else round(float(snapshot.get("watch_trigger")), 2) if snapshot.get("watch_trigger") is not None else None,
-                    )
-                    prior = seen_recent.get(signature)
-                    if prior and abs((prior - r.updated_at).total_seconds()) < 45:
-                        continue
-                    seen_recent[signature] = r.updated_at
-                    results.append({
-                        "setup_id": r.setup_id, "created_at": utc_iso(r.created_at), "updated_at": utc_iso(r.updated_at),
-                        "symbol": r.symbol, "direction": r.direction, "confidence": r.confidence,
-                        "confidence_grade": snapshot.get("confidence_grade", "—"),
-                        "primary_entry_model": snapshot.get("primary_entry_model"),
-                        "primary_model_score": snapshot.get("primary_model_score", 0),
-                        "entry": r.entry, "stop_loss": r.stop_loss,
-                        "active_stop_loss": snapshot.get("active_stop_loss"),
-                        "take_profit_1": r.take_profit_1, "take_profit_2": r.take_profit_2,
-                        "risk_reward": r.risk_reward, "status": r.status,
-                        "order_state": r.order_state, "management_state": snapshot.get("management_state", "FLAT"),
-                        "outcome": r.outcome, "result_r": r.result_r,
-                        "mfe_points": snapshot.get("max_favorable_excursion_points", 0),
-                        "mae_points": snapshot.get("max_adverse_excursion_points", 0),
-                        "target_sources": r.target_sources or {},
-                    })
-                    if len(results) >= limit:
-                        break
-                return results
+            results = []
+            for record in rows:
+                if not self._is_published_trade(record):
+                    continue
+                results.append(self._history_payload(record))
+                if len(results) >= limit:
+                    break
+            return results
         except Exception:
-            logger.exception("Unable to read setup history")
+            logger.exception("Unable to read trade history")
+            return []
+
+    def recent_setups(self, limit: int = 100) -> list[dict]:
+        """Backward-compatible combined lifecycle history.
+
+        New clients should use recent_trades and recent_scans separately.
+        """
+        rows = self.recent_trades(limit) + self.recent_scans(limit)
+        rows.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+        return rows[:limit]
+
+    def recent_scans(self, limit: int = 100) -> list[dict]:
+        """Return one row per unique scanner thesis, newest lifecycle state first.
+
+        Historical timer-generated duplicates are collapsed by the deterministic
+        thesis fingerprint (or a legacy location/model signature).
+        """
+        try:
+            with SessionLocal() as db:
+                rows = list(db.scalars(
+                    select(TradeSetupRecord)
+                    .order_by(TradeSetupRecord.updated_at.desc())
+                    .limit(max(limit * 12, limit))
+                ))
+            results = []
+            seen: set[tuple] = set()
+            for record in rows:
+                if self._is_published_trade(record):
+                    continue
+                snapshot = record.setup_snapshot or {}
+                meaningful = bool(
+                    record.order_state != "PREVIEW_ONLY"
+                    or snapshot.get("watch_started_at")
+                    or snapshot.get("last_transition_to")
+                )
+                if not meaningful:
+                    continue
+                signature = self._scan_signature(record)
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                results.append(self._history_payload(record))
+                if len(results) >= limit:
+                    break
+            return results
+        except Exception:
+            logger.exception("Unable to read scanner history")
+            return []
+
+    def recent_terminal_theses(self, symbol: str | None = None, limit: int = 30) -> list[dict]:
+        """Load persisted terminal thesis locks after a Railway/server restart."""
+        terminal = {"TP2_HIT", "STOPPED", "EXPIRED", "INVALIDATED", "UNCONFIRMED_TOUCH"}
+        try:
+            with SessionLocal() as db:
+                statement = select(TradeSetupRecord).where(TradeSetupRecord.order_state.in_(terminal))
+                if symbol:
+                    statement = statement.where(TradeSetupRecord.symbol == symbol)
+                rows = list(db.scalars(statement.order_by(TradeSetupRecord.updated_at.desc()).limit(max(1, limit))))
+            results = []
+            for record in rows:
+                snapshot = record.setup_snapshot or {}
+                fingerprint = snapshot.get("thesis_fingerprint")
+                if not fingerprint:
+                    continue
+                results.append({
+                    "fingerprint": fingerprint,
+                    "locked_at": ensure_utc(record.updated_at),
+                    "state": record.order_state,
+                    "outcome": record.outcome,
+                    "setup_id": record.setup_id,
+                    "structure_event_key": snapshot.get("structure_event_key"),
+                    "direction": record.direction,
+                    "trigger_model": snapshot.get("trigger_entry_model") or snapshot.get("primary_entry_model"),
+                    "entry": snapshot.get("watch_trigger") if snapshot.get("watch_trigger") is not None else record.entry,
+                    "cluster_low": snapshot.get("cluster_low"),
+                    "cluster_high": snapshot.get("cluster_high"),
+                })
+            return results
+        except Exception:
+            logger.exception("Unable to restore terminal thesis locks")
             return []
 
     def recent_alerts(self, limit: int = 50) -> list[AlertItem]:
@@ -194,7 +317,12 @@ class StorageService:
     def performance(self) -> PerformanceSummary:
         try:
             with SessionLocal() as db:
-                rows = list(db.scalars(select(TradeSetupRecord).where(TradeSetupRecord.result_r.is_not(None)).order_by(TradeSetupRecord.closed_at.asc())))
+                candidates = list(db.scalars(
+                    select(TradeSetupRecord)
+                    .where(TradeSetupRecord.result_r.is_not(None))
+                    .order_by(TradeSetupRecord.closed_at.asc())
+                ))
+            rows = [record for record in candidates if self._is_filled_trade(record)]
         except Exception:
             rows = []
         if not rows:
@@ -214,6 +342,7 @@ class StorageService:
             profit_factor=round(gross_win / gross_loss, 2) if gross_loss else (gross_win if gross_win else 0),
             net_pnl=round(sum(results), 2), equity_curve=equity, simulated=False,
         )
+
 
 
 storage_service = StorageService()

@@ -240,6 +240,20 @@ class TradeSetup(BaseModel):
     institutional_confidence_components: dict[str, float] = Field(default_factory=dict)
     institutional_confidence_maximums: dict[str, float] = Field(default_factory=dict)
 
+    # v3.1.6 separates a promising location from a confirmed, executable trade.
+    # A high location score is never displayed as an A-grade trade until the
+    # confirmation and execution gates are also complete.
+    trigger_entry_model: str | None = None
+    trigger_entry_model_key: str | None = None
+    thesis_fingerprint: str | None = None
+    structure_event_key: str | None = None
+    location_quality_score: float = Field(default=0.0, ge=0, le=100)
+    confirmation_quality_score: float = Field(default=0.0, ge=0, le=100)
+    execution_quality_score: float = Field(default=0.0, ge=0, le=100)
+    trade_quality_score: float = Field(default=0.0, ge=0, le=100)
+    trade_grade: str = "—"
+    quality_stage: str = "LOCATION_ONLY"
+
     actionable: bool = False
     entry_valid: bool = False
     order_state: str = "PREVIEW_ONLY"

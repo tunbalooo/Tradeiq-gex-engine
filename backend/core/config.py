@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     direction_switch_confirm_bars: int = 2
     setup_expiry_minutes: int = 30
     watch_confirmation_minutes: int = 5
+    # Terminal thesis locks prevent the same cluster/event from being recreated
+    # after expiry, invalidation, or a stop. A genuinely new structure event
+    # creates a new thesis fingerprint and releases the lock immediately.
+    thesis_lock_max_minutes: int = 240
     cluster_min_score: float = 0.65
     cluster_tolerance_atr: float = 0.25
     # Flexible institutional-cluster tiers. A very strong two-category cluster

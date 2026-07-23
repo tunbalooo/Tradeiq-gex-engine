@@ -7,6 +7,7 @@ selector. Claude remains read-only.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from hashlib import sha1
 from typing import Any
 
 from backend.core.config import settings
@@ -85,6 +86,61 @@ def _cluster_confirmation(
     if strength < required:
         missing.append(f"confirmation strength {required} (currently {strength})")
     return confirmed, missing, strength, confirmed_models
+
+
+def _quality_grade(score: float) -> str:
+    value = float(score or 0.0)
+    if value >= 95.0:
+        return "A+"
+    if value >= 85.0:
+        return "A"
+    if value >= 78.0:
+        return "B+"
+    if value >= 72.0:
+        return "B"
+    if value >= 65.0:
+        return "C"
+    return "AVOID"
+
+
+def _confirmation_quality(primary: EntryModelScore, signals: dict[str, Any], confirmed: bool) -> float:
+    contract = (signals.get("model_confirmations") or {}).get(primary.key)
+    if isinstance(contract, dict):
+        evidence = list(contract.get("evidence") or [])
+        missing = list(contract.get("missing") or [])
+        total = len(evidence) + len(missing)
+        if confirmed:
+            return 100.0
+        if total:
+            return round(100.0 * len(evidence) / total, 1)
+    groups = MODEL_CONFIRMATIONS.get(primary.key, ())
+    if not groups:
+        return 100.0 if confirmed else (60.0 if primary.eligible else 0.0)
+    passed = sum(1 for alternatives in groups if any(_signal_truth(signals, name) for name in alternatives))
+    return round(100.0 * passed / max(len(groups), 1), 1)
+
+
+def _execution_quality(execution, tp2_r: float | None) -> float:
+    freshness = max(0.0, min(100.0, float(execution.freshness_score or 0.0)))
+    room = max(0.0, min(100.0, float(tp2_r or 0.0) / 3.0 * 100.0))
+    if not execution.executable:
+        return round(min(60.0, freshness * 0.45), 1)
+    return round(freshness * 0.65 + room * 0.35, 1)
+
+
+def _thesis_fingerprint(
+    *, setup: TradeSetup, profile, trigger_model_key: str, location: float | None,
+) -> tuple[str, str]:
+    event_key = str(setup.signals.get("structure_event_key") or "NO_STRUCTURE_EVENT")
+    tick = max(float(profile.tick_size), 1e-9)
+    bucket_size = max(tick * 8.0, float(setup.atr or tick) * 0.25)
+    location_value = float(location if location is not None else setup.signals.get("current_price") or 0.0)
+    location_bucket = round(location_value / bucket_size) if bucket_size > 0 else round(location_value / tick)
+    raw = "|".join([
+        setup.symbol, setup.direction, str(trigger_model_key or "NONE"),
+        str(location_bucket), event_key,
+    ])
+    return sha1(raw.encode("utf-8")).hexdigest()[:20], event_key
 
 
 class DecisionBrainService:
@@ -248,6 +304,30 @@ class DecisionBrainService:
             if cluster_primary is not None:
                 alternatives = [cluster_primary] + alternatives
 
+        trigger_model = single_primary if using_cluster else primary
+        location_quality = round(float(cluster["score"] if using_cluster else primary.score), 1)
+        if using_cluster:
+            required_strength = max(1, int(cluster.get("required_confirmation_strength") or 1))
+            confirmation_quality = 100.0 if model_confirmed else round(
+                min(100.0, 100.0 * cluster_confirmation_strength / required_strength), 1
+            )
+        else:
+            confirmation_quality = _confirmation_quality(primary, setup.signals, model_confirmed)
+        execution_quality = _execution_quality(execution, setup.tp2_r)
+        trade_quality = round(
+            location_quality * 0.35 + confirmation_quality * 0.30 + execution_quality * 0.35, 1
+        ) if actionable else 0.0
+        trade_grade = _quality_grade(trade_quality) if actionable else "—"
+        quality_stage = "EXECUTABLE" if actionable else "CONFIRMED_NO_EXECUTION" if model_confirmed else "LOCATION_ONLY"
+        active_map = setup.market_map.active_cluster if setup.market_map else None
+        location_reference = (
+            active_map.midpoint if active_map is not None
+            else ((setup.cluster_low + setup.cluster_high) / 2 if setup.cluster_low is not None and setup.cluster_high is not None else setup.entry)
+        )
+        thesis_fingerprint, structure_event_key = _thesis_fingerprint(
+            setup=setup, profile=profile, trigger_model_key=trigger_model.key, location=location_reference,
+        )
+
         if actionable:
             reason = (
                 f"{primary.name} ranks first at {primary.score:.1f}%. "
@@ -281,6 +361,16 @@ class DecisionBrainService:
             "primary_entry_model": primary.name,
             "primary_entry_model_key": primary.key,
             "primary_model_score": primary.score,
+            "trigger_entry_model": trigger_model.name,
+            "trigger_entry_model_key": trigger_model.key,
+            "thesis_fingerprint": thesis_fingerprint,
+            "structure_event_key": structure_event_key,
+            "location_quality_score": location_quality,
+            "confirmation_quality_score": confirmation_quality,
+            "execution_quality_score": execution_quality,
+            "trade_quality_score": trade_quality,
+            "trade_grade": trade_grade,
+            "quality_stage": quality_stage,
             "entry_model_scores": ranking,
             "alternative_entry_models": [item.name for item in alternatives[:4]],
             "model_selection_reason": reason,
@@ -315,6 +405,10 @@ class DecisionBrainService:
                 "cluster_quality_gate": selected["cluster_quality_gate"] if using_cluster else None,
                 "cluster_quality_missing": selected["cluster_quality_missing"] if using_cluster else [],
                 "selected_as_cluster": using_cluster,
+                "trigger_entry_model": trigger_model.name,
+                "trigger_entry_model_key": trigger_model.key,
+                "thesis_fingerprint": thesis_fingerprint,
+                "quality_stage": quality_stage,
             },
         })
 
@@ -330,6 +424,18 @@ class DecisionBrainService:
                 "key": setup.primary_entry_model_key,
                 "score": setup.primary_model_score,
                 "reason": setup.model_selection_reason,
+            },
+            "trigger_model": {
+                "name": setup.trigger_entry_model,
+                "key": setup.trigger_entry_model_key,
+            },
+            "quality": {
+                "stage": setup.quality_stage,
+                "location": setup.location_quality_score,
+                "confirmation": setup.confirmation_quality_score,
+                "execution": setup.execution_quality_score,
+                "trade": setup.trade_quality_score,
+                "grade": setup.trade_grade,
             },
             "execution": {
                 "type": setup.execution_type,

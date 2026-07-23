@@ -36,6 +36,10 @@ class TradeEngineService:
         self._pending_candidate_signature: tuple | None = None
         self._pending_candidate_count = 0
         self._pending_candidate_candle_time: datetime | None = None
+        # A terminal thesis is not allowed to respawn from timer/polling refreshes.
+        # The fingerprint includes the trigger model, location bucket and latest
+        # structure-event key, so a genuinely new MSS/sweep/displacement may trade.
+        self._terminal_thesis_locks: dict[str, dict[str, object]] = {}
 
     async def start(self) -> None:
         if self._task is None:
@@ -55,11 +59,21 @@ class TradeEngineService:
 
 
     def restore_from_storage(self) -> TradeSetup | None:
-        """Rehydrate the latest active lifecycle object before the first cycle."""
+        """Rehydrate active lifecycle state and terminal same-thesis locks."""
         with self._lock:
             if self._current is not None:
                 return self._current.model_copy(deep=True)
             symbol = market_data_service.symbol
+            cutoff = self._utcnow() - timedelta(minutes=max(1, settings.thesis_lock_max_minutes))
+            for item in storage_service.recent_terminal_theses(symbol=symbol, limit=40):
+                locked_at = item.get("locked_at")
+                if not isinstance(locked_at, datetime) or locked_at < cutoff:
+                    continue
+                fingerprint = str(item.get("fingerprint") or "").strip()
+                if fingerprint:
+                    self._terminal_thesis_locks[fingerprint] = {
+                        key: value for key, value in item.items() if key != "fingerprint"
+                    }
             restored = storage_service.load_active_setup(symbol=symbol)
             if restored is None:
                 return None
@@ -169,6 +183,56 @@ class TradeEngineService:
             "expired_at": self._utcnow(),
             "setup_id": watching.setup_id,
         }
+
+    def _prune_terminal_thesis_locks(self) -> None:
+        cutoff = self._utcnow() - timedelta(minutes=max(1, settings.thesis_lock_max_minutes))
+        self._terminal_thesis_locks = {
+            key: value for key, value in self._terminal_thesis_locks.items()
+            if isinstance(value.get("locked_at"), datetime) and value["locked_at"] >= cutoff
+        }
+
+    def _remember_terminal_thesis(self, setup: TradeSetup) -> None:
+        fingerprint = str(setup.thesis_fingerprint or "").strip()
+        if not fingerprint:
+            return
+        self._prune_terminal_thesis_locks()
+        self._terminal_thesis_locks[fingerprint] = {
+            "locked_at": self._utcnow(),
+            "state": setup.order_state,
+            "outcome": setup.outcome,
+            "setup_id": setup.setup_id,
+            "structure_event_key": setup.structure_event_key,
+            "direction": setup.direction,
+            "trigger_model": setup.trigger_entry_model or setup.primary_entry_model,
+            "entry": self._finite_number(setup.watch_trigger if setup.watch_trigger is not None else setup.entry),
+            "cluster_low": self._finite_number(setup.cluster_low),
+            "cluster_high": self._finite_number(setup.cluster_high),
+        }
+
+    def _terminal_thesis_block_reason(self, candidate: TradeSetup) -> str | None:
+        fingerprint = str(candidate.thesis_fingerprint or "").strip()
+        if not fingerprint:
+            return None
+        self._prune_terminal_thesis_locks()
+        locked = self._terminal_thesis_locks.get(fingerprint)
+        if not locked:
+            return None
+        # Defensive location check for restored/legacy candidates whose fingerprint
+        # may have been copied before their entry was materially changed.
+        profile = get_instrument(candidate.symbol)
+        tolerance = max(profile.tick_size * 8, float(candidate.atr or profile.tick_size) * 0.25)
+        old_entry = self._finite_number(locked.get("entry"))
+        new_entry = self._finite_number(candidate.entry)
+        if old_entry is not None and new_entry is not None and abs(old_entry - new_entry) > tolerance:
+            self._terminal_thesis_locks.pop(fingerprint, None)
+            return None
+        state = str(locked.get("state") or "terminal state").replace("_", " ").lower()
+        model = str(locked.get("trigger_model") or candidate.trigger_entry_model or "setup")
+        return (
+            f"Same-thesis lock: this {candidate.direction.lower()} {model} at the same location "
+            f"and structure event already ended in {state}. TradeIQ requires a new sweep, "
+            "structure shift, displacement, or materially new cluster before another entry."
+        )
 
     def _same_as_expired_watch(self, candidate: TradeSetup) -> bool:
         expired = self._expired_watch
@@ -525,6 +589,18 @@ class TradeEngineService:
             return self._preview(candidate, gate_status)
         if self._same_as_expired_watch(candidate):
             return self._preview(candidate, "WATCH_EXPIRED")
+        thesis_block = self._terminal_thesis_block_reason(candidate)
+        if thesis_block:
+            return self._preview(candidate.model_copy(update={
+                "status": "THESIS_LOCKED",
+                "actionable": False,
+                "execution_type": "NONE",
+                "execution_reason": thesis_block,
+                "quality_stage": "THESIS_LOCKED",
+                "trade_quality_score": 0.0,
+                "trade_grade": "—",
+                "signals": {**candidate.signals, "thesis_lock_reason": thesis_block},
+            }), "THESIS_LOCKED")
         if candidate.actionable:
             return self._arm_candidate(candidate, candle, execution_candle=market_candle)
         if self._is_watch_candidate(candidate):
@@ -811,6 +887,15 @@ class TradeEngineService:
             "institutional_confidence_components": candidate.institutional_confidence_components,
             "institutional_confidence_maximums": candidate.institutional_confidence_maximums,
         }
+        if active.order_state == "WATCHING":
+            fields.update({
+                "location_quality_score": candidate.location_quality_score,
+                "confirmation_quality_score": candidate.confirmation_quality_score,
+                "execution_quality_score": candidate.execution_quality_score,
+                "trade_quality_score": 0.0,
+                "trade_grade": "—",
+                "quality_stage": candidate.quality_stage,
+            })
         return active.model_copy(update=fields)
 
     def _transition(self, setup: TradeSetup, new_state: str, candle, detail: str, **updates) -> TradeSetup:
@@ -828,6 +913,8 @@ class TradeEngineService:
             **updates,
         }
         updated = setup.model_copy(update=payload)
+        if new_state in TERMINAL:
+            self._remember_terminal_thesis(updated)
         severity = "positive" if new_state in {"FILLED", "TP1_HIT", "TP2_HIT"} else "negative" if new_state == "STOPPED" else "warning"
         storage_service.transition(updated, previous, new_state, candle.close, candle.time, detail, severity)
         return updated
@@ -1100,6 +1187,7 @@ class TradeEngineService:
             self._current = None
             self._last_processed_candle_time = None
             self._expired_watch = None
+            self._terminal_thesis_locks.clear()
             self._reset_pending_candidate()
             self._restored_setup_id = None
             self._restored_at = None
@@ -1111,6 +1199,7 @@ class TradeEngineService:
             self._last_processed_candle_time = None
             self._last_error = None
             self._expired_watch = None
+            self._terminal_thesis_locks.clear()
             self._reset_pending_candidate()
             self._restored_setup_id = None
             self._restored_at = None

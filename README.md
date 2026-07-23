@@ -1,4 +1,4 @@
-# TradeIQ Institutional Trade Desk v3.0.6
+# TradeIQ Institutional Trade Desk v3.1.6
 
 
 ## v3.0.2 entry and chart stability
@@ -335,7 +335,21 @@ Current local verification target:
 TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.
 
 
-## Current release: v3.1.5
+## Current release: v3.1.6
+
+TradeIQ now separates a promising location from a confirmed, executable trade:
+
+- location, confirmation, execution and final trade quality are scored separately;
+- an A-grade location is labelled `Location Grade` and cannot appear as an A-grade trade before execution is valid;
+- the actual trigger model remains visible when the composite Institutional Confluence Cluster is selected;
+- scanner-only watches are separated from the published Trade Log and never count as trades or model performance;
+- repeated timer refreshes are collapsed into one scanner thesis;
+- terminal theses are locked after expiry, invalidation, stop or completion until a genuinely new sweep, structure shift, displacement or materially new cluster appears;
+- the same stopped support/resistance thesis cannot immediately re-enter under a new setup ID.
+
+See `TRADEIQ_V3.1.6_RELEASE_NOTES.md` for the release contract.
+
+## Previous release: v3.1.5
 
 TradeIQ once again shows the developing scan while keeping execution honest:
 

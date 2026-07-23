@@ -531,6 +531,27 @@ async function loadGexPage() {
 function classForDirection(direction) {
   return direction === "LONG" ? "g" : direction === "SHORT" ? "r" : "m";
 }
+function qualityGrade(score) {
+  const value = Number(score || 0);
+  if (value >= 95) return "A+";
+  if (value >= 85) return "A";
+  if (value >= 78) return "B+";
+  if (value >= 72) return "B";
+  if (value >= 65) return "C";
+  return "AVOID";
+}
+function setupQualityView(setup, lockedPlan) {
+  const location = Number(setup?.location_quality_score ?? setup?.primary_model_score ?? 0);
+  const confirmation = Number(setup?.confirmation_quality_score ?? 0);
+  const execution = Number(setup?.execution_quality_score ?? 0);
+  const trade = Number(setup?.trade_quality_score ?? 0);
+  return {
+    location, confirmation, execution, trade,
+    score: lockedPlan ? trade : location,
+    grade: lockedPlan ? (setup?.trade_grade || qualityGrade(trade)) : qualityGrade(location),
+    label: lockedPlan ? "Trade Grade" : "Location Grade",
+  };
+}
 function stars(strength) {
   const n = Math.max(0, Math.min(5, Number(strength || 0)));
   return "★".repeat(n) + "☆".repeat(5 - n);
@@ -1051,9 +1072,10 @@ function scanManagementText(setup) {
 }
 
 function renderTradeSetup(setup) {
-  const confidence = Math.max(0, Math.min(100, Number(setup.confidence || 0)));
   const lockedPlan = hasLockedTradePlan(setup);
   const visibleScan = hasVisibleScan(setup);
+  const qualityView = setupQualityView(setup, lockedPlan);
+  const confidence = Math.max(0, Math.min(100, Number(qualityView.score || 0)));
   const displayConfidence = lockedPlan || visibleScan ? confidence : 0;
   const circumference = 307.9;
   $("gaugeArc").style.strokeDashoffset = String(circumference * (1 - displayConfidence / 100));
@@ -1082,8 +1104,8 @@ function renderTradeSetup(setup) {
   const coreKeys = ["trend_alignment", "gex_alignment", "ote_overlap", "supply_demand", "gex_ote_zone_cluster"];
   const aligned = coreKeys.filter((key) => setup.signals?.[key]).length;
   $("coreAlignment").textContent = lockedPlan
-    ? `${aligned} / ${coreKeys.length} core confluences aligned — executable plan locked`
-    : `${aligned} / ${coreKeys.length} core confluences aligned — live scan only, no order`;
+    ? `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} · Execute ${qualityView.execution.toFixed(0)} — plan locked`
+    : `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} — live scan only, no order`;
 
   const scanLabel = visibleScan
     ? `${triggerTouched ? "CONFIRM" : "SCAN"} ${setup.direction} · NO ORDER`
@@ -1093,9 +1115,11 @@ function renderTradeSetup(setup) {
   $("setupLabel").className = `${syncing || marketClosed ? "a" : visibleScan || lockedPlan ? classForDirection(setup.direction) : "a"} mono setup-side-label`;
   $("setupDirection").textContent = lockedPlan || visibleScan ? `${setup.direction} ${setup.direction === "LONG" ? "↑" : "↓"}` : "WAITING";
   $("setupDirection").className = `v ${lockedPlan || visibleScan ? classForDirection(setup.direction) : "a"}`;
-  $("setupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · ${Number(setup.primary_model_score || 0).toFixed(0)}%` : "—";
+  const triggerName = setup.trigger_entry_model || setup.primary_entry_model;
+  $("setupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · trigger: ${triggerName || "—"}` : "—";
   $("setupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 3).join(" · ") || "—";
-  $("setupGrade").textContent = setup.confidence_grade || "—";
+  if ($("setupGradeLabel")) $("setupGradeLabel").textContent = qualityView.label;
+  $("setupGrade").textContent = qualityView.grade;
   $("setupGrade").className = `v ${confidence >= 85 ? "g" : confidence >= 70 ? "a" : visibleScan ? "b" : "r"}`;
   $("entryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `${executionOrderName(setup)} Armed` : `${executionOrderName(setup)} Filled`) : "Entry (publishes when valid)";
   $("setupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";
@@ -1124,7 +1148,7 @@ function renderTradeSetup(setup) {
   $("setupValid").textContent = syncing ? "SYNCING" : marketClosed ? remainingText(state.session?.next_open_at) : lockedPlan ? formatAppTime(setup.valid_until) : watchingPlan ? formatAppTime(setup.watch_expires_at || setup.valid_until) : "SCANNING";
   renderModelRanking(setup, "setupModelRanking");
   renderChartTradeSetup(setup, {
-    confidence, gaugeColor, marketClosed, syncing, quality, aligned,
+    confidence, gaugeColor, marketClosed, syncing, quality, aligned, qualityView,
     coreCount: coreKeys.length, label, statusText, activeStates,
     watchingPlan, triggerTouched, lockedPlan, visibleScan,
   });
@@ -1132,7 +1156,7 @@ function renderTradeSetup(setup) {
 
 function renderChartTradeSetup(setup, context) {
   if (!$("chartSetupPanel")) return;
-  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, coreCount, label, statusText, activeStates, watchingPlan, lockedPlan, visibleScan } = context;
+  const { confidence, gaugeColor, marketClosed, syncing, quality, aligned, qualityView, coreCount, label, statusText, activeStates, watchingPlan, lockedPlan, visibleScan } = context;
   const ring = $("chartConfidenceRing");
   ring.style.setProperty("--chart-confidence", `${(lockedPlan || visibleScan ? confidence : 0) * 3.6}deg`);
   ring.style.setProperty("--chart-confidence-color", gaugeColor);
@@ -1141,16 +1165,18 @@ function renderChartTradeSetup(setup, context) {
   $("chartProbabilityLabel").textContent = syncing ? "Data Syncing" : marketClosed ? "Market Closed" : quality;
   $("chartProbabilityLabel").style.color = gaugeColor;
   $("chartCoreAlignment").textContent = lockedPlan
-    ? `${aligned} / ${coreCount} aligned — executable plan locked`
-    : `${aligned} / ${coreCount} aligned — live scan only, no order`;
+    ? `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} · Execute ${qualityView.execution.toFixed(0)}`
+    : `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} — no order`;
 
   $("chartSetupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
   $("chartSetupLabel").className = `${syncing || marketClosed ? "a" : visibleScan || lockedPlan ? classForDirection(setup.direction) : "a"} mono`;
   $("chartSetupDirection").textContent = lockedPlan || visibleScan ? `${setup.direction} ${setup.direction === "LONG" ? "↑" : "↓"}` : "WAITING";
   $("chartSetupDirection").className = lockedPlan || visibleScan ? classForDirection(setup.direction) : "a";
-  $("chartSetupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · ${Number(setup.primary_model_score || 0).toFixed(0)}%` : "—";
+  const chartTriggerName = setup.trigger_entry_model || setup.primary_entry_model;
+  $("chartSetupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · trigger: ${chartTriggerName || "—"}` : "—";
   $("chartSetupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 2).join(" · ") || "—";
-  $("chartSetupGrade").textContent = setup.confidence_grade || "—";
+  if ($("chartSetupGradeLabel")) $("chartSetupGradeLabel").textContent = qualityView.label;
+  $("chartSetupGrade").textContent = qualityView.grade;
   $("chartSetupGrade").className = confidence >= 85 ? "g" : confidence >= 70 ? "a" : visibleScan ? "b" : "r";
   $("chartEntryLabel").textContent = lockedPlan ? (setup.order_state === "WAITING_FOR_LIMIT" ? `${executionOrderName(setup)} Armed` : `${executionOrderName(setup)} Filled`) : "Entry (publishes when valid)";
   $("chartSetupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";
@@ -2052,16 +2078,18 @@ function renderConfluencePage(setup) {
 }
 async function loadSetups() {
   try {
-    const [rows, analytics] = await Promise.all([
+    const [rows, scans, analytics] = await Promise.all([
       fetch("/api/setups/history").then((response) => response.json()),
+      fetch("/api/scans/history").then((response) => response.json()),
       fetch("/api/analytics/summary").then((response) => response.json()),
     ]);
     if ($("setupHistoryTimezone")) $("setupHistoryTimezone").textContent = `${window.TradeIQTime?.preference?.() === "EXCHANGE" ? "EXCHANGE" : "AUTO"} · ${displayTimeZone()} · ${displayTimeZoneLabel()}`;
     if ($("setupHistoryTimeHeader")) $("setupHistoryTimeHeader").textContent = `Time (${displayTimeZoneLabel()})`;
-    $("setupsTable").innerHTML = rows.length ? rows.map((item) => `<tr><td>${formatAppDateTime(item.updated_at)} <span class="time-zone-suffix">${displayTimeZoneLabel(item.updated_at)}</span></td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${escapeHtml(item.primary_entry_model || "—")}</td><td>${escapeHtml(item.confidence_grade || "—")}</td><td>${fmt(item.confidence,0)}</td><td>${fmt(item.entry)}</td><td>${fmt(item.stop_loss)}</td><td>${fmt(item.active_stop_loss)}</td><td>${fmt(item.take_profit_1)}</td><td>${fmt(item.take_profit_2)}</td><td>${escapeHtml(item.order_state || "—")}</td><td>${escapeHtml(item.management_state || "—")}</td><td>${item.result_r ?? '—'}</td></tr>`).join("") : '<tr><td colspan="13" class="m">No persisted setups yet.</td></tr>';
+    $("setupsTable").innerHTML = rows.length ? rows.map((item) => `<tr><td>${formatAppDateTime(item.updated_at)} <span class="time-zone-suffix">${displayTimeZoneLabel(item.updated_at)}</span></td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${escapeHtml(item.trigger_entry_model || "—")}</td><td>${escapeHtml(item.primary_entry_model || "—")}</td><td>${escapeHtml(item.trade_grade || "—")}</td><td>${fmt(item.trade_quality_score,0)}</td><td>${fmt(item.entry)}</td><td>${fmt(item.stop_loss)}</td><td>${fmt(item.active_stop_loss)}</td><td>${fmt(item.take_profit_1)}</td><td>${fmt(item.take_profit_2)}</td><td>${escapeHtml(item.order_state || "—")}</td><td>${item.result_r ?? '—'}</td></tr>`).join("") : '<tr><td colspan="13" class="m">No published trades yet.</td></tr>';
+    if ($("scansTable")) $("scansTable").innerHTML = scans.length ? scans.map((item) => `<tr><td>${formatAppDateTime(item.updated_at)}</td><td class="${classForDirection(item.direction)}">${item.direction}</td><td>${escapeHtml(item.trigger_entry_model || item.primary_entry_model || "—")}</td><td>${fmt(item.location_quality_score,0)}</td><td>${fmt(item.confirmation_quality_score,0)}</td><td>${escapeHtml(String(item.quality_stage || "LOCATION_ONLY").replaceAll("_", " "))}</td><td>${escapeHtml(item.order_state || item.status || "—")}</td><td title="${escapeHtml(item.last_transition_reason || "")}">${escapeHtml((item.last_transition_reason || item.outcome || "—").slice(0, 120))}</td></tr>`).join("") : '<tr><td colspan="8" class="m">No scanner theses yet.</td></tr>';
     const leaders = Array.isArray(analytics.model_leaderboard) ? analytics.model_leaderboard : [];
-    $("modelLeaderboard").innerHTML = leaders.length ? leaders.map((item) => `<tr><td>${escapeHtml(item.model)}</td><td>${item.trades}</td><td>${Number(item.win_rate || 0).toFixed(1)}%</td><td>${Number(item.average_r || 0).toFixed(2)}R</td><td>${Number(item.net_r || 0).toFixed(2)}R</td><td>${Number(item.profit_factor || 0).toFixed(2)}</td></tr>`).join("") : '<tr><td colspan="6" class="m">No completed model results yet.</td></tr>';
-  } catch (error) { toast("Could not load setup history"); }
+    $("modelLeaderboard").innerHTML = leaders.length ? leaders.map((item) => `<tr><td>${escapeHtml(item.model)}</td><td>${item.trades}</td><td>${Number(item.win_rate || 0).toFixed(1)}%</td><td>${Number(item.average_r || 0).toFixed(2)}R</td><td>${Number(item.net_r || 0).toFixed(2)}R</td><td>${Number(item.profit_factor || 0).toFixed(2)}</td></tr>`).join("") : '<tr><td colspan="6" class="m">No completed trigger-model results yet.</td></tr>';
+  } catch (error) { toast("Could not load trade/scanner history"); }
 }
 async function loadAlertsPage() {
   try {
