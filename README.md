@@ -1,4 +1,4 @@
-# TradeIQ Institutional Trade Desk v3.1.6
+# TradeIQ Institutional Trade Desk v3.1.7
 
 
 ## v3.0.2 entry and chart stability
@@ -326,7 +326,7 @@ DATABENTO_STOP_JOIN_SECONDS=2
 Current local verification target:
 
 ```text
-132 passed
+193 passed
 ```
 
 
@@ -335,7 +335,24 @@ Current local verification target:
 TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.
 
 
-## Current release: v3.1.6
+## Current release: v3.1.7
+
+TradeIQ now includes a full GEX radar instead of relying only on Call Wall, Put Wall, Gamma Flip and Max Pain lines:
+
+- horizontal positive/negative GEX bars aligned by strike;
+- `0DTE`, `Weekly` and `All` expiration views when those contracts are available;
+- open interest, weighted implied volatility and expiration count at each strike;
+- top gamma-node ranking;
+- grouped positive/negative GEX intensity zones on the radar and the main chart;
+- Spot, Gamma Flip, Max Pain, Call Wall and Put Wall references on one profile;
+- filtered GEX state is kept separate from the live all-expiration trade-engine map, so changing the analysis view cannot alter an active trade decision;
+- native Databento option positioning is labelled separately from fallback GEX, including disclosure when implied volatility had to be estimated.
+
+The release also includes a code-integrity audit covering Python parsing/compilation, frontend JavaScript syntax, HTML ID/reference integrity, API route validation, lifecycle regression tests and package integrity.
+
+See `TRADEIQ_V3.1.7_RELEASE_NOTES.md` and `TRADEIQ_V3.1.7_CODE_AUDIT.md`.
+
+## Previous release: v3.1.6
 
 TradeIQ now separates a promising location from a confirmed, executable trade:
 

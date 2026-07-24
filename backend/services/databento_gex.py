@@ -4,12 +4,18 @@ import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from backend.core.config import settings
 from backend.models.schemas import GexSummary
 from backend.services.instruments import InstrumentProfile, get_instrument, instrument_registry
 from backend.services.market_data import available_dataset_end
-from engine.gex import OptionPosition, derive_gex_summary_from_positions
+from engine.gex import (
+    OptionPosition,
+    derive_gex_summary_from_positions,
+    expiry_breakdown,
+    filter_positions_by_expiry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +75,9 @@ class DatabentoGexService:
         self._lock = threading.RLock()
         self._positions: list[OptionPosition] = []
         self._positions_key: str | None = None
-        self._summary_cache: GexSummary | None = None
+        self._summary_cache: dict[str, GexSummary] = {}
         self._summary_cache_key: str | None = None
-        self._summary_reference_price: float | None = None
+        self._summary_reference_price: dict[str, float] = {}
         self.updated_at: datetime | None = None
         self.last_error: str | None = None
         self.refreshing = False
@@ -111,9 +117,9 @@ class DatabentoGexService:
             if self._positions_key != key:
                 self._positions = []
                 self._positions_key = None
-                self._summary_cache = None
+                self._summary_cache = {}
                 self._summary_cache_key = None
-                self._summary_reference_price = None
+                self._summary_reference_price = {}
                 self.updated_at = None
             self.last_error = None
         if settings.use_databento:
@@ -151,9 +157,9 @@ class DatabentoGexService:
             with self._lock:
                 self._positions = positions
                 self._positions_key = key
-                self._summary_cache = None
+                self._summary_cache = {}
                 self._summary_cache_key = None
-                self._summary_reference_price = None
+                self._summary_reference_price = {}
                 self.updated_at = datetime.now(timezone.utc)
                 self.last_error = None
             logger.info(
@@ -325,6 +331,7 @@ class DatabentoGexService:
                 1 / 3650,
             )
             implied_volatility = iv.get(definition.instrument_id)
+            iv_is_estimated = implied_volatility is None
             if implied_volatility is None:
                 moneyness = abs(definition.strike - futures_price) / max(futures_price, 1)
                 skew = 0.03 if definition.option_type == "PUT" else 0.0
@@ -341,11 +348,12 @@ class DatabentoGexService:
                     contract_multiplier=definition.multiplier,
                     symbol=definition.symbol,
                     expiration_ns=int(definition.expiration.timestamp() * NANO),
+                    iv_is_estimated=iv_is_estimated,
                 )
             )
         return positions
 
-    def get_summary(self, futures_price: float) -> GexSummary | None:
+    def get_summary(self, futures_price: float, expiry_filter: str = "ALL") -> GexSummary | None:
         """Return a session-stable GEX map for the current option-position snapshot.
 
         Dealer levels are derived once after each fresh option-position refresh.
@@ -355,29 +363,43 @@ class DatabentoGexService:
         """
         profile = self.profile
         key = _profile_key(profile)
+        mode = str(expiry_filter or "ALL").upper()
+        if mode not in {"0DTE", "WEEKLY", "ALL"}:
+            raise ValueError(f"Unsupported GEX expiry filter: {expiry_filter}")
         with self._lock:
             positions = list(self._positions) if self._positions_key == key else []
             updated_at = self.updated_at
-            cached = self._summary_cache if self._summary_cache_key == key else None
+            cached = self._summary_cache.get(mode) if self._summary_cache_key == key else None
             if cached is not None:
                 return cached.model_copy(deep=True)
 
         if not positions:
             return None
+        exchange_now = datetime.now(ZoneInfo(settings.rth_timezone))
+        counts = expiry_breakdown(positions, now=exchange_now)
+        available = [name for name in ("0DTE", "WEEKLY", "ALL") if counts.get(name, 0) > 0]
+        if "ALL" not in available:
+            available.append("ALL")
+        selected_positions = filter_positions_by_expiry(positions, mode, now=exchange_now)
+        if not selected_positions:
+            return None
         reference_price = float(futures_price)
         raw = derive_gex_summary_from_positions(
             reference_price,
-            positions,
+            selected_positions,
             flip_range_points=profile.gex_strike_range_points,
             flip_step=profile.gex_flip_step,
+            expiry_filter=mode,
+            available_expiry_filters=available,
+            expiry_counts=counts,
         )
         raw.update(
             {
                 "source": f"databento-native-{profile.gex_source_symbol.lower()}",
                 "updated_at": updated_at,
-                "contract_count": len(positions),
-                "expiry_count": len({position.expiration_ns for position in positions}),
-                "is_estimate": True,
+                "contract_count": len(selected_positions),
+                "expiry_count": len({position.expiration_ns for position in selected_positions}),
+                "is_estimate": False,
                 "source_symbol": profile.gex_source_symbol,
                 "applied_to_symbol": profile.symbol,
                 "options_parent": profile.options_parent,
@@ -388,9 +410,12 @@ class DatabentoGexService:
         summary = GexSummary(**raw)
         with self._lock:
             if self._positions_key == key:
-                self._summary_cache = summary
+                if self._summary_cache_key != key:
+                    self._summary_cache = {}
+                    self._summary_reference_price = {}
+                self._summary_cache[mode] = summary
                 self._summary_cache_key = key
-                self._summary_reference_price = reference_price
+                self._summary_reference_price[mode] = reference_price
         return summary.model_copy(deep=True)
 
     def health(self) -> dict:
@@ -410,8 +435,9 @@ class DatabentoGexService:
             "options_parent": profile.options_parent,
             "source_label": profile.gex_source_label,
             "is_parent_market": profile.uses_parent_gex,
-            "levels_locked": self._summary_cache_key == key and self._summary_cache is not None,
-            "reference_price": self._summary_reference_price,
+            "levels_locked": self._summary_cache_key == key and bool(self._summary_cache),
+            "reference_price": dict(self._summary_reference_price),
+            "cached_expiry_filters": sorted(self._summary_cache) if self._summary_cache_key == key else [],
         }
 
 

@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=316" />
+<link rel="stylesheet" href="/static/styles.css?v=317" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -430,6 +430,11 @@
                   <div><h3>Gamma Exposure</h3><small id="mobileGexSource">Waiting for GEX source…</small></div>
                   <span class="source-chip" id="mobileGexBadge">GEX</span>
                 </div>
+                <div class="gex-expiry-toggle mobile-gex-expiry-toggle" id="mobileGexExpiryToggle" role="group" aria-label="GEX expiration range">
+                  <button type="button" data-gex-expiry="0DTE">0DTE</button>
+                  <button type="button" data-gex-expiry="WEEKLY">Weekly</button>
+                  <button type="button" class="active" data-gex-expiry="ALL">All</button>
+                </div>
                 <div class="mobile-gex-grid">
                   <div><span>Regime</span><b id="mobileGexRegime">—</b></div>
                   <div><span>Net GEX</span><b id="mobileNetGex">—</b></div>
@@ -441,10 +446,11 @@
                 </div>
                 <div class="mobile-gex-scale"><span>-GEX</span><i><b id="mobileGexNeedle"></b></i><span>+GEX</span></div>
                 <div class="mobile-gex-chart-card">
-                  <div class="mobile-gex-chart-head"><b>GEX by Strike</b><span id="mobileGexChartStatus">Net exposure</span></div>
+                  <div class="mobile-gex-chart-head"><b>GEX Radar</b><span id="mobileGexChartStatus">ALL expirations</span></div>
                   <canvas id="mobileGexStrikeChart" aria-label="Gamma exposure by strike"></canvas>
-                  <div class="gex-chart-legend"><span class="negative">Put / negative GEX</span><span class="positive">Call / positive GEX</span><span class="flip">Gamma flip</span></div>
+                  <div class="gex-chart-legend"><span class="negative">Negative GEX</span><span class="positive">Positive GEX</span><span class="spot">Spot</span><span class="flip">Gamma flip</span></div>
                 </div>
+                <div class="mobile-gex-nodes" id="mobileGexNodes"></div>
                 <p class="mobile-gex-note" id="mobileGexNote">Gamma levels are informational and do not change the confidence score.</p>
               </aside>
             </div>
@@ -458,13 +464,25 @@
         <div class="panel page-panel"><div class="panel-h"><h3>Gamma Profile</h3><button class="mini-btn" id="refreshGex">Refresh GEX</button></div><div class="panel-b" id="gexProfile"></div></div>
         <div class="panel page-panel"><div class="panel-h"><h3>Key GEX Levels</h3></div><div class="panel-b table-pad"><table><thead><tr><th>Type</th><th>Price</th><th>Exposure</th><th>Strength</th></tr></thead><tbody id="gexPageTable"></tbody></table></div></div>
         <div class="panel page-panel gex-strike-panel">
-          <div class="panel-h"><div><h3>GEX Exposure by Strike</h3><small id="gexStrikeSubtitle">Net dealer gamma exposure across available strikes</small></div><span class="source-chip" id="gexStrikeSource">GEX</span></div>
+          <div class="panel-h gex-radar-head">
+            <div><h3>GEX Radar by Strike</h3><small id="gexStrikeSubtitle">Net dealer gamma exposure across available strikes</small></div>
+            <div class="gex-radar-actions">
+              <div class="gex-expiry-toggle" id="gexExpiryToggle" role="group" aria-label="GEX expiration range">
+                <button type="button" data-gex-expiry="0DTE">0DTE</button>
+                <button type="button" data-gex-expiry="WEEKLY">Weekly</button>
+                <button type="button" class="active" data-gex-expiry="ALL">All</button>
+              </div>
+              <span class="source-chip" id="gexStrikeSource">GEX</span>
+            </div>
+          </div>
           <div class="panel-b gex-strike-body">
             <canvas id="gexStrikeChart" aria-label="Desktop gamma exposure by strike chart"></canvas>
-            <div class="gex-chart-legend"><span class="negative">Put / negative GEX</span><span class="positive">Call / positive GEX</span><span class="flip">Gamma flip</span></div>
+            <div class="gex-chart-legend"><span class="negative">Negative GEX</span><span class="positive">Positive GEX</span><span class="spot">Spot</span><span class="flip">Gamma flip</span><span class="pain">Max pain</span></div>
             <p class="note" id="gexStrikeNote">Bars use the currently available TradeIQ GEX dataset. Fallback values remain estimates.</p>
           </div>
         </div>
+        <div class="panel page-panel"><div class="panel-h"><h3>Top Gamma Nodes</h3><small>Largest absolute strike exposures</small></div><div class="panel-b table-pad"><table><thead><tr><th>Strike</th><th>Net GEX</th><th>Open Interest</th><th>IV</th></tr></thead><tbody id="gexNodeTable"></tbody></table></div></div>
+        <div class="panel page-panel"><div class="panel-h"><h3>GEX Intensity Zones</h3><small>Grouped high-concentration strike areas</small></div><div class="panel-b" id="gexZoneList"></div></div>
       </div>
     </section>
 
@@ -526,7 +544,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=316"></script>
+<script src="/static/boot.js?v=317"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

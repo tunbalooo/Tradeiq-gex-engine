@@ -554,6 +554,11 @@
       });
 
       if (overlays.gex && setup.gex) {
+        (setup.gex.intensity_zones || []).slice(0, overlays.clean === false ? 8 : 3).forEach((zone) => {
+          const top = toY(zone.high), bottom = toY(zone.low);
+          ctx.fillStyle = zone.sign === "POSITIVE" ? "rgba(38,208,124,.060)" : "rgba(255,77,94,.060)";
+          ctx.fillRect(0, Math.min(top, bottom), plotRight, Math.max(1, Math.abs(bottom - top)));
+        });
         horizontal(ctx, toY(setup.gex.call_wall), plotRight, "GAMMA RES / CALL WALL", lineColors.gex);
         if (Number.isFinite(Number(setup.gex.gamma_resistance)) && Math.abs(Number(setup.gex.gamma_resistance) - Number(setup.gex.call_wall)) > Number(payload?.tickSize || .25) * 2)
           horizontal(ctx, toY(setup.gex.gamma_resistance), plotRight, "GAMMA RESISTANCE", "#A98BFF");
@@ -1476,6 +1481,15 @@
     }
 
     if (overlays.gex && setup.gex) {
+      (setup.gex.intensity_zones || []).slice(0, cleanMode ? 3 : 8).forEach((zone) => {
+        const top = coordinate(zone.high);
+        const bottom = coordinate(zone.low);
+        if (top == null || bottom == null) return;
+        ctx.fillStyle = zone.sign === "POSITIVE"
+          ? (cleanMode ? "rgba(38,208,124,.035)" : "rgba(38,208,124,.060)")
+          : (cleanMode ? "rgba(255,77,94,.035)" : "rgba(255,77,94,.060)");
+        ctx.fillRect(0, Math.min(top, bottom), chartWidth, Math.max(1, Math.abs(bottom - top)));
+      });
       const half = Math.max(Number(instance.tickSize || .25) * 3, Number(setup.atr || 0) * .08);
       [
         [setup.gex.call_wall, "rgba(72,163,255,.10)"],

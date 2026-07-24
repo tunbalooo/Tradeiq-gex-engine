@@ -140,7 +140,17 @@ def _enrich_gex(gex: GexSummary, current_price: float) -> GexSummary:
         "positive_gamma_percent": positive_pct,
         "negative_gamma_percent": negative_pct,
         "top_gamma_nodes": [
-            {"strike": item.strike, "net_gex": item.net_gex, "call_gex": item.call_gex, "put_gex": item.put_gex}
+            {
+                "strike": item.strike,
+                "net_gex": item.net_gex,
+                "call_gex": item.call_gex,
+                "put_gex": item.put_gex,
+                "call_oi": item.call_oi,
+                "put_oi": item.put_oi,
+                "total_oi": item.total_oi,
+                "weighted_iv": item.weighted_iv,
+                "expiration_count": item.expiration_count,
+            }
             for item in nodes
         ],
         "level_meanings": {
@@ -154,7 +164,7 @@ def _enrich_gex(gex: GexSummary, current_price: float) -> GexSummary:
     })
 
 
-def current_gex_summary() -> GexSummary:
+def current_gex_summary(expiry_filter: str = "ALL") -> GexSummary:
     """Return a usable GEX summary even while the trade engine is warming.
 
     The GEX Analysis page and chart overlays must not disappear merely because
@@ -167,7 +177,7 @@ def current_gex_summary() -> GexSummary:
     current_price = float(market_data_service.current_price or (candles[-1].close if candles else 0.0))
     if current_price <= 0:
         raise RuntimeError(f"No {profile.symbol} market price is available for GEX.")
-    summary = gex_service.get_summary(current_price)
+    summary = gex_service.get_summary(current_price, expiry_filter=expiry_filter)
     if summary is None:
         summary = _stable_fallback_gex(current_price, profile)
     return _enrich_gex(summary, current_price)

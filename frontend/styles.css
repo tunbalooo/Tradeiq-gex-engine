@@ -298,14 +298,21 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 
 /* v1.9: draggable mobile price navigation, history retention, clean terminal UI, and desktop GEX-by-strike. */
 .gex-page-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-.gex-strike-panel{grid-column:1 / -1;min-height:430px}
+.gex-strike-panel{grid-column:1 / -1;min-height:520px}
 .gex-strike-panel .panel-h>div small{display:block;margin-top:3px;color:var(--muted);font:500 9px var(--sans)}
 .gex-strike-body{padding:12px 14px 10px}
-#gexStrikeChart{display:block;width:100%;height:340px;border:1px solid var(--line);border-radius:8px;background:#0a111a}
+#gexStrikeChart{display:block;width:100%;height:430px;border:1px solid var(--line);border-radius:8px;background:#0a111a}
+.gex-radar-head{gap:14px}.gex-radar-actions{display:flex;align-items:center;gap:10px;margin-left:auto}
+.gex-expiry-toggle{display:inline-flex;align-items:center;gap:3px;padding:3px;border:1px solid var(--line2);border-radius:7px;background:#09111a}
+.gex-expiry-toggle button{min-width:58px;height:25px;padding:0 9px;border:0;border-radius:5px;background:transparent;color:var(--muted);font:700 8px var(--sans);letter-spacing:.45px;text-transform:uppercase;cursor:pointer}
+.gex-expiry-toggle button:hover{color:var(--text)}.gex-expiry-toggle button.active{background:#103725;color:var(--green)}.gex-expiry-toggle button:disabled{opacity:.3;cursor:not-allowed}
 .gex-chart-legend{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font:600 9px var(--sans)}
 .gex-chart-legend span{display:inline-flex;align-items:center;gap:6px}.gex-chart-legend span::before{content:"";width:9px;height:9px;border-radius:2px;background:var(--muted)}
 .gex-chart-legend .negative::before{background:var(--red)}.gex-chart-legend .positive::before{background:var(--green)}
 .gex-chart-legend .flip::before{width:13px;height:0;border-top:1px dashed #dce4ef;border-radius:0;background:transparent}
+.gex-chart-legend .spot::before{width:13px;height:0;border-top:2px solid var(--blue);border-radius:0;background:transparent}.gex-chart-legend .pain::before{width:13px;height:0;border-top:2px solid var(--purple);border-radius:0;background:transparent}
+.gex-zone-list{display:grid;gap:8px}.gex-zone-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:10px;border:1px solid var(--line);border-radius:7px;background:#0a111a}.gex-zone-item b{font:650 10px var(--sans)}.gex-zone-item strong{font:700 10px var(--mono)}.gex-zone-item small{grid-column:1/-1;color:var(--muted);font:500 8px/1.4 var(--sans)}.gex-zone-item.positive b,.gex-zone-item.positive strong{color:var(--green)}.gex-zone-item.negative b,.gex-zone-item.negative strong{color:var(--red)}
+.mobile-gex-expiry-toggle{display:none}.mobile-gex-nodes{display:none}
 .mobile-chart-footer{display:none}
 .mobile-news-tabs,.mobile-news-pane{display:none}
 .mobile-gex-chart-card{display:none}
@@ -369,7 +376,9 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 
   .mobile-gex-grid{grid-template-columns:repeat(3,1fr);gap:0;padding:12px;border-bottom:1px solid #1b2a3a}.mobile-gex-grid>div{padding:12px 9px;border:0;border-right:1px solid #1b2a3a;border-radius:0;background:transparent}.mobile-gex-grid>div:nth-child(3n){border-right:0}.mobile-gex-grid span{font-size:7.5px}.mobile-gex-grid b{font-size:13px}
   .mobile-gex-scale{padding:13px 14px;border-bottom:1px solid #1b2a3a}.mobile-gex-chart-card{display:block;margin:12px;padding:12px;border:1px solid #1b2a3a;border-radius:8px;background:#0a111a}.mobile-gex-chart-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}.mobile-gex-chart-head b{font:650 11px var(--sans)}.mobile-gex-chart-head span{color:#8292a6;font:500 8px var(--sans)}
-  #mobileGexStrikeChart{display:block;width:100%;height:210px;background:#0a111a}.mobile-gex-chart-card .gex-chart-legend{gap:10px;margin-top:7px;font-size:7px}.mobile-gex-chart-card .gex-chart-legend span::before{width:7px;height:7px}
+  .mobile-gex-expiry-toggle{display:flex;margin:10px 12px 0}.mobile-gex-expiry-toggle button{flex:1;min-width:0}
+  #mobileGexStrikeChart{display:block;width:100%;height:300px;background:#0a111a}.mobile-gex-chart-card .gex-chart-legend{gap:10px;margin-top:7px;font-size:7px}.mobile-gex-chart-card .gex-chart-legend span::before{width:7px;height:7px}
+  .mobile-gex-nodes{display:grid;gap:7px;margin:0 12px 12px}.mobile-gex-node{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:9px;padding:9px 10px;border:1px solid #1b2a3a;border-radius:7px;background:#0a111a}.mobile-gex-node span{color:var(--text);font:700 10px var(--mono)}.mobile-gex-node b{font:700 9px var(--mono);text-align:right}.mobile-gex-node small{color:var(--muted);font:500 8px var(--sans)}
   .mobile-gex-note{margin:0 12px 20px;padding:10px;border:1px solid #1b2a3a;background:#0b141e;color:#8999ad;font-size:9px}
 
   .mobile-bottom-nav{height:calc(var(--mobile-nav) + env(safe-area-inset-bottom));padding:0 4px env(safe-area-inset-bottom);border-top:1px solid #1b2a3a;background:#09111a;box-shadow:none;backdrop-filter:none}
@@ -383,7 +392,7 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
   .chart-mode-actions button:nth-of-type(2){display:none}.chart-feed-status{max-width:52%}
 }
 
-@media(max-width:760px){.gex-page-grid{grid-template-columns:1fr}.gex-strike-panel{grid-column:auto}#gexStrikeChart{height:290px}}
+@media(max-width:760px){.gex-page-grid{grid-template-columns:1fr}.gex-strike-panel{grid-column:auto}.gex-radar-head{align-items:flex-start}.gex-radar-actions{align-items:flex-end;flex-direction:column}.gex-expiry-toggle button{min-width:50px}#gexStrikeChart{height:390px}}
 
 /* v1.9 interactive canvas: horizontal/vertical pan and right-axis price zoom. */
 .tradeiq-canvas-fallback{cursor:grab;user-select:none;-webkit-user-select:none}

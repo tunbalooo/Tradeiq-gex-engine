@@ -25,6 +25,24 @@ class GexStrike(BaseModel):
     call_gex: float = 0.0
     put_gex: float = 0.0
     net_gex: float = 0.0
+    call_oi: int = 0
+    put_oi: int = 0
+    total_oi: int = 0
+    weighted_iv: float | None = None
+    expiration_count: int = 0
+
+
+class GexIntensityZone(BaseModel):
+    low: float
+    high: float
+    midpoint: float
+    sign: Literal["POSITIVE", "NEGATIVE"]
+    role: Literal["SUPPORT", "RESISTANCE", "VOLATILITY"]
+    peak_strike: float
+    peak_gex: float
+    total_gex: float
+    strength: int = Field(default=1, ge=1, le=5)
+    label: str = "GEX ZONE"
 
 
 class GexSummary(BaseModel):
@@ -55,6 +73,14 @@ class GexSummary(BaseModel):
     negative_gamma_percent: float = 0.0
     top_gamma_nodes: list[dict[str, Any]] = Field(default_factory=list)
     level_meanings: dict[str, str] = Field(default_factory=dict)
+    intensity_zones: list[GexIntensityZone] = Field(default_factory=list)
+    reference_price: float | None = None
+    expiry_filter: str = "ALL"
+    available_expiry_filters: list[str] = Field(default_factory=lambda: ["ALL"])
+    expiry_breakdown: dict[str, int] = Field(default_factory=dict)
+    iv_observed_count: int = 0
+    iv_estimated_count: int = 0
+    calculation_note: str = ""
 
 
 class Zone(BaseModel):

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import exp, log, sqrt
 from statistics import NormalDist
 
@@ -14,6 +15,7 @@ class OptionPosition:
     contract_multiplier: int = 20
     symbol: str | None = None
     expiration_ns: int | None = None
+    iv_is_estimated: bool = False
 
 
 def black76_gamma(
@@ -59,17 +61,38 @@ def calculate_position_gex(futures_price: float, position: OptionPosition) -> fl
 def aggregate_gex_components_by_strike(
     futures_price: float,
     positions: list[OptionPosition],
-) -> dict[float, dict[str, float]]:
-    result: dict[float, dict[str, float]] = {}
+) -> dict[float, dict[str, float | int | set[int]]]:
+    result: dict[float, dict[str, float | int | set[int]]] = {}
     for position in positions:
         strike = float(position.strike)
-        bucket = result.setdefault(strike, {"call": 0.0, "put": 0.0, "net": 0.0})
+        bucket = result.setdefault(
+            strike,
+            {
+                "call": 0.0,
+                "put": 0.0,
+                "net": 0.0,
+                "call_oi": 0,
+                "put_oi": 0,
+                "iv_oi_sum": 0.0,
+                "iv_weight": 0,
+                "expirations": set(),
+            },
+        )
         value = calculate_position_gex(futures_price, position)
         if position.option_type.upper() == "CALL":
-            bucket["call"] += value
+            bucket["call"] = float(bucket["call"]) + value
+            bucket["call_oi"] = int(bucket["call_oi"]) + max(position.open_interest, 0)
         else:
-            bucket["put"] += value
-        bucket["net"] += value
+            bucket["put"] = float(bucket["put"]) + value
+            bucket["put_oi"] = int(bucket["put_oi"]) + max(position.open_interest, 0)
+        bucket["net"] = float(bucket["net"]) + value
+        oi = max(position.open_interest, 0)
+        bucket["iv_oi_sum"] = float(bucket["iv_oi_sum"]) + max(position.implied_volatility, 0.0) * oi
+        bucket["iv_weight"] = int(bucket["iv_weight"]) + oi
+        if position.expiration_ns is not None:
+            expirations = bucket["expirations"]
+            if isinstance(expirations, set):
+                expirations.add(int(position.expiration_ns))
     return dict(sorted(result.items()))
 
 
@@ -78,7 +101,7 @@ def aggregate_gex_by_strike(
     positions: list[OptionPosition],
 ) -> dict[float, float]:
     components = aggregate_gex_components_by_strike(futures_price, positions)
-    return {strike: values["net"] for strike, values in components.items()}
+    return {strike: float(values["net"]) for strike, values in components.items()}
 
 
 def net_gex_at_spot(spot: float, positions: list[OptionPosition]) -> float:
@@ -148,11 +171,109 @@ def _strength(value: float, total_abs: float) -> int:
     return min(5, max(1, round(abs(value) / max(total_abs / 5, 1e-9))))
 
 
+def expiry_breakdown(positions: list[OptionPosition], now: datetime | None = None) -> dict[str, int]:
+    reference = now or datetime.now(timezone.utc)
+    reference_tz = reference.tzinfo or timezone.utc
+    today = reference.date()
+    buckets = {"0DTE": 0, "WEEKLY": 0, "ALL": len(positions)}
+    for position in positions:
+        if position.expiration_ns is None:
+            continue
+        expiration = datetime.fromtimestamp(position.expiration_ns / 1_000_000_000, tz=timezone.utc).astimezone(reference_tz)
+        days = (expiration.date() - today).days
+        if days == 0:
+            buckets["0DTE"] += 1
+        if 0 <= days <= 7:
+            buckets["WEEKLY"] += 1
+    return buckets
+
+
+def filter_positions_by_expiry(
+    positions: list[OptionPosition],
+    expiry_filter: str = "ALL",
+    now: datetime | None = None,
+) -> list[OptionPosition]:
+    mode = str(expiry_filter or "ALL").upper()
+    if mode == "ALL":
+        return list(positions)
+    reference = now or datetime.now(timezone.utc)
+    reference_tz = reference.tzinfo or timezone.utc
+    today = reference.date()
+    selected: list[OptionPosition] = []
+    for position in positions:
+        if position.expiration_ns is None:
+            continue
+        expiration = datetime.fromtimestamp(position.expiration_ns / 1_000_000_000, tz=timezone.utc).astimezone(reference_tz)
+        days = (expiration.date() - today).days
+        if mode == "0DTE" and days == 0:
+            selected.append(position)
+        elif mode == "WEEKLY" and 0 <= days <= 7:
+            selected.append(position)
+    return selected
+
+
+def _intensity_zones(
+    futures_price: float,
+    components: dict[float, dict[str, float | int | set[int]]],
+) -> list[dict]:
+    if not components:
+        return []
+    strikes = sorted(components)
+    gaps = [right - left for left, right in zip(strikes, strikes[1:]) if right > left]
+    increment = sorted(gaps)[len(gaps) // 2] if gaps else max(futures_price * 0.001, 1.0)
+    max_abs = max(abs(float(values["net"])) for values in components.values()) or 1.0
+    threshold = max_abs * 0.18
+    candidates = [strike for strike in strikes if abs(float(components[strike]["net"])) >= threshold]
+    groups: list[list[float]] = []
+    for strike in candidates:
+        sign = 1 if float(components[strike]["net"]) >= 0 else -1
+        if not groups:
+            groups.append([strike])
+            continue
+        previous = groups[-1][-1]
+        previous_sign = 1 if float(components[previous]["net"]) >= 0 else -1
+        if sign == previous_sign and strike - previous <= increment * 1.6:
+            groups[-1].append(strike)
+        else:
+            groups.append([strike])
+
+    zones = []
+    for group in groups:
+        peak = max(group, key=lambda strike: abs(float(components[strike]["net"])))
+        peak_gex = float(components[peak]["net"])
+        total_gex = sum(float(components[strike]["net"]) for strike in group)
+        positive = peak_gex >= 0
+        if positive:
+            role = "SUPPORT" if peak <= futures_price else "RESISTANCE"
+        else:
+            role = "VOLATILITY"
+        low = min(group) - increment * 0.35
+        high = max(group) + increment * 0.35
+        zones.append(
+            {
+                "low": float(low),
+                "high": float(high),
+                "midpoint": float((low + high) / 2),
+                "sign": "POSITIVE" if positive else "NEGATIVE",
+                "role": role,
+                "peak_strike": float(peak),
+                "peak_gex": peak_gex,
+                "total_gex": float(total_gex),
+                "strength": min(5, max(1, round(abs(peak_gex) / max_abs * 5))),
+                "label": f"{'+GEX' if positive else '-GEX'} {role}",
+            }
+        )
+    return sorted(zones, key=lambda zone: abs(float(zone["peak_gex"])), reverse=True)[:8]
+
+
 def derive_gex_summary_from_positions(
     futures_price: float,
     positions: list[OptionPosition],
     flip_range_points: float | None = None,
     flip_step: float = 5.0,
+    expiry_filter: str = "ALL",
+    available_expiry_filters: list[str] | None = None,
+    expiry_counts: dict[str, int] | None = None,
 ) -> dict:
     if not positions:
         return {
@@ -168,16 +289,24 @@ def derive_gex_summary_from_positions(
             "gamma_support": futures_price,
             "levels": [],
             "by_strike": [],
+            "intensity_zones": [],
+            "reference_price": futures_price,
+            "expiry_filter": str(expiry_filter).upper(),
+            "available_expiry_filters": available_expiry_filters or ["ALL"],
+            "expiry_breakdown": expiry_counts or {"ALL": 0},
+            "iv_observed_count": 0,
+            "iv_estimated_count": 0,
+            "calculation_note": "No option positions are available for this expiration view.",
         }
 
     components = aggregate_gex_components_by_strike(futures_price, positions)
-    net_gex = sum(values["net"] for values in components.values())
+    net_gex = sum(float(values["net"]) for values in components.values())
     regime = "POSITIVE" if net_gex > 0 else "NEGATIVE" if net_gex < 0 else "NEUTRAL"
 
-    call_wall = max(components, key=lambda strike: components[strike]["call"])
-    put_wall = min(components, key=lambda strike: components[strike]["put"])
-    call_wall_gex = components[call_wall]["call"]
-    put_wall_gex = components[put_wall]["put"]
+    call_wall = max(components, key=lambda strike: float(components[strike]["call"]))
+    put_wall = min(components, key=lambda strike: float(components[strike]["put"]))
+    call_wall_gex = float(components[call_wall]["call"])
+    put_wall_gex = float(components[put_wall]["put"])
     gamma_flip = calculate_gamma_flip(
         futures_price,
         positions,
@@ -185,14 +314,14 @@ def derive_gex_summary_from_positions(
         step=max(float(flip_step), 0.01),
     )
     max_pain = calculate_max_pain(positions)
-    positive_above = [strike for strike, values in components.items() if strike >= futures_price and values["net"] > 0]
-    positive_below = [strike for strike, values in components.items() if strike <= futures_price and values["net"] > 0]
-    gamma_resistance = max(positive_above, key=lambda strike: components[strike]["net"], default=call_wall)
-    gamma_support = max(positive_below, key=lambda strike: components[strike]["net"], default=put_wall)
+    positive_above = [strike for strike, values in components.items() if strike >= futures_price and float(values["net"]) > 0]
+    positive_below = [strike for strike, values in components.items() if strike <= futures_price and float(values["net"]) > 0]
+    gamma_resistance = max(positive_above, key=lambda strike: float(components[strike]["net"]), default=call_wall)
+    gamma_support = max(positive_below, key=lambda strike: float(components[strike]["net"]), default=put_wall)
 
-    total_abs = sum(abs(values["net"]) for values in components.values()) or 1.0
+    total_abs = sum(abs(float(values["net"])) for values in components.values()) or 1.0
     ranked = sorted(
-        ((strike, values["net"]) for strike, values in components.items()),
+        ((strike, float(values["net"])) for strike, values in components.items()),
         key=lambda item: abs(item[1]),
         reverse=True,
     )[:12]
@@ -211,6 +340,15 @@ def derive_gex_summary_from_positions(
             "call_gex": float(values["call"]),
             "put_gex": float(values["put"]),
             "net_gex": float(values["net"]),
+            "call_oi": int(values["call_oi"]),
+            "put_oi": int(values["put_oi"]),
+            "total_oi": int(values["call_oi"]) + int(values["put_oi"]),
+            "weighted_iv": (
+                float(values["iv_oi_sum"]) / int(values["iv_weight"])
+                if int(values["iv_weight"]) > 0
+                else None
+            ),
+            "expiration_count": len(values["expirations"]) if isinstance(values["expirations"], set) else 0,
         }
         for strike, values in components.items()
     ]
@@ -228,6 +366,18 @@ def derive_gex_summary_from_positions(
         "gamma_support": float(gamma_support),
         "levels": levels,
         "by_strike": by_strike,
+        "intensity_zones": _intensity_zones(futures_price, components),
+        "reference_price": float(futures_price),
+        "expiry_filter": str(expiry_filter).upper(),
+        "available_expiry_filters": available_expiry_filters or ["ALL"],
+        "expiry_breakdown": expiry_counts or {"ALL": len(positions)},
+        "iv_observed_count": sum(1 for position in positions if not position.iv_is_estimated),
+        "iv_estimated_count": sum(1 for position in positions if position.iv_is_estimated),
+        "calculation_note": (
+            "Native open interest with a mix of observed and model-estimated implied volatility."
+            if any(position.iv_is_estimated for position in positions)
+            else "Native open interest and observed implied volatility were used for all included contracts."
+        ),
     }
 
 
@@ -247,6 +397,14 @@ def derive_gex_summary(futures_price: float, strike_gex: dict[float, float]) -> 
             "gamma_support": futures_price,
             "levels": [],
             "by_strike": [],
+            "intensity_zones": [],
+            "reference_price": futures_price,
+            "expiry_filter": "ALL",
+            "available_expiry_filters": ["ALL"],
+            "expiry_breakdown": {"ALL": 0},
+            "iv_observed_count": 0,
+            "iv_estimated_count": 0,
+            "calculation_note": "Fallback GEX profile; native option positioning is unavailable.",
         }
 
     net_gex = sum(strike_gex.values())
@@ -280,6 +438,11 @@ def derive_gex_summary(futures_price: float, strike_gex: dict[float, float]) -> 
             "call_gex": float(max(value, 0.0)),
             "put_gex": float(min(value, 0.0)),
             "net_gex": float(value),
+            "call_oi": 0,
+            "put_oi": 0,
+            "total_oi": 0,
+            "weighted_iv": None,
+            "expiration_count": 0,
         }
         for strike, value in sorted(strike_gex.items())
     ]
@@ -296,4 +459,12 @@ def derive_gex_summary(futures_price: float, strike_gex: dict[float, float]) -> 
         "gamma_support": float(put_wall),
         "levels": levels,
         "by_strike": by_strike,
+        "intensity_zones": [],
+        "reference_price": float(futures_price),
+        "expiry_filter": "ALL",
+        "available_expiry_filters": ["ALL"],
+        "expiry_breakdown": {"ALL": len(strike_gex)},
+        "iv_observed_count": 0,
+        "iv_estimated_count": 0,
+        "calculation_note": "Net-strike fallback profile without contract-level open-interest metadata.",
     }

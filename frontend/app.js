@@ -114,6 +114,9 @@ const state = {
   setup: null,
   meta: null,
   gexSummary: null,
+  gexViewSummary: null,
+  gexExpiryFilter: localStorage.getItem("tradeiq-gex-expiry") || "ALL",
+  gexExpiryBusy: false,
   timeframe: 5,
   connected: false,
   dataSource: "SIMULATED",
@@ -369,6 +372,9 @@ function fmtGex(value) {
   if (absolute >= 1e3) return `${sign}${(absolute / 1e3).toFixed(0)}K`;
   return `${sign}${absolute.toFixed(0)}`;
 }
+function isNativeGex(gex = {}) {
+  return String(gex.source || "").toLowerCase().startsWith("databento-native");
+}
 function timeLabel(value) {
   return formatAppTime(value, { hour12: false });
 }
@@ -418,6 +424,11 @@ function gexStrikeRows(gex = {}) {
       call_gex: Number(item.call_gex || 0),
       put_gex: Number(item.put_gex || 0),
       net_gex: Number(item.net_gex || 0),
+      call_oi: Number(item.call_oi || 0),
+      put_oi: Number(item.put_oi || 0),
+      total_oi: Number(item.total_oi || 0),
+      weighted_iv: item.weighted_iv == null ? null : Number(item.weighted_iv),
+      expiration_count: Number(item.expiration_count || 0),
     })).filter((item) => Number.isFinite(item.strike) && Number.isFinite(item.net_gex)).sort((a, b) => a.strike - b.strike);
   }
   return (gex.levels || []).map((item) => ({
@@ -425,14 +436,33 @@ function gexStrikeRows(gex = {}) {
     call_gex: Math.max(Number(item.gex || 0), 0),
     put_gex: Math.min(Number(item.gex || 0), 0),
     net_gex: Number(item.gex || 0),
+    call_oi: 0, put_oi: 0, total_oi: 0, weighted_iv: null, expiration_count: 0,
   })).filter((item) => Number.isFinite(item.strike)).sort((a, b) => a.strike - b.strike);
+}
+
+function selectedGexRows(gex = {}, compact = false) {
+  const all = gexStrikeRows(gex);
+  const limit = compact ? 29 : 51;
+  if (all.length <= limit) return all;
+  const spot = Number(gex.reference_price ?? state.baseCandles.at(-1)?.close ?? gex.gamma_flip ?? all[Math.floor(all.length / 2)].strike);
+  const nearest = all.reduce((best, item, index) => Math.abs(item.strike - spot) < Math.abs(all[best].strike - spot) ? index : best, 0);
+  const start = Math.max(0, Math.min(all.length - limit, nearest - Math.floor(limit / 2)));
+  return all.slice(start, start + limit);
+}
+
+function gexLineStyle(kind) {
+  if (kind === "spot") return { color: "#48A3FF", dash: [], width: 2, label: "SPOT" };
+  if (kind === "flip") return { color: "#DCE4EF", dash: [4, 4], width: 1, label: "GAMMA FLIP" };
+  if (kind === "pain") return { color: "#D85CFF", dash: [5, 3], width: 1.5, label: "MAX PAIN" };
+  if (kind === "call") return { color: "#26D07C", dash: [3, 3], width: 1, label: "CALL WALL" };
+  return { color: "#FF4D5E", dash: [3, 3], width: 1, label: "PUT WALL" };
 }
 
 function drawGexStrikeChart(canvas, gex = {}, compact = false) {
   if (!canvas) return;
   const width = Math.floor(canvas.clientWidth || canvas.parentElement?.clientWidth || 0);
-  const height = Math.floor(canvas.clientHeight || (compact ? 210 : 340));
-  if (width < 120 || height < 100) return;
+  const height = Math.floor(canvas.clientHeight || (compact ? 300 : 430));
+  if (width < 140 || height < 140) return;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(height * dpr);
@@ -442,90 +472,189 @@ function drawGexStrikeChart(canvas, gex = {}, compact = false) {
   ctx.fillStyle = "#0A111A";
   ctx.fillRect(0, 0, width, height);
 
-  let rows = gexStrikeRows(gex);
-  if (rows.length > (compact ? 31 : 55)) {
-    const anchor = Number(gex.gamma_flip || rows[Math.floor(rows.length / 2)].strike);
-    const nearest = rows.reduce((best, item, index) => Math.abs(item.strike - anchor) < Math.abs(rows[best].strike - anchor) ? index : best, 0);
-    const count = compact ? 31 : 55;
-    const start = Math.max(0, Math.min(rows.length - count, nearest - Math.floor(count / 2)));
-    rows = rows.slice(start, start + count);
-  }
+  const rows = selectedGexRows(gex, compact);
   if (!rows.length) {
     ctx.fillStyle = "#7788A3";
-    ctx.font = `${compact ? 11 : 12}px Inter, sans-serif`;
+    ctx.font = `${compact ? 10 : 12}px Inter, sans-serif`;
     ctx.textAlign = "center";
-    ctx.fillText("Waiting for GEX-by-strike data…", width / 2, height / 2);
+    ctx.fillText(`No ${String(gex.expiry_filter || state.gexExpiryFilter || "ALL")} GEX positions available`, width / 2, height / 2);
     return;
   }
 
-  const margin = compact ? { left: 10, right: 44, top: 14, bottom: 28 } : { left: 18, right: 66, top: 18, bottom: 36 };
+  const margin = compact ? { left: 52, right: 10, top: 18, bottom: 25 } : { left: 76, right: 18, top: 22, bottom: 32 };
   const plotW = Math.max(1, width - margin.left - margin.right);
   const plotH = Math.max(1, height - margin.top - margin.bottom);
+  const centerX = margin.left + plotW / 2;
+  const halfW = plotW / 2 - 8;
   const maxAbs = Math.max(...rows.map((item) => Math.abs(item.net_gex)), 1);
-  const zeroY = margin.top + plotH / 2;
-  const valueY = (value) => zeroY - (Number(value) / maxAbs) * (plotH * 0.44);
+  const ascending = [...rows].sort((a, b) => b.strike - a.strike);
+  const rowH = plotH / ascending.length;
+  const yForStrike = (price) => {
+    const high = ascending[0].strike;
+    const low = ascending.at(-1).strike;
+    if (high === low) return margin.top + plotH / 2;
+    return margin.top + ((high - Number(price)) / (high - low)) * plotH;
+  };
 
-  ctx.strokeStyle = "rgba(129,145,166,.13)";
+  ctx.strokeStyle = "rgba(129,145,166,.14)";
   ctx.lineWidth = 1;
-  ctx.fillStyle = "#7788A3";
-  ctx.font = `${compact ? 8 : 10}px JetBrains Mono, monospace`;
-  ctx.textAlign = "left";
-  [-1, -.5, 0, .5, 1].forEach((ratio) => {
-    const y = zeroY - ratio * plotH * .44;
-    ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(margin.left + plotW, y); ctx.stroke();
-    if (!compact || ratio === -1 || ratio === 0 || ratio === 1) ctx.fillText(compactNumber(maxAbs * ratio), margin.left + plotW + 6, y + 3);
+  ctx.beginPath(); ctx.moveTo(centerX, margin.top); ctx.lineTo(centerX, margin.top + plotH); ctx.stroke();
+
+  const zones = Array.isArray(gex.intensity_zones) ? gex.intensity_zones : [];
+  zones.forEach((zone) => {
+    const top = yForStrike(zone.high);
+    const bottom = yForStrike(zone.low);
+    if (Math.max(top, bottom) < margin.top || Math.min(top, bottom) > margin.top + plotH) return;
+    ctx.fillStyle = zone.sign === "POSITIVE" ? "rgba(38,208,124,.055)" : "rgba(255,77,94,.055)";
+    ctx.fillRect(margin.left, Math.min(top, bottom), plotW, Math.max(2, Math.abs(bottom - top)));
   });
 
-  const step = plotW / rows.length;
-  const barW = Math.max(1, Math.min(compact ? 8 : 14, step * .72));
-  rows.forEach((item, index) => {
-    const x = margin.left + step * (index + .5);
-    const y = valueY(item.net_gex);
+  const barH = Math.max(2, Math.min(compact ? 8 : 11, rowH * .66));
+  ctx.font = `${compact ? 8 : 10}px JetBrains Mono, monospace`;
+  ascending.forEach((item, index) => {
+    const y = margin.top + rowH * (index + .5);
+    if (index % Math.max(1, Math.round(ascending.length / (compact ? 8 : 12))) === 0) {
+      ctx.strokeStyle = "rgba(129,145,166,.07)";
+      ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(margin.left + plotW, y); ctx.stroke();
+    }
+    const length = Math.abs(item.net_gex) / maxAbs * halfW;
     ctx.fillStyle = item.net_gex >= 0 ? "#26D07C" : "#FF4D5E";
-    ctx.fillRect(x - barW / 2, Math.min(y, zeroY), barW, Math.max(1, Math.abs(zeroY - y)));
+    if (item.net_gex >= 0) ctx.fillRect(centerX, y - barH / 2, Math.max(1, length), barH);
+    else ctx.fillRect(centerX - Math.max(1, length), y - barH / 2, Math.max(1, length), barH);
+
+    if (!compact || index % 2 === 0) {
+      ctx.fillStyle = "#8292A6";
+      ctx.textAlign = "right";
+      ctx.fillText(fmt(item.strike, pricePrecision()), margin.left - 6, y + 3);
+    }
   });
 
-  const flip = Number(gex.gamma_flip);
-  if (Number.isFinite(flip) && flip >= rows[0].strike && flip <= rows.at(-1).strike) {
-    const ratio = (flip - rows[0].strike) / Math.max(rows.at(-1).strike - rows[0].strike, 1e-9);
-    const x = margin.left + ratio * plotW;
-    ctx.save(); ctx.strokeStyle = "#DCE4EF"; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x, margin.top); ctx.lineTo(x, margin.top + plotH); ctx.stroke(); ctx.restore();
-  }
+  const markers = [
+    [Number(gex.reference_price ?? state.baseCandles.at(-1)?.close), "spot"],
+    [Number(gex.gamma_flip), "flip"],
+    [Number(gex.max_pain), "pain"],
+    [Number(gex.call_wall), "call"],
+    [Number(gex.put_wall), "put"],
+  ];
+  const drawn = [];
+  markers.forEach(([price, kind]) => {
+    if (!Number.isFinite(price) || price < ascending.at(-1).strike || price > ascending[0].strike) return;
+    const y = yForStrike(price);
+    const style = gexLineStyle(kind);
+    ctx.save();
+    ctx.strokeStyle = style.color; ctx.lineWidth = style.width; ctx.setLineDash(style.dash);
+    ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(margin.left + plotW, y); ctx.stroke();
+    ctx.restore();
+    if (!compact) {
+      let labelY = y;
+      while (drawn.some((value) => Math.abs(value - labelY) < 12)) labelY += 12;
+      drawn.push(labelY);
+      ctx.fillStyle = style.color; ctx.textAlign = "left"; ctx.font = "700 8px Inter, sans-serif";
+      ctx.fillText(`${style.label} ${fmt(price, pricePrecision())}`, centerX + 7, Math.min(margin.top + plotH - 2, labelY - 3));
+    }
+  });
 
-  const labels = compact ? 4 : 6;
-  ctx.fillStyle = "#7788A3";
-  ctx.font = `${compact ? 8 : 10}px JetBrains Mono, monospace`;
+  ctx.fillStyle = "#6F8096";
+  ctx.font = `${compact ? 8 : 9}px Inter, sans-serif`;
   ctx.textAlign = "center";
-  for (let i = 0; i < labels; i += 1) {
-    const index = Math.round(i * (rows.length - 1) / Math.max(labels - 1, 1));
-    const x = margin.left + step * (index + .5);
-    ctx.fillText(fmt(rows[index].strike, pricePrecision()), x, height - (compact ? 8 : 12));
+  ctx.fillText("NEGATIVE GEX", margin.left + halfW / 2, height - 9);
+  ctx.fillText("POSITIVE GEX", centerX + halfW / 2, height - 9);
+
+  canvas._gexRadar = { rows: ascending, margin, plotH, rowH };
+  if (!canvas.dataset.gexHoverBound) {
+    canvas.dataset.gexHoverBound = "true";
+    canvas.addEventListener("mousemove", (event) => {
+      const data = canvas._gexRadar;
+      if (!data) return;
+      const rect = canvas.getBoundingClientRect();
+      const y = event.clientY - rect.top;
+      const index = Math.floor((y - data.margin.top) / data.rowH);
+      const item = data.rows[index];
+      if (!item) { canvas.title = ""; return; }
+      const iv = item.weighted_iv == null ? "—" : `${(item.weighted_iv * 100).toFixed(1)}%`;
+      canvas.title = `Strike ${fmt(item.strike, pricePrecision())} | Net GEX ${fmtGex(item.net_gex)} | OI ${Number(item.total_oi || 0).toLocaleString()} | IV ${iv}`;
+    });
   }
 }
 
+function syncGexExpiryControls(gex = null) {
+  const available = new Set((gex?.available_expiry_filters || ["ALL"]).map((item) => String(item).toUpperCase()));
+  document.querySelectorAll("[data-gex-expiry]").forEach((button) => {
+    const mode = String(button.dataset.gexExpiry || "ALL").toUpperCase();
+    button.classList.toggle("active", mode === state.gexExpiryFilter);
+    button.disabled = state.gexExpiryBusy || !available.has(mode);
+    button.setAttribute("aria-pressed", String(mode === state.gexExpiryFilter));
+  });
+}
+
+function renderGexNodes(gex = {}) {
+  const nodes = (Array.isArray(gex.top_gamma_nodes) && gex.top_gamma_nodes.length
+    ? gex.top_gamma_nodes
+    : gexStrikeRows(gex).sort((a, b) => Math.abs(b.net_gex) - Math.abs(a.net_gex))).slice(0, 10);
+  if ($("gexNodeTable")) $("gexNodeTable").innerHTML = nodes.length ? nodes.map((node) => {
+    const iv = node.weighted_iv == null ? "—" : `${(Number(node.weighted_iv) * 100).toFixed(1)}%`;
+    return `<tr><td>${fmt(node.strike)}</td><td class="${Number(node.net_gex || 0) >= 0 ? "g" : "r"}">${fmtGex(node.net_gex)}</td><td>${Number(node.total_oi || 0).toLocaleString()}</td><td>${iv}</td></tr>`;
+  }).join("") : '<tr><td colspan="4" class="m">No strike nodes available.</td></tr>';
+  if ($("mobileGexNodes")) $("mobileGexNodes").innerHTML = nodes.slice(0, 5).map((node) => `<div class="mobile-gex-node"><span>${fmt(node.strike)}</span><small>OI ${Number(node.total_oi || 0).toLocaleString()}</small><b class="${Number(node.net_gex || 0) >= 0 ? "g" : "r"}">${fmtGex(node.net_gex)}</b></div>`).join("");
+}
+
+function renderGexZones(gex = {}) {
+  if (!$("gexZoneList")) return;
+  const zones = Array.isArray(gex.intensity_zones) ? gex.intensity_zones : [];
+  $("gexZoneList").innerHTML = zones.length ? `<div class="gex-zone-list">${zones.map((zone) => `<div class="gex-zone-item ${zone.sign === "POSITIVE" ? "positive" : "negative"}"><b>${escapeHtml(zone.label || `${zone.sign} GEX`)}</b><strong>${fmt(zone.low)}–${fmt(zone.high)}</strong><small>Peak ${fmt(zone.peak_strike)} · ${fmtGex(zone.peak_gex)} · ${stars(zone.strength || 1)}</small></div>`).join("")}</div>` : '<p class="note">No concentrated GEX zones in this expiration view.</p>';
+}
+
 function refreshGexCharts() {
-  const gex = state.setup?.gex || state.gexSummary;
+  const gex = state.gexViewSummary || state.gexSummary || state.setup?.gex;
   if (!gex) return;
   drawGexStrikeChart($("gexStrikeChart"), gex, false);
   drawGexStrikeChart($("mobileGexStrikeChart"), gex, true);
 }
 
 async function loadGexPage() {
-  renderGexPage(state.setup || state.gexSummary);
+  const requestedMode = state.gexExpiryFilter;
+  const existing = state.gexViewSummary || state.gexSummary || state.setup?.gex;
+  if (existing && String(existing.expiry_filter || "ALL").toUpperCase() === requestedMode) renderGexPage(existing);
+  if (state.gexExpiryBusy) return;
+  state.gexExpiryBusy = true;
+  syncGexExpiryControls(existing);
   try {
-    const response = await fetch("/api/gex/summary", { cache: "no-store" });
+    const response = await fetch(`/api/gex/summary?expiry=${encodeURIComponent(requestedMode)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`GEX request failed (${response.status})`);
     const gex = await response.json();
     if (gex?.applied_to_symbol && gex.applied_to_symbol !== activeSymbol()) return;
-    state.gexSummary = gex;
-    if (state.setup && !state.setup.gex) state.setup.gex = gex;
+    const returnedMode = String(gex.expiry_filter || "ALL").toUpperCase();
+    if (returnedMode !== requestedMode) {
+      state.gexExpiryFilter = returnedMode;
+      localStorage.setItem("tradeiq-gex-expiry", returnedMode);
+    }
+    state.gexViewSummary = gex;
+    if (String(gex.expiry_filter || "ALL").toUpperCase() === "ALL") state.gexSummary = gex;
     renderGexPage(gex);
     drawChart();
     if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
   } catch (error) {
     console.warn("TradeIQ GEX page refresh failed", error);
-    renderGexPage(state.setup || state.gexSummary);
+    if (state.gexExpiryFilter !== "ALL") {
+      state.gexExpiryFilter = "ALL";
+      localStorage.setItem("tradeiq-gex-expiry", "ALL");
+      state.gexExpiryBusy = false;
+      return loadGexPage();
+    }
+    renderGexPage(existing);
+  } finally {
+    state.gexExpiryBusy = false;
+    syncGexExpiryControls(state.gexViewSummary || state.gexSummary || existing);
   }
+}
+
+function setGexExpiryFilter(mode) {
+  const resolved = String(mode || "ALL").toUpperCase();
+  if (!["0DTE", "WEEKLY", "ALL"].includes(resolved) || resolved === state.gexExpiryFilter) return;
+  state.gexExpiryFilter = resolved;
+  localStorage.setItem("tradeiq-gex-expiry", resolved);
+  syncGexExpiryControls(state.gexViewSummary || state.gexSummary);
+  loadGexPage();
 }
 
 function classForDirection(direction) {
@@ -1237,23 +1366,30 @@ function renderGexSummary(setup) {
   $("gexNeedle").style.left = `${needlePosition}%`;
 
   if ($("mobileGexRegime")) {
-    const estimated = Boolean(gex.is_estimate) || String(gex.source || "").toLowerCase().includes("fallback") || String(gex.source_label || "").toLowerCase().includes("fallback");
-    $("mobileGexRegime").textContent = `${gex.regime.charAt(0)}${gex.regime.slice(1).toLowerCase()}`;
-    $("mobileGexRegime").className = gex.regime === "POSITIVE" ? "g" : gex.regime === "NEGATIVE" ? "r" : "a";
-    $("mobileNetGex").textContent = fmtGex(gex.net_gex);
-    $("mobileGammaFlip").textContent = fmt(gex.gamma_flip);
-    if ($("mobileMaxPain")) $("mobileMaxPain").textContent = Number.isFinite(Number(gex.max_pain)) ? fmt(gex.max_pain) : "—";
-    $("mobileCallWall").textContent = fmt(gex.call_wall);
-    $("mobilePutWall").textContent = fmt(gex.put_wall);
+    const filtered = state.gexViewSummary && String(state.gexViewSummary.expiry_filter || "ALL").toUpperCase() === state.gexExpiryFilter
+      ? state.gexViewSummary
+      : gex;
+    const estimated = !isNativeGex(filtered);
+    $("mobileGexRegime").textContent = `${filtered.regime.charAt(0)}${filtered.regime.slice(1).toLowerCase()}`;
+    $("mobileGexRegime").className = filtered.regime === "POSITIVE" ? "g" : filtered.regime === "NEGATIVE" ? "r" : "a";
+    $("mobileNetGex").textContent = fmtGex(filtered.net_gex);
+    $("mobileGammaFlip").textContent = fmt(filtered.gamma_flip);
+    if ($("mobileMaxPain")) $("mobileMaxPain").textContent = Number.isFinite(Number(filtered.max_pain)) ? fmt(filtered.max_pain) : "—";
+    $("mobileCallWall").textContent = fmt(filtered.call_wall);
+    $("mobilePutWall").textContent = fmt(filtered.put_wall);
     $("mobileGexApplied").textContent = activeSymbol();
-    $("mobileGexSource").textContent = gex.source_label || gex.source || "Fallback model";
+    $("mobileGexSource").textContent = `${filtered.source_label || filtered.source || "Fallback model"} · ${filtered.expiry_filter || "ALL"}`;
     $("mobileGexBadge").textContent = estimated ? "ESTIMATE" : "NATIVE";
     $("mobileGexBadge").className = `source-chip ${estimated ? "estimated" : ""}`;
-    $("mobileGexNeedle").style.left = `${needlePosition}%`;
+    const mobileNeedle = Math.max(2, Math.min(98, 50 + Math.tanh(Number(filtered.net_gex || 0) / 1e9) * 42));
+    $("mobileGexNeedle").style.left = `${mobileNeedle}%`;
+    if ($("mobileGexChartStatus")) $("mobileGexChartStatus").textContent = `${filtered.expiry_filter || "ALL"} expirations`;
     $("mobileGexNote").textContent = estimated
       ? "Estimated GEX: use these levels as secondary context, not as confirmed options positioning. The estimate does not change the confidence score."
-      : `Native parent-market gamma levels applied to ${activeSymbol()}. GEX remains informational and never changes the confidence score.`;
-    window.setTimeout(() => drawGexStrikeChart($("mobileGexStrikeChart"), gex, true), 0);
+      : `${filtered.calculation_note || "Native option-position data."} Applied to ${activeSymbol()}. GEX remains informational and never changes the confidence score.`;
+    renderGexNodes(filtered);
+    syncGexExpiryControls(filtered);
+    window.setTimeout(() => drawGexStrikeChart($("mobileGexStrikeChart"), filtered, true), 0);
   }
 }
 
@@ -1410,7 +1546,10 @@ function renderAll(setup, meta, session = state.session) {
   const previousSetup = state.setup;
   state.setup = setup;
   state.meta = meta;
-  if (setup.gex) state.gexSummary = setup.gex;
+  if (setup.gex) {
+    state.gexSummary = setup.gex;
+    if (state.gexExpiryFilter === "ALL" || !state.gexViewSummary) state.gexViewSummary = setup.gex;
+  }
   if (session) renderSession(session);
   renderOverview(meta.overview);
   renderHeader();
@@ -1428,7 +1567,7 @@ function renderAll(setup, meta, session = state.session) {
   renderPerformance(meta.performance);
   drawChart();
   if ($("page-chart")?.classList.contains("active")) drawChart("chartLarge");
-  renderGexPage(setup);
+  if (state.gexExpiryFilter === "ALL" || !state.gexViewSummary) renderGexPage(setup);
   renderConfluencePage(setup);
   maybeRunClaudeOnStateChange(previousSetup, setup);
 }
@@ -1690,7 +1829,7 @@ async function pollRestFallback() {
     if (data.setup && data.meta) renderAll(data.setup, data.meta, data.session);
     else {
       renderSyncingState({ price: data.candle?.close }, data.session);
-      renderGexPage(state.gexSummary);
+      if (state.gexExpiryFilter === "ALL" || !state.gexViewSummary) renderGexPage(state.gexSummary);
     }
     cacheCurrentMarket();
 
@@ -1827,7 +1966,7 @@ function connectWebSocket() {
     if (data.setup && data.meta) renderAll(data.setup, data.meta, data.session);
     else {
       renderSyncingState({ price: candle?.close }, data.session);
-      renderGexPage(state.gexSummary);
+      if (state.gexExpiryFilter === "ALL" || !state.gexViewSummary) renderGexPage(state.gexSummary);
     }
     cacheCurrentMarket();
 
@@ -1861,6 +2000,7 @@ async function switchMarket(symbol) {
   const previousSymbol = activeSymbol();
   cacheCurrentMarket();
   state.switchingSymbol = true;
+  state.gexViewSummary = null;
   selector.disabled = true;
   selector.closest(".symbol-selector")?.classList.add("busy");
   stopClaudeStream();
@@ -1965,7 +2105,7 @@ function setMobilePane(name, navigate = true) {
   document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.classList.toggle("active", button.dataset.mobileTarget === resolved && state.currentPage === "chart"));
   if (resolved === "chart") scheduleChartDraw("chartLarge", 20);
   if (resolved === "news") setMobileNewsTab(state.mobileNewsTab);
-  if (resolved === "gex") window.setTimeout(refreshGexCharts, 30);
+  if (resolved === "gex") window.setTimeout(loadGexPage, 30);
   if (resolved === "claude" && state.claude.enabled && state.claude.auto && !state.claude.text && !state.claude.busy) setTimeout(() => startClaudeAnalysis(false), 80);
   closeMobileMenu();
 }
@@ -2031,7 +2171,8 @@ function renderGexPage(setupOrGex = null) {
     if ($("gexPageTable")) $("gexPageTable").innerHTML = "";
     return;
   }
-  state.gexSummary = g;
+  state.gexViewSummary = g;
+  if (String(g.expiry_filter || "ALL").toUpperCase() === "ALL") state.gexSummary = g;
   const parentNote = g.is_parent_market ? ` Parent-market levels are applied to the ${activeSymbol()} chart.` : "";
   $("gexProfile").innerHTML = `<div class="page-stats">${[
     ["Regime",g.regime],["Dealer bias",g.dealer_bias || "NEUTRAL"],["Net GEX",fmtGex(g.net_gex)],
@@ -2039,7 +2180,9 @@ function renderGexPage(setupOrGex = null) {
     ["Negative gamma",`${Number(g.negative_gamma_percent || 0).toFixed(0)}%`],
     ["Gamma flip",fmt(g.gamma_flip)],["Gamma resistance",fmt(g.gamma_resistance ?? g.call_wall)],
     ["Maximum pain",Number.isFinite(Number(g.max_pain)) ? fmt(g.max_pain) : "Native OI required"],
-    ["Put support",fmt(g.gamma_support ?? g.put_wall)]
+    ["Put support",fmt(g.gamma_support ?? g.put_wall)],
+    ["Expiration view",g.expiry_filter || "ALL"],
+    ["Contracts",Number(g.contract_count || 0).toLocaleString()]
   ].map(([label,value]) => `<div class="page-stat"><b>${escapeHtml(value)}</b><small>${label}</small></div>`).join("")}</div><p class="note">GEX source: ${escapeHtml(g.source_label || g.source || "fallback")}.${parentNote} Levels remain locked to the current option-position snapshot until the next GEX refresh.</p>`;
   const levels = [
     {type:"GAMMA RESISTANCE / CALL WALL",price:g.call_wall,gex:g.call_wall_gex,strength:5},
@@ -2049,13 +2192,19 @@ function renderGexPage(setupOrGex = null) {
     {type:"PUT SUPPORT / PUT WALL",price:g.put_wall,gex:g.put_wall_gex,strength:5},
   ];
   $("gexPageTable").innerHTML = levels.map((level) => `<tr><td class="${Number(level.gex||0)>=0?'g':'r'}">${level.type || 'LEVEL'}</td><td>${fmt(level.price)}</td><td>${level.gex == null?'—':fmtGex(level.gex)}</td><td class="a">${level.strength?stars(level.strength):'—'}</td></tr>`).join("");
-  if ($("gexStrikeSource")) $("gexStrikeSource").textContent = g.is_estimate ? "ESTIMATED" : "NATIVE";
-  if ($("gexStrikeSource")) $("gexStrikeSource").classList.toggle("estimated", Boolean(g.is_estimate));
-  if ($("gexStrikeSubtitle")) $("gexStrikeSubtitle").textContent = `${g.source_label || g.source || "GEX"} · ${activeSymbol()}`;
-  if ($("gexStrikeNote")) $("gexStrikeNote").textContent = g.is_estimate
+  const native = isNativeGex(g);
+  if ($("gexStrikeSource")) $("gexStrikeSource").textContent = native ? "NATIVE" : "ESTIMATED";
+  if ($("gexStrikeSource")) $("gexStrikeSource").classList.toggle("estimated", !native);
+  if ($("gexStrikeSubtitle")) $("gexStrikeSubtitle").textContent = `${g.source_label || g.source || "GEX"} · ${activeSymbol()} · ${g.expiry_filter || "ALL"}`;
+  if ($("gexStrikeNote")) $("gexStrikeNote").textContent = !native
     ? "Estimated GEX-by-strike profile from the fallback model. Use it as context until native option positioning is available."
-    : "Native GEX-by-strike profile from the currently available option-position dataset.";
+    : `${g.calculation_note || "Native option-position profile."} Hover a strike to inspect net GEX, open interest and weighted IV.`;
+  if ($("mobileGexChartStatus")) $("mobileGexChartStatus").textContent = `${g.expiry_filter || "ALL"} expirations`;
+  renderGexNodes(g);
+  renderGexZones(g);
+  syncGexExpiryControls(g);
   window.setTimeout(() => drawGexStrikeChart($("gexStrikeChart"), g, false), 0);
+  window.setTimeout(() => drawGexStrikeChart($("mobileGexStrikeChart"), g, true), 0);
 }
 function renderConfluencePage(setup) {
   if (!setup || !$("confluencePage")) return;
@@ -2190,6 +2339,7 @@ if ($("mobileMenuButton")) $("mobileMenuButton").addEventListener("click", toggl
 if ($("mobileBackdrop")) $("mobileBackdrop").addEventListener("click", closeMobileMenu);
 document.querySelectorAll("#mobileBottomNav [data-mobile-target]").forEach((button) => button.addEventListener("click", () => setMobilePane(button.dataset.mobileTarget)));
 document.querySelectorAll("[data-mobile-news-tab]").forEach((button) => button.addEventListener("click", () => setMobileNewsTab(button.dataset.mobileNewsTab)));
+document.querySelectorAll("[data-gex-expiry]").forEach((button) => button.addEventListener("click", () => setGexExpiryFilter(button.dataset.gexExpiry)));
 if ($("headerAnalyze")) $("headerAnalyze").addEventListener("click", () => {
   setPage("chart");
   setMobilePane("claude", false);

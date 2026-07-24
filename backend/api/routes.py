@@ -147,12 +147,13 @@ def current_setup():
 
 
 @router.get("/gex/summary")
-def gex_summary():
+def gex_summary(expiry: str = Query(default="ALL", pattern="^(0DTE|WEEKLY|ALL)$")):
+    mode = expiry.upper()
     setup = trade_engine_service.current_setup()
-    if setup is not None:
+    if setup is not None and mode == "ALL":
         return setup.gex
     try:
-        return current_gex_summary()
+        return current_gex_summary(mode)
     except Exception as exc:
         raise HTTPException(503, f"GEX is still starting: {exc}") from exc
 
