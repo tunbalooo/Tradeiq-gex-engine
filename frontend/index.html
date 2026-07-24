@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Legacy asset reference retained for regression tests: /static/styles.css?v=21 /static/boot.js?v=21 -->
-<link rel="stylesheet" href="/static/styles.css?v=317" />
+<link rel="stylesheet" href="/static/styles.css?v=318" />
 <!-- Legacy asset reference retained for regression tests: /static/boot.js?v=20 -->
 </head>
 <body>
@@ -381,7 +381,7 @@
                   <span class="claude-status" id="claudeStatus">CHECKING</span>
                 </div>
                 <div class="claude-actions">
-                  <button type="button" id="claudeAnalyze">Analyze now</button>
+                  <button type="button" id="claudeAnalyze" disabled>Analyze now</button>
                   <label><input type="checkbox" id="claudeAuto" checked> Auto</label>
                   <span id="claudeModel" class="mono m">—</span>
                 </div>
@@ -544,7 +544,7 @@
   </button>
 </nav>
 <div id="toast"></div>
-<script src="/static/boot.js?v=317"></script>
+<script src="/static/boot.js?v=318"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {}));

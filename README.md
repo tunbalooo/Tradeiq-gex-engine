@@ -1,4 +1,4 @@
-# TradeIQ Institutional Trade Desk v3.1.7
+# TradeIQ Institutional Trade Desk v3.1.8
 
 
 ## v3.0.2 entry and chart stability
@@ -326,7 +326,7 @@ DATABENTO_STOP_JOIN_SECONDS=2
 Current local verification target:
 
 ```text
-193 passed
+199 passed
 ```
 
 
@@ -335,7 +335,22 @@ Current local verification target:
 TradeIQ stores setup and lifecycle timestamps in UTC and converts them only for display. The browser automatically detects its IANA time zone, including daylight-saving changes. Settings can switch the workspace to New York exchange time. Legacy SQLite timestamps without an offset are normalized as UTC, correcting the setup-history time shift seen in earlier releases.
 
 
-## Current release: v3.1.7
+## Current release: v3.1.8
+
+This release repairs the desktop Claude and Cross-Market Radar experience without changing the deterministic trade engine:
+
+- Claude status is checked independently from market hydration, so a slow chart/radar request cannot leave the panel stuck on `CHECKING`;
+- the SSE stream sends an immediate heartbeat and buffering padding;
+- desktop browsers automatically fall back to a non-streaming JSON endpoint when EventSource is blocked, buffered, disconnected or times out;
+- the SSE and JSON paths share the same lock and cache to avoid duplicate Anthropic calls;
+- Claude errors now distinguish configuration, authentication, permission, rate-limit, timeout and connection failures without exposing credentials;
+- the Market Radar shows the developing model, score, confidence, real reason and missing gates instead of hiding everything behind `Scanning internally`;
+- qualified setups remain visible for the active chart, while only inactive-market setups generate background alerts;
+- radar status now reports qualified, developing and alertable counts.
+
+See `TRADEIQ_V3.1.8_RELEASE_NOTES.md` and `TRADEIQ_V3.1.8_CODE_AUDIT.md`.
+
+## Previous release: v3.1.7
 
 TradeIQ now includes a full GEX radar instead of relying only on Call Wall, Put Wall, Gamma Flip and Max Pain lines:
 

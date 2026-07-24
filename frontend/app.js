@@ -13,6 +13,26 @@
 // Legacy v2.0 regression reference: lockedPlan ? fmt(setup.stop_loss) : "—"
 // Legacy news display reference retained for regression tests: timeZone: "America/New_York"
 const $ = (id) => document.getElementById(id);
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      ...options,
+      signal: controller.signal,
+      headers: { "Cache-Control": "no-cache", ...(options.headers || {}) },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.detail || payload.message || `${response.status} ${response.statusText}`);
+    }
+    return payload;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const SCORE_LABELS = {
   trend_alignment: "Trend (EMA 9/21/55)",
   gex_alignment: "GEX Alignment",
@@ -147,6 +167,7 @@ const state = {
   claude: {
     enabled: false, auto: true, busy: false, source: null, text: "", model: "—",
     lastStartedAt: 0, pendingLifecycle: false, lastLifecycleKey: null,
+    firstEventTimer: null, overallTimer: null, fallbackInFlight: false, statusRetryCount: 0,
   },
   mobilePane: localStorage.getItem("tradeiq-mobile-pane") || "chart",
   mobileNewsTab: localStorage.getItem("tradeiq-mobile-news-tab") || "calendar",
@@ -227,7 +248,8 @@ function restoreCachedMarket(symbol) {
 
 function saveSeenOpportunities() {
   const values = [...state.seenOpportunityIds].slice(-100);
-  localStorage.setItem("tradeiq-seen-opportunities", JSON.stringify(values));
+  try { localStorage.setItem("tradeiq-seen-opportunities", JSON.stringify(values)); }
+  catch (_error) { /* Storage can be unavailable in private browser modes. */ }
 }
 
 function opportunityPrice(value, symbol) {
@@ -240,39 +262,55 @@ function renderMarketRadar(items = state.marketOpportunities, status = state.mar
   const list = $("marketRadarList");
   if (!list) return;
   const alertable = items.filter((item) => item.alertable);
+  const qualified = items.filter((item) => item.qualified || item.status === "SETUP_FORMING");
   const badge = $("marketRadarBadge");
   if (badge) {
-    badge.textContent = String(alertable.length);
-    badge.hidden = alertable.length === 0;
+    badge.textContent = String(qualified.length);
+    badge.hidden = qualified.length === 0;
+    badge.title = alertable.length
+      ? `${alertable.length} background alert${alertable.length === 1 ? "" : "s"} ready`
+      : `${qualified.length} qualified setup${qualified.length === 1 ? "" : "s"} on the radar`;
   }
   const statusNode = $("marketRadarStatus");
   if (statusNode) {
     statusNode.textContent = status?.last_error ? "DEGRADED" : status?.running === false ? "OFF" : "LIVE";
     statusNode.className = `market-radar-status ${status?.last_error ? "error" : status?.running === false ? "" : "ready"}`;
+    statusNode.title = status?.last_error || "Cross-market scan is running";
   }
   if ($("marketRadarUpdated")) {
     const stamp = status?.last_scan_at ? formatAppTime(status.last_scan_at) : "—";
-    $("marketRadarUpdated").textContent = `Updated ${stamp} ${displayTimeZoneLabel(status?.last_scan_at)}`;
+    $("marketRadarUpdated").textContent = status?.last_error
+      ? `Radar issue: ${status.last_error}`
+      : `Updated ${stamp} ${displayTimeZoneLabel(status?.last_scan_at)}`;
   }
   if (!items.length) {
     list.innerHTML = '<div class="market-radar-empty">The radar is warming NQ, ES and GC history.</div>';
     return;
   }
   list.innerHTML = items.map((item) => {
-    const direction = item.alertable ? String(item.direction || "NONE").toLowerCase() : "none";
-    const displayDirection = item.alertable ? (item.direction || "ENTRY") : "SCANNING";
-    const model = item.alertable
-      ? escapeHtml(item.model || "Validated institutional setup")
-      : "Scanning internally";
-    const reason = item.alertable
-      ? escapeHtml(item.reason || "A validated execution plan is ready.")
-      : "No actionable entry has passed every gate yet.";
-    const score = item.alertable ? `${Number(item.model_score || 0).toFixed(0)}%` : "—";
-    return `<button type="button" class="market-radar-card ${direction} ${item.alertable ? "alertable" : ""}" data-radar-symbol="${escapeHtml(item.symbol)}">
+    const isQualified = Boolean(item.qualified || item.alertable || item.status === "SETUP_FORMING");
+    const hasModel = Boolean(item.model && ["LONG", "SHORT"].includes(item.direction));
+    const direction = hasModel ? String(item.direction).toLowerCase() : "none";
+    const displayDirection = isQualified
+      ? item.active_market ? "ACTIVE" : item.direction
+      : hasModel ? item.direction : item.status === "STALE_DATA" ? "STALE" : item.status === "SYNCING" ? "SYNCING" : "SCANNING";
+    const model = hasModel ? escapeHtml(item.model) : "Scanning internally";
+    const missing = Array.isArray(item.missing_gates) && item.missing_gates.length && !String(item.reason || "").includes("Waiting on:")
+      ? ` Missing: ${item.missing_gates.join(", ")}.`
+      : "";
+    const reason = escapeHtml(item.reason || (isQualified
+      ? "A qualified setup is ready for live validation."
+      : "No actionable entry has passed every gate yet.")) + escapeHtml(missing);
+    const score = hasModel ? `${Number(item.model_score || 0).toFixed(0)}%` : "—";
+    const stateLabel = isQualified
+      ? item.active_market ? "ACTIVE ENGINE" : "SETUP FORMING"
+      : item.status === "STALE_DATA" ? "STALE DATA" : item.status === "SYNCING" ? "SYNCING" : item.status === "DEVELOPING" ? "DEVELOPING" : "SCANNING";
+    const confidence = Number.isFinite(Number(item.confidence)) ? `${Number(item.confidence).toFixed(0)}%` : "—";
+    return `<button type="button" class="market-radar-card ${direction} ${isQualified ? "qualified" : ""} ${item.alertable ? "alertable" : ""}" data-radar-symbol="${escapeHtml(item.symbol)}">
       <div class="market-radar-symbol"><b>${escapeHtml(item.symbol)}</b><span>${escapeHtml(displayDirection)}</span></div>
       <div class="market-radar-score">${score}</div>
       <div class="market-radar-model">${model}</div>
-      <div class="market-radar-detail"><span>State <b>${item.alertable ? "ENTRY READY" : "SCANNING"}</b></span><span>Grade <b>${escapeHtml(item.grade || "—")}</b></span></div>
+      <div class="market-radar-detail"><span>State <b>${stateLabel}</b></span><span>Grade <b>${escapeHtml(item.grade || "—")}</b></span><span>Confidence <b>${confidence}</b></span></div>
       <div class="market-radar-reason">${reason}</div>
     </button>`;
   }).join("");
@@ -750,33 +788,57 @@ function renderClaudeAnalysis(text, streaming = false) {
 
 async function loadClaudeStatus() {
   if (!$("claudePanel")) return;
+  setClaudeStatus("CHECKING", "");
+  $("claudeAnalyze")?.setAttribute("disabled", "disabled");
+  $("headerAnalyze")?.setAttribute("disabled", "disabled");
   try {
-    const status = await fetch("/api/ai/status").then((response) => response.json());
+    const status = await fetchJsonWithTimeout(`/api/ai/status?_=${Date.now()}`, {}, 8000);
     state.claude.enabled = Boolean(status.enabled);
+    state.claude.statusRetryCount = 0;
     state.claude.model = status.model || "—";
     $("claudeModel").textContent = state.claude.model;
     $("claudeAnalyze").disabled = !state.claude.enabled;
     if ($("headerAnalyze")) $("headerAnalyze").disabled = !state.claude.enabled;
     if (state.claude.enabled) {
-      setClaudeStatus(status.cached ? "CACHED" : "READY", status.cached ? "cached" : "ready");
-      $("claudeFoot").textContent = status.cached_at ? `Last generated ${formatAppTime(status.cached_at)} ${displayTimeZoneLabel(status.cached_at)}` : "Ready. Analysis is cached to control API cost.";
+      const hasError = Boolean(status.last_error);
+      setClaudeStatus(hasError ? "DEGRADED" : status.cached ? "CACHED" : "READY", hasError ? "error" : status.cached ? "cached" : "ready");
+      $("claudeFoot").textContent = hasError
+        ? status.last_error
+        : status.cached_at
+          ? `Last generated ${formatAppTime(status.cached_at)} ${displayTimeZoneLabel(status.cached_at)}`
+          : "Ready. Analysis is cached to control API cost.";
     } else {
       setClaudeStatus("DISABLED", "disabled");
       $("claudeAnalysis").innerHTML = '<div class="claude-empty">Add ANTHROPIC_API_KEY and set CLAUDE_ANALYSIS_ENABLED=true in the server environment.</div>';
       $("claudeFoot").textContent = status.last_error || "The API key must remain in .env and Railway Variables, never in frontend code.";
     }
   } catch (error) {
+    state.claude.enabled = false;
     setClaudeStatus("ERROR", "error");
-    $("claudeAnalysis").innerHTML = '<div class="claude-empty">Could not reach the Claude status endpoint.</div>';
+    $("claudeAnalysis").innerHTML = `<div class="claude-empty">Could not reach the Claude status endpoint: ${escapeHtml(error.message || "request failed")}</div>`;
+    $("claudeFoot").textContent = "The market engine remains available; Claude is read-only.";
+    state.claude.statusRetryCount += 1;
+    if (state.claude.statusRetryCount <= 2) setTimeout(() => loadClaudeStatus(), 3000 * state.claude.statusRetryCount);
   }
 }
 
-function stopClaudeStream() {
+function clearClaudeTimers() {
+  if (state.claude.firstEventTimer) clearTimeout(state.claude.firstEventTimer);
+  if (state.claude.overallTimer) clearTimeout(state.claude.overallTimer);
+  state.claude.firstEventTimer = null;
+  state.claude.overallTimer = null;
+}
+
+function stopClaudeStream(options = {}) {
+  const preserveBusy = Boolean(options.preserveBusy);
+  clearClaudeTimers();
   if (state.claude.source) {
     state.claude.source.close();
     state.claude.source = null;
   }
+  if (preserveBusy) return;
   state.claude.busy = false;
+  state.claude.fallbackInFlight = false;
   if (state.claude.enabled) {
     $("claudeAnalyze")?.removeAttribute("disabled");
     $("headerAnalyze")?.removeAttribute("disabled");
@@ -789,6 +851,36 @@ function stopClaudeStream() {
   }
 }
 
+async function runClaudeJsonFallback(force = false, reason = "SSE unavailable") {
+  if (!state.claude.busy || state.claude.fallbackInFlight) return;
+  state.claude.fallbackInFlight = true;
+  stopClaudeStream({ preserveBusy: true });
+  setClaudeStatus("FALLBACK", "analyzing");
+  $("claudeFoot").textContent = `${reason}. Switching to reliable JSON mode…`;
+  try {
+    // The backend shares one lock/cache across SSE and JSON. A force request
+    // therefore waits for an in-flight stream instead of creating a duplicate.
+    const payload = await fetchJsonWithTimeout(`/api/ai/analysis?force=${force ? "true" : "false"}&_=${Date.now()}`, { method: "POST" }, 75000);
+    state.claude.text = payload.text || "";
+    if (payload.model) {
+      state.claude.model = payload.model;
+      $("claudeModel").textContent = payload.model;
+    }
+    renderClaudeAnalysis(state.claude.text, false);
+    setClaudeStatus(payload.cached ? "CACHED" : "READY", payload.cached ? "cached" : "ready");
+    $("claudeFoot").textContent = payload.generated_at
+      ? `Generated ${formatAppTime(payload.generated_at)} ${displayTimeZoneLabel(payload.generated_at)} · JSON fallback`
+      : "Read-only analysis · JSON fallback";
+  } catch (error) {
+    const message = error.message || "Claude analysis failed.";
+    renderClaudeAnalysis(`STATUS: Unavailable\nRISK:\n- ${message}\nACTION: Keep using the deterministic TradeIQ engine.`, false);
+    setClaudeStatus("ERROR", "error");
+    $("claudeFoot").textContent = message;
+  } finally {
+    stopClaudeStream();
+  }
+}
+
 function startClaudeAnalysis(force = false) {
   if (!state.claude.enabled || state.claude.busy || !$("claudeAnalysis")) return;
   // Automatic Claude commentary is silent until the deterministic engine has
@@ -796,18 +888,38 @@ function startClaudeAnalysis(force = false) {
   // Analyze Now remains available for a manual read-only diagnostic.
   if (!force && (state.marketWarming || !claudePublishableSetup(state.setup))) return;
   state.claude.busy = true;
+  state.claude.fallbackInFlight = false;
   state.claude.text = "";
   state.claude.lastStartedAt = Date.now();
   $("claudeAnalyze").disabled = true;
   if ($("headerAnalyze")) $("headerAnalyze").disabled = true;
   renderClaudeAnalysis("", true);
-  setClaudeStatus("ANALYZING", "analyzing");
-  $("claudeFoot").textContent = "Claude is reading the current TradeIQ snapshot…";
+  setClaudeStatus("CONNECTING", "analyzing");
+  $("claudeFoot").textContent = "Connecting to Claude…";
 
-  const source = new EventSource(`/api/ai/analysis/stream?force=${force ? "true" : "false"}`);
+  const source = new EventSource(`/api/ai/analysis/stream?force=${force ? "true" : "false"}&_=${Date.now()}`);
   state.claude.source = source;
+  let firstEventReceived = false;
+  const markConnected = () => {
+    if (firstEventReceived) return;
+    firstEventReceived = true;
+    if (state.claude.firstEventTimer) clearTimeout(state.claude.firstEventTimer);
+    state.claude.firstEventTimer = null;
+    setClaudeStatus("ANALYZING", "analyzing");
+    $("claudeFoot").textContent = "Claude is reading the current TradeIQ snapshot…";
+  };
+
+  state.claude.firstEventTimer = setTimeout(() => {
+    if (state.claude.busy && !firstEventReceived) runClaudeJsonFallback(force, "Claude stream did not start");
+  }, 9000);
+  state.claude.overallTimer = setTimeout(() => {
+    if (state.claude.busy) runClaudeJsonFallback(force, "Claude stream timed out");
+  }, 75000);
+
+  source.addEventListener("heartbeat", markConnected);
 
   source.addEventListener("meta", (event) => {
+    markConnected();
     const payload = JSON.parse(event.data);
     if (payload.model) {
       state.claude.model = payload.model;
@@ -817,12 +929,14 @@ function startClaudeAnalysis(force = false) {
   });
 
   source.addEventListener("delta", (event) => {
+    markConnected();
     const payload = JSON.parse(event.data);
     state.claude.text += payload.text || "";
     renderClaudeAnalysis(state.claude.text, true);
   });
 
   source.addEventListener("done", (event) => {
+    markConnected();
     const payload = JSON.parse(event.data);
     renderClaudeAnalysis(state.claude.text, false);
     setClaudeStatus(payload.cached ? "CACHED" : "READY", payload.cached ? "cached" : "ready");
@@ -833,6 +947,7 @@ function startClaudeAnalysis(force = false) {
   });
 
   source.addEventListener("analysis_error", (event) => {
+    markConnected();
     let message = "Claude analysis failed. Check Railway logs and API configuration.";
     try { message = JSON.parse(event.data).message || message; } catch (_) { /* network error */ }
     renderClaudeAnalysis(`STATUS: Unavailable\nRISK:\n- ${message}\nACTION: Keep using the deterministic TradeIQ engine.`, false);
@@ -843,11 +958,7 @@ function startClaudeAnalysis(force = false) {
 
   source.onerror = () => {
     if (!state.claude.busy) return;
-    const message = "Claude stream disconnected. Check the server connection and Railway logs.";
-    renderClaudeAnalysis(`STATUS: Unavailable\nRISK:\n- ${message}\nACTION: Keep using the deterministic TradeIQ engine.`, false);
-    setClaudeStatus("ERROR", "error");
-    $("claudeFoot").textContent = message;
-    stopClaudeStream();
+    runClaudeJsonFallback(force, firstEventReceived ? "Claude stream disconnected" : "Claude stream was blocked");
   };
 }
 
@@ -1726,6 +1837,10 @@ function scheduleChartDraw(chartId = "chartLarge", delay = 0) {
 }
 
 async function initialLoad() {
+  // Claude readiness is independent from market/radar hydration. Starting this
+  // probe first prevents a slow market request from leaving the desktop tab at
+  // CHECKING forever.
+  const claudeStatusPromise = loadClaudeStatus();
   try {
     const [health, snapshot, dashboard, radar] = await Promise.all([
       fetch("/api/health").then((response) => response.ok ? response.json() : Promise.reject(new Error("Health request failed"))),
@@ -1750,7 +1865,6 @@ async function initialLoad() {
     startRestFallback();
     processMarketOpportunities(radar?.items || [], radar?.status || null, false);
     cacheCurrentMarket();
-    await loadClaudeStatus();
     loadEconomicCalendar();
     connectWebSocket();
   } catch (error) {
@@ -1759,6 +1873,7 @@ async function initialLoad() {
     startRestFallback();
     connectWebSocket();
   }
+  await claudeStatusPromise;
 }
 
 

@@ -172,6 +172,10 @@ class MarketOpportunity(BaseModel):
     data_source: str = "cached-history"
     gex_source: str = "fallback"
     active_market: bool = False
+    qualified: bool = False
+    entry_valid: bool = False
+    current_price: float | None = None
+    missing_gates: list[str] = Field(default_factory=list)
     alertable: bool = False
 
 

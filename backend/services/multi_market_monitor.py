@@ -101,6 +101,7 @@ class MultiMarketMonitorService:
                     reason="Background history is still syncing.",
                     detected_at=now,
                     active_market=profile.symbol == instrument_registry.active.symbol,
+                    missing_gates=["scanner error"],
                     alertable=False,
                 )
 
@@ -124,6 +125,8 @@ class MultiMarketMonitorService:
                 detected_at=now,
                 candle_time=candles[-1].time if candles else None,
                 active_market=profile.symbol == instrument_registry.active.symbol,
+                current_price=candles[-1].close if candles else None,
+                missing_gates=["historical candles"],
                 alertable=False,
             )
 
@@ -138,14 +141,20 @@ class MultiMarketMonitorService:
         model_score = float(candidate.primary_model_score or 0.0)
         confidence = float(candidate.confidence or 0.0)
         data_is_fresh = data_age <= float(settings.multi_market_max_data_age_seconds)
-        qualified = bool(
-            data_is_fresh
-            and candidate.direction in {"LONG", "SHORT"}
-            and candidate.primary_entry_model
-            and candidate.entry_valid
-            and model_score >= float(settings.multi_market_min_model_score)
-            and confidence >= float(settings.multi_market_min_confidence)
-        )
+        missing_gates: list[str] = []
+        if not data_is_fresh:
+            missing_gates.append("fresh market data")
+        if candidate.direction not in {"LONG", "SHORT"}:
+            missing_gates.append("direction")
+        if not candidate.primary_entry_model:
+            missing_gates.append("entry model")
+        if not candidate.entry_valid:
+            missing_gates.append("entry confirmation")
+        if model_score < float(settings.multi_market_min_model_score):
+            missing_gates.append(f"model score {settings.multi_market_min_model_score:.0f}%")
+        if confidence < float(settings.multi_market_min_confidence):
+            missing_gates.append(f"confidence {settings.multi_market_min_confidence:.0f}%")
+        qualified = not missing_gates
         active_market = profile.symbol == instrument_registry.active.symbol
         watch_price = candidate.signals.get("selected_model_trigger") if candidate.signals else None
         if watch_price is None:
@@ -156,7 +165,23 @@ class MultiMarketMonitorService:
         reason = candidate.model_selection_reason or next(iter(candidate.rationale or []), "No qualified model yet.")
         if not data_is_fresh:
             reason = f"Market data is {data_age:.0f}s old. The radar will not alert until a fresh candle is available."
-        status = "SETUP_FORMING" if qualified else "STALE_DATA" if not data_is_fresh else "SCANNING"
+        elif missing_gates:
+            reason = f"{reason} Waiting on: {', '.join(missing_gates)}."
+        has_developing_model = bool(
+            candidate.direction in {"LONG", "SHORT"}
+            and candidate.primary_entry_model
+        )
+        # Legacy v3.0.4 status expression retained for regression documentation:
+        # status = "SETUP_FORMING" if qualified else "STALE_DATA"
+        status = (
+            "SETUP_FORMING"
+            if qualified
+            else "STALE_DATA"
+            if not data_is_fresh
+            else "DEVELOPING"
+            if has_developing_model
+            else "SCANNING"
+        )
         price_token = round(float(watch_price), profile.price_precision) if watch_price is not None else "none"
         model_key = candidate.primary_entry_model_key or "none"
         opportunity_id = f"{profile.symbol}:{candidate.direction}:{model_key}:{price_token}"
@@ -180,6 +205,10 @@ class MultiMarketMonitorService:
             data_source="active-live" if active_market else "cached-history",
             gex_source=candidate.gex.source_label or candidate.gex.source,
             active_market=active_market,
+            qualified=qualified,
+            entry_valid=bool(candidate.entry_valid),
+            current_price=latest.close,
+            missing_gates=missing_gates,
             alertable=qualified and not active_market,
         )
         if opportunity.alertable:
@@ -226,6 +255,8 @@ class MultiMarketMonitorService:
                 "last_scan_at": self._last_scan_at,
                 "last_error": self._last_error,
                 "opportunity_count": len(self._opportunities),
+                "qualified_count": sum(1 for item in self._opportunities.values() if item.qualified),
+                "developing_count": sum(1 for item in self._opportunities.values() if item.status == "DEVELOPING"),
                 "alertable_count": sum(1 for item in self._opportunities.values() if item.alertable),
                 "cache": [market_data_service.cache_status(symbol) for symbol in self.symbols],
             }

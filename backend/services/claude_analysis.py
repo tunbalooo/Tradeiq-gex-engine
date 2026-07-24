@@ -91,11 +91,14 @@ class ClaudeAnalysisService:
     def status(self) -> dict:
         return {
             "enabled": self.enabled,
+            "operational": self.enabled and not bool(self._last_error),
             "configured": bool(settings.anthropic_api_key),
             "sdk_available": AsyncAnthropic is not None,
             "model": settings.anthropic_model,
+            "model_used": self._model_used,
             "cached": bool(self._cached_text),
             "cached_at": self._cached_at.isoformat() if self._cached_at else None,
+            "last_request_at": self._last_request_at.isoformat() if self._last_request_at else None,
             "last_error": self._last_error,
             "analysis_interval_seconds": settings.claude_analysis_interval_seconds,
         }
@@ -242,15 +245,112 @@ class ClaudeAnalysisService:
     def _sse(event: str, payload: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-    async def stream(self, force: bool = False) -> AsyncIterator[str]:
+    @staticmethod
+    def _friendly_error(exc: Exception) -> str:
+        """Return an actionable Claude error without leaking credentials."""
+        name = exc.__class__.__name__.lower()
+        status_code = getattr(exc, "status_code", None)
+        raw = str(exc).lower()
+        if status_code == 401 or "authentication" in name or "api key" in raw:
+            return "Claude rejected the API key. Check ANTHROPIC_API_KEY in Railway Variables."
+        if status_code == 403 or "permission" in name:
+            return "Claude access was denied. Check the configured model and Anthropic account access."
+        if status_code == 429 or "ratelimit" in name or "rate limit" in raw:
+            return "Claude is rate-limited or the Anthropic account has insufficient credits."
+        if status_code == 400 or "badrequest" in name or "model" in raw and "not found" in raw:
+            return "Claude rejected the request. Check ANTHROPIC_MODEL and the Railway logs."
+        if "timeout" in name or "timed out" in raw:
+            return "Claude timed out before returning an analysis. Try Analyze now again."
+        if "connection" in name or "network" in raw:
+            return "The server could not connect to Anthropic. Check Railway networking and try again."
+        return "Claude analysis failed. Check Anthropic billing, model access, and the Railway logs."
+
+    def _configuration_error(self) -> str | None:
         if not settings.claude_analysis_enabled:
-            yield self._sse("analysis_error", {"message": "Claude analysis is disabled. Set CLAUDE_ANALYSIS_ENABLED=true."})
-            return
+            return "Claude analysis is disabled. Set CLAUDE_ANALYSIS_ENABLED=true."
         if not settings.anthropic_api_key:
-            yield self._sse("analysis_error", {"message": "ANTHROPIC_API_KEY is not configured on the server."})
-            return
+            return "ANTHROPIC_API_KEY is not configured on the server."
         if AsyncAnthropic is None:
-            yield self._sse("analysis_error", {"message": "The anthropic Python package is not installed."})
+            return "The anthropic Python package is not installed."
+        return None
+
+    async def analyze(self, force: bool = False) -> dict:
+        """Return one complete read-only analysis as JSON.
+
+        This is the transport fallback for browsers or proxies that do not
+        deliver server-sent events reliably. It shares the same cache and lock
+        as the SSE path, so falling back cannot create duplicate billable calls.
+        """
+        configuration_error = self._configuration_error()
+        if configuration_error:
+            raise RuntimeError(configuration_error)
+
+        snapshot = self._snapshot()
+        key = self._fingerprint(snapshot)
+        force = bool(force and self._force_allowed())
+        cached_before_wait = self._cached_at
+
+        async with self._lock:
+            # Always accept a fresh cache after waiting for an in-flight SSE
+            # request, even when the original browser action requested force.
+            cache_created_while_waiting = self._cached_at is not None and self._cached_at != cached_before_wait
+            if self._cache_fresh(key) and (not force or cache_created_while_waiting):
+                return {
+                    "text": self._cached_text,
+                    "cached": True,
+                    "generated_at": self._cached_at.isoformat() if self._cached_at else None,
+                    "model": self._model_used or settings.anthropic_model,
+                }
+
+            self._last_request_at = datetime.now(timezone.utc)
+            self._last_error = None
+            client = AsyncAnthropic(
+                api_key=settings.anthropic_api_key,
+                timeout=settings.claude_request_timeout_seconds,
+                max_retries=1,
+            )
+            try:
+                message = await client.messages.create(
+                    model=settings.anthropic_model,
+                    max_tokens=settings.claude_max_output_tokens,
+                    system=SYSTEM_PROMPT,
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            "Explain the current TradeIQ lifecycle event, why the engine is in this state, "
+                            "and what happens next. Use the deterministic transition reason exactly.\n"
+                            + json.dumps(snapshot, separators=(",", ":"), default=str)
+                        ),
+                    }],
+                )
+                text = "".join(
+                    str(getattr(block, "text", ""))
+                    for block in (getattr(message, "content", None) or [])
+                    if getattr(block, "text", None)
+                ).strip()
+                if not text:
+                    raise RuntimeError("Claude returned an empty analysis.")
+                self._cached_text = text
+                self._cached_key = key
+                self._cached_at = datetime.now(timezone.utc)
+                self._model_used = getattr(message, "model", settings.anthropic_model)
+                return {
+                    "text": text,
+                    "cached": False,
+                    "generated_at": self._cached_at.isoformat(),
+                    "model": self._model_used,
+                }
+            except Exception as exc:
+                self._last_error = self._friendly_error(exc)
+                logger.exception("Claude JSON fallback analysis failed")
+                raise RuntimeError(self._last_error) from exc
+            finally:
+                await client.close()
+
+    async def stream(self, force: bool = False) -> AsyncIterator[str]:
+        configuration_error = self._configuration_error()
+        if configuration_error:
+            yield self._sse("analysis_error", {"message": configuration_error})
             return
 
         try:
@@ -261,6 +361,11 @@ class ClaudeAnalysisService:
 
         key = self._fingerprint(snapshot)
         force = bool(force and self._force_allowed())
+
+        # A padded comment plus an immediate heartbeat prevents some desktop
+        # browsers/proxies from buffering the stream until Claude has finished.
+        yield ": " + (" " * 2048) + "\n\n"
+        yield self._sse("heartbeat", {"at": datetime.now(timezone.utc).isoformat()})
 
         async with self._lock:
             if not force and self._cache_fresh(key):
@@ -317,9 +422,9 @@ class ClaudeAnalysisService:
                     "model": self._model_used,
                 })
             except Exception as exc:
-                self._last_error = str(exc)
+                self._last_error = self._friendly_error(exc)
                 logger.exception("Claude market analysis failed")
-                yield self._sse("analysis_error", {"message": "Claude analysis failed. Check the API key, model access, billing, and Railway logs."})
+                yield self._sse("analysis_error", {"message": self._last_error})
             finally:
                 await client.close()
 

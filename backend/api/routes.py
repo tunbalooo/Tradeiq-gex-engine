@@ -328,6 +328,15 @@ async def ai_analysis_stream(force: bool = Query(False)):
     )
 
 
+@router.post("/ai/analysis")
+async def ai_analysis(force: bool = Query(False)):
+    """Non-streaming Claude transport used when desktop SSE is unavailable."""
+    try:
+        return await claude_analysis_service.analyze(force=force)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/gex/refresh")
 async def refresh_gex(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)

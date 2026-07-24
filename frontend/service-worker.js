@@ -42,14 +42,15 @@
 // Previous cache: tradeiq-v3.1.5-visible-scanning-level-controls-shell
 // TradeIQ v3.1.6: audit-quality scoring, unique thesis lifecycle and separate trade/scanner logs.
 // TradeIQ v3.1.7: expiry-filtered GEX radar, strike OI/IV and intensity zones.
-const CACHE_NAME = "tradeiq-v3.1.7-gex-radar-code-audit-shell";
+// TradeIQ v3.1.8: resilient Claude SSE/JSON transport and transparent radar gates.
+const CACHE_NAME = "tradeiq-v3.1.8-claude-radar-resilience-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=317",
-  "/static/boot.js?v=317",
-  "/static/time.js?v=317",
-  "/static/app.js?v=317",
-  "/static/trading_chart.js?v=317",
+  "/static/styles.css?v=318",
+  "/static/boot.js?v=318",
+  "/static/time.js?v=318",
+  "/static/app.js?v=318",
+  "/static/trading_chart.js?v=318",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",
