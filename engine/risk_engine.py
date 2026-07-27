@@ -105,6 +105,8 @@ def build_trade_levels(
     preferred_entry: float | None = None,
     preferred_invalidation: float | None = None,
     market_map_clusters: list[MarketMapCluster] | None = None,
+    minimum_tp1_r: float = 1.0,
+    minimum_tp2_r: float = 2.0,
 ) -> dict:
     direction = direction.upper()
     if direction not in {"LONG", "SHORT"}:
@@ -166,23 +168,28 @@ def build_trade_levels(
     )
 
     nearest_barrier = candidates[0] if candidates else None
-    blocked_by_near_target = nearest_barrier is not None and nearest_barrier.r_multiple < 1.0
+    minimum_tp1_r = max(0.25, float(minimum_tp1_r))
+    minimum_tp2_r = max(minimum_tp1_r + 0.25, float(minimum_tp2_r))
+    blocked_by_near_target = nearest_barrier is not None and nearest_barrier.r_multiple < minimum_tp1_r
 
-    tp1_candidate = next((candidate for candidate in candidates if candidate.r_multiple >= 1.0), None)
+    tp1_candidate = next((candidate for candidate in candidates if candidate.r_multiple >= minimum_tp1_r), None)
     if tp1_candidate is None:
-        tp1_price = entry + risk * 2.0 if direction == "LONG" else entry - risk * 2.0
-        tp1_candidate = TargetCandidate(_round_tick(tp1_price, tick_size), "2R Fallback", 2.0)
+        fallback_r = minimum_tp1_r
+        tp1_price = entry + risk * fallback_r if direction == "LONG" else entry - risk * fallback_r
+        tp1_candidate = TargetCandidate(
+            _round_tick(tp1_price, tick_size), f"{fallback_r:.1f}R Scalp Fallback", fallback_r
+        )
 
     tp2_candidate = next(
         (
             candidate for candidate in candidates
             if candidate.price != tp1_candidate.price
-            and candidate.r_multiple >= max(2.0, tp1_candidate.r_multiple + 0.25)
+            and candidate.r_multiple >= max(minimum_tp2_r, tp1_candidate.r_multiple + 0.25)
         ),
         None,
     )
     if tp2_candidate is None:
-        fallback_r = 2.0 if tp1_candidate.r_multiple < 2.0 else max(3.0, tp1_candidate.r_multiple + 1.0)
+        fallback_r = max(minimum_tp2_r, tp1_candidate.r_multiple + 0.5)
         tp2_price = entry + risk * fallback_r if direction == "LONG" else entry - risk * fallback_r
         tp2_candidate = TargetCandidate(_round_tick(tp2_price, tick_size), f"{fallback_r:.1f}R Fallback", fallback_r)
 

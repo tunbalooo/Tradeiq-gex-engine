@@ -191,20 +191,75 @@ def _direction_from_structure(structure: dict, current_price: float, gex: GexSum
     return "LONG" if current_price >= gex.gamma_flip else "SHORT"
 
 
-def build_candidate_setup(candles_override=None, profile_override: InstrumentProfile | None = None, gex_override: GexSummary | None = None) -> TradeSetup:
+def _scalp_candidate_score(setup: TradeSetup) -> float:
+    """Compare both sides like a scalper: execution first, location second."""
+    signals = setup.signals if isinstance(setup.signals, dict) else {}
+    score = (
+        float(setup.location_quality_score or 0.0) * 0.20
+        + float(setup.confirmation_quality_score or 0.0) * 0.30
+        + float(setup.execution_quality_score or 0.0) * 0.35
+        + float(setup.primary_model_score or 0.0) * 0.10
+        + float(setup.confidence or 0.0) * 0.05
+    )
+    if setup.actionable:
+        score += 1000.0
+    elif setup.quality_stage == "CONFIRMED_NO_EXECUTION":
+        score += 80.0
+    if setup.entry_valid:
+        score += 12.0
+    if signals.get("target_not_blocked"):
+        score += 8.0
+    if signals.get("entry_model_confirmed"):
+        score += 15.0
+    return score
+
+
+def _choose_scalp_candidate(first: TradeSetup, second: TradeSetup) -> TradeSetup:
+    first_score = _scalp_candidate_score(first)
+    second_score = _scalp_candidate_score(second)
+    chosen, other = (first, second) if first_score >= second_score else (second, first)
+    comparison = {
+        first.direction: round(first_score, 1),
+        second.direction: round(second_score, 1),
+    }
+    return chosen.model_copy(update={
+        "signals": {
+            **chosen.signals,
+            "scalp_dual_direction_scan": True,
+            "scalp_side_scores": comparison,
+            "scalp_rejected_direction": other.direction,
+            "scalp_rejected_primary_model": other.primary_entry_model,
+        },
+    })
+
+
+def build_candidate_setup(
+    candles_override=None,
+    profile_override: InstrumentProfile | None = None,
+    gex_override: GexSummary | None = None,
+    direction_override: str | None = None,
+) -> TradeSetup:
     profile = profile_override or instrument_registry.active
     base_candles = candles_override or market_data_service.snapshot()
     if not base_candles:
         raise RuntimeError("No market candles are available.")
-    candles_5m = aggregate_candles(base_candles, 5)
-    candles_15m = aggregate_candles(base_candles, 15)
-    candles_60m = aggregate_candles(base_candles, 60)
-    candles_240m = aggregate_candles(base_candles, 240)
+    candles_1m = list(base_candles)
+    # The newest 1-minute candle is the live execution candle. Direction, model
+    # confirmation and scoring use closed candles only; live price is reserved for
+    # freshness, touches and fills inside TradeEngineService.
+    closed_1m = candles_1m[:-1] if len(candles_1m) > 1 else candles_1m
+    candles_5m = aggregate_candles(closed_1m, 5)
+    candles_15m = aggregate_candles(closed_1m, 15)
+    candles_60m = aggregate_candles(closed_1m, 60)
+    candles_240m = aggregate_candles(closed_1m, 240)
+    execution_candles = closed_1m if settings.scalper_mode_enabled else candles_5m
     current_price = base_candles[-1].close
 
-    structure = analyze_market_structure(candles_5m)
+    structure = analyze_market_structure(execution_candles)
+    structure_5m = analyze_market_structure(candles_5m)
     zones = (
-        detect_supply_demand(candles_5m, timeframe="5m", lookback=90)
+        (detect_supply_demand(candles_1m, timeframe="1m", lookback=120) if settings.scalper_mode_enabled else [])
+        + detect_supply_demand(candles_5m, timeframe="5m", lookback=90)
         + detect_supply_demand(candles_15m, timeframe="15m", lookback=70)
         + detect_supply_demand(candles_60m, timeframe="1H", lookback=45)
     )
@@ -221,7 +276,14 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         gex = _stable_fallback_gex(current_price, profile)
 
     gex = _enrich_gex(gex, current_price)
-    direction = _direction_from_structure(structure, current_price, gex)
+    if direction_override in {"LONG", "SHORT"}:
+        direction = direction_override
+    elif structure.get("trend") in {"BULLISH", "BEARISH"}:
+        direction = "LONG" if structure["trend"] == "BULLISH" else "SHORT"
+    elif structure_5m.get("trend") in {"BULLISH", "BEARISH"}:
+        direction = "LONG" if structure_5m["trend"] == "BULLISH" else "SHORT"
+    else:
+        direction = _direction_from_structure(structure, current_price, gex)
     swing_low, swing_high = structure["swing_low"], structure["swing_high"]
     if swing_high <= swing_low:
         swing_high = swing_low + 20
@@ -229,7 +291,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     fib_levels = [FibLevel(ratio=p.ratio, price=p.price, label=p.label) for p in fib_points]
     ote_low, ote_high = ote_zone(swing_low, swing_high, direction)
     ideal_ote = next(p.price for p in fib_points if abs(p.ratio - .705) < .001)
-    atr = average_true_range(candles_5m)
+    atr = average_true_range(execution_candles)
 
     cluster = find_confluence_cluster(direction, ote_low, ote_high, zones, gex, atr, current_price, settings.cluster_tolerance_atr)
     session = rth_candles(base_candles, profile=profile)
@@ -261,9 +323,9 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
             tolerance_points=0.0,
         )
     )
-    previous_volumes = [float(c.volume) for c in candles_5m[-21:-1]]
-    average_volume = sum(previous_volumes) / len(previous_volumes) if previous_volumes else max(float(candles_5m[-1].volume), 1.0)
-    volume_ratio = float(candles_5m[-1].volume) / max(average_volume, 1.0)
+    previous_volumes = [float(c.volume) for c in execution_candles[-21:-1]]
+    average_volume = sum(previous_volumes) / len(previous_volumes) if previous_volumes else max(float(execution_candles[-1].volume), 1.0)
+    volume_ratio = float(execution_candles[-1].volume) / max(average_volume, 1.0)
     volume_expansion_quality = max(0.0, min(1.0, (volume_ratio - 0.65) / 0.85))
     session_quality = max(0.0, min(1.0, len(session) / 36.0))
 
@@ -273,7 +335,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     ordered_sequence = structure["bullish_sequence"] if direction == "LONG" else structure["bearish_sequence"]
     trend_alignment = structure["bullish_ema_aligned"] if direction == "LONG" else structure["bearish_ema_aligned"]
     fib_pullback = analyze_fib_pullback_continuation(
-        base_candles, direction=direction, swing_low=swing_low, swing_high=swing_high,
+        execution_candles, direction=direction, swing_low=swing_low, swing_high=swing_high,
         current_price=current_price, atr=atr, tick_size=profile.tick_size,
     )
 
@@ -286,6 +348,8 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         sweep_price=structure["sweep_price"] if direction_sweep else None,
         tick_size=profile.tick_size,
         market_map_clusters=market_map.ladder,
+        minimum_tp1_r=settings.active_min_tp1_r,
+        minimum_tp2_r=settings.active_min_tp2_r,
     )
 
     analysis_price = levels["entry"] if levels["entry"] is not None else current_price
@@ -303,10 +367,10 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     )
     ote_score = proximity_score(analysis_price, ote_low, ote_high, atr * 1.5)
     displacement_quality = 1.0 if ordered_sequence else .75 if direction_displacement and direction_fvg else .45 if direction_displacement else 0.0
-    ranges = [c.high - c.low for c in candles_5m[-30:]]
+    ranges = [c.high - c.low for c in execution_candles[-30:]]
     normal_range = sum(ranges) / len(ranges) if ranges else atr
     volatility_quality = max(0.0, min(1.0, normal_range / max(atr, .25)))
-    risk_quality = 1.0 if levels["entry_valid"] and not levels["blocked_by_near_target"] and (levels["tp2_r"] or 0) >= 2 else 0.0
+    risk_quality = 1.0 if levels["entry_valid"] and not levels["blocked_by_near_target"] and (levels["tp2_r"] or 0) >= settings.active_min_tp2_r else 0.0
 
     flags = {
         "trend_alignment": trend_alignment,
@@ -354,6 +418,9 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     ])
     signals = {
         "current_price": round(float(current_price), profile.price_precision),
+        "engine_mode": "SCALPER" if settings.scalper_mode_enabled else "DESK",
+        "execution_timeframe": "1m" if settings.scalper_mode_enabled else "5m",
+        "higher_timeframe_bias": structure_5m.get("trend", "NEUTRAL"),
         "structure_event_key": structure_event_key,
         "structure_event_time": event_time_text,
         "trend_alignment": bool(trend_alignment), "gex_alignment": bool(gex_alignment),
@@ -401,7 +468,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     # arm execution. This prevents a valid short/long from being cancelled merely
     # because it did not print a generic rejection candle.
     confirmation_map = evaluate_model_confirmations(
-        candles_5m, direction=direction, atr=atr, vwap=vwap, gamma_flip=gex.gamma_flip,
+        execution_candles, direction=direction, atr=atr, vwap=vwap, gamma_flip=gex.gamma_flip,
         zone_low=selected_zone.low if selected_zone else None,
         zone_high=selected_zone.high if selected_zone else None,
         ote_low=ote_low, ote_high=ote_high,
@@ -454,6 +521,8 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
             preferred_entry=preliminary_primary.trigger_price,
             preferred_invalidation=preliminary_primary.invalidation_price,
             market_map_clusters=market_map.ladder,
+            minimum_tp1_r=settings.active_min_tp1_r,
+            minimum_tp2_r=settings.active_min_tp2_r,
         )
 
     signals.update({
@@ -462,7 +531,7 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         "selected_model_trigger": preliminary_primary.trigger_price if preliminary_primary else None,
         "selected_model_invalidation": preliminary_primary.invalidation_price if preliminary_primary else None,
     })
-    flags["risk_reward"] = 1.0 if levels["entry_valid"] and not levels["blocked_by_near_target"] and (levels["tp2_r"] or 0) >= 2 else 0.0
+    flags["risk_reward"] = 1.0 if levels["entry_valid"] and not levels["blocked_by_near_target"] and (levels["tp2_r"] or 0) >= settings.active_min_tp2_r else 0.0
     legacy_confidence, components = calculate_confidence(flags)
 
     rationale = []
@@ -497,11 +566,11 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
     if levels["target_sources"]: rationale.append(f"TP1 uses {levels['target_sources']['tp1']}; TP2 uses {levels['target_sources']['tp2']}.")
     if not rationale: rationale.append("The engine is scanning for a stronger multi-factor setup.")
 
-    status = "DEVELOPING" if preliminary_primary and preliminary_primary.eligible and preliminary_primary.score >= settings.setup_watch_model_score and levels["entry_valid"] else "SCANNING"
+    status = "DEVELOPING" if preliminary_primary and preliminary_primary.eligible and preliminary_primary.score >= settings.active_setup_watch_model_score and levels["entry_valid"] else "SCANNING"
     now = datetime.now(timezone.utc)
     setup = TradeSetup(
         setup_id=f"preview-{uuid4()}", symbol=profile.symbol, timestamp=now,
-        valid_until=now + timedelta(minutes=settings.setup_expiry_minutes), direction=direction,
+        valid_until=now + timedelta(minutes=settings.active_setup_expiry_minutes), direction=direction,
         confidence=confidence, confidence_components=components,
         confidence_maximums={k: float(v) for k, v in DEFAULT_WEIGHTS.items()}, signals=signals,
         confidence_grade=confidence_grade,
@@ -534,7 +603,17 @@ def build_candidate_setup(candles_override=None, profile_override: InstrumentPro
         fib_pullback_invalidation=fib_pullback.invalidation_price,
         volume_expansion=volume_expansion_quality, session_quality=session_quality,
     )
-    return decision_brain_service.select(setup, rank_entry_models(model_context))
+    selected = decision_brain_service.select(setup, rank_entry_models(model_context))
+    if settings.scalper_mode_enabled and direction_override is None:
+        opposite_direction = "SHORT" if selected.direction == "LONG" else "LONG"
+        opposite = build_candidate_setup(
+            candles_override=base_candles,
+            profile_override=profile,
+            gex_override=gex,
+            direction_override=opposite_direction,
+        )
+        return _choose_scalp_candidate(selected, opposite)
+    return selected
 
 
 def build_current_setup() -> TradeSetup:

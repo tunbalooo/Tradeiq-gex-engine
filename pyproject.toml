@@ -1,6 +1,6 @@
 [project]
 name = "tradeiq-gex-engine"
-version = "3.1.7"
+version = "3.1.9"
 description = "Multi-market futures GEX radar, confluence and adaptive execution dashboard"
 requires-python = ">=3.11"
 

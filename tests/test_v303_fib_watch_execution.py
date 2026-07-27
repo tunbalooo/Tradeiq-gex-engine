@@ -160,6 +160,7 @@ def test_fib_model_can_watch_before_confirmation_and_arm_after_confirmation():
 
 
 def test_watch_touch_is_visible_then_expires_only_after_confirmation_window(monkeypatch):
+    monkeypatch.setattr(settings, "scalper_mode_enabled", False)
     service = TradeEngineService()
     monkeypatch.setattr(service, "_market_gate", lambda: (True, None))
     monkeypatch.setattr(storage_service, "transition", lambda *args, **kwargs: None)

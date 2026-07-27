@@ -3,6 +3,7 @@ from pathlib import Path
 
 from sqlalchemy import delete
 
+from backend.core.config import settings
 from backend.core.database import SessionLocal
 from backend.models.db_models import TradeSetupRecord
 from backend.models.schemas import Candle, EntryModelScore
@@ -105,6 +106,7 @@ def test_model_score_can_start_monitoring_before_old_global_confidence_threshold
 
 
 def test_direction_switch_requires_distinct_closed_candles(monkeypatch):
+    monkeypatch.setattr(settings, "scalper_mode_enabled", False)
     service = TradeEngineService()
     monkeypatch.setattr(service, "_market_gate", lambda: (True, None))
     monkeypatch.setattr(storage_service, "transition", lambda *args, **kwargs: None)

@@ -15,7 +15,8 @@
 # TradeIQ v3.1.6 separates scanner theses from trades, adds audit-quality scores, and locks failed theses until new structure.
 # Previous API version: 3.1.6-audit-quality-lifecycle
 # TradeIQ v3.1.7 adds a full expiry-filtered GEX radar, strike OI/IV detail, intensity zones and a code-integrity audit.
-# TradeIQ v3.1.8 adds resilient Claude transports and transparent cross-market radar diagnostics.
+# TradeIQ v3.1.9 adds dual-direction 1-minute scalp evaluation, fast lifecycle expiry, and execution-first readiness.
+# Previous API version: 3.1.8-claude-radar-resilience
 # Previous API version: 3.1.7-gex-radar-code-audit
 # Previous API version: 3.1.4-executable-bracket-plans
 # Previous API version: 3.1.5-visible-scanning-level-controls
@@ -67,7 +68,7 @@ async def lifespan(app: FastAPI):
 # Legacy v3.0.3 API release: 3.0.3-fib-pullback-watch-execution
 # Legacy v3.0.4 API release: 3.0.4-trade-desk-market-radar
 # Legacy v3.0.5 API release: 3.0.5-self-healing-market-stream
-app = FastAPI(title=settings.app_name, version="3.1.8-claude-radar-resilience", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="3.1.9-trader-scalper-engine", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 

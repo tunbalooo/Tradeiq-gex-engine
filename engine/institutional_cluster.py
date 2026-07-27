@@ -37,14 +37,14 @@ def _cluster_tier(category_count: int) -> tuple[str, float, float, int, float]:
     """Return tier, minimum score, confidence, confirmation strength and freshness.
 
     The final execution decision still requires a valid structural stop, clear
-    target path, minimum 2R and healthy data. These values only define the extra
+    target path, the active mode reward floor and healthy data. These values only define the extra
     quality required for each cluster breadth tier.
     """
     if category_count >= 4:
         return (
             "HIGH_PRIORITY_4_PLUS",
             float(settings.cluster_four_factor_min_score),
-            float(settings.setup_confidence_floor),
+            float(settings.active_setup_confidence_floor),
             1,
             float(settings.cluster_four_factor_min_freshness),
         )
@@ -52,7 +52,7 @@ def _cluster_tier(category_count: int) -> tuple[str, float, float, int, float]:
         return (
             "STANDARD_3_FACTOR",
             float(settings.cluster_three_factor_min_score),
-            max(float(settings.setup_confidence_floor), float(settings.cluster_three_factor_min_confidence)),
+            max(float(settings.active_setup_confidence_floor), float(settings.cluster_three_factor_min_confidence)),
             1,
             float(settings.cluster_three_factor_min_freshness),
         )
@@ -60,7 +60,7 @@ def _cluster_tier(category_count: int) -> tuple[str, float, float, int, float]:
         return (
             "EXCEPTIONAL_2_FACTOR",
             float(settings.cluster_two_factor_min_score),
-            max(float(settings.setup_confidence_floor), float(settings.cluster_two_factor_min_confidence)),
+            max(float(settings.active_setup_confidence_floor), float(settings.cluster_two_factor_min_confidence)),
             2,
             float(settings.cluster_two_factor_min_freshness),
         )

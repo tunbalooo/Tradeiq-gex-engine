@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from backend.core.config import settings
 from backend.models.schemas import Candle
 from backend.services.setup_service import build_candidate_setup
 from backend.services.trade_engine import TradeEngineService
@@ -40,6 +41,7 @@ def _candle(at: datetime) -> Candle:
 
 
 def test_watch_deadline_does_not_move_during_refresh(monkeypatch):
+    monkeypatch.setattr(settings, "scalper_mode_enabled", False)
     service = TradeEngineService()
     monkeypatch.setattr(service, "_market_gate", lambda: (True, None))
     start = datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc)
@@ -67,6 +69,7 @@ def test_watch_deadline_does_not_move_during_refresh(monkeypatch):
 
 
 def test_watch_expires_before_late_confirmation(monkeypatch):
+    monkeypatch.setattr(settings, "scalper_mode_enabled", False)
     service = TradeEngineService()
     monkeypatch.setattr(service, "_market_gate", lambda: (True, None))
     start = datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc)
@@ -88,6 +91,7 @@ def test_watch_expires_before_late_confirmation(monkeypatch):
 
 
 def test_same_expired_candidate_is_not_recreated(monkeypatch):
+    monkeypatch.setattr(settings, "scalper_mode_enabled", False)
     service = TradeEngineService()
     monkeypatch.setattr(service, "_market_gate", lambda: (True, None))
     start = datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc)
@@ -112,6 +116,7 @@ def test_same_expired_candidate_is_not_recreated(monkeypatch):
 
 
 def test_confirmed_plan_keeps_watch_audit_times(monkeypatch):
+    monkeypatch.setattr(settings, "scalper_mode_enabled", False)
     service = TradeEngineService()
     monkeypatch.setattr(service, "_market_gate", lambda: (True, None))
     start = datetime(2026, 7, 20, 1, 0, tzinfo=timezone.utc)

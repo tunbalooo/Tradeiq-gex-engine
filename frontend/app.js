@@ -712,11 +712,14 @@ function setupQualityView(setup, lockedPlan) {
   const confirmation = Number(setup?.confirmation_quality_score ?? 0);
   const execution = Number(setup?.execution_quality_score ?? 0);
   const trade = Number(setup?.trade_quality_score ?? 0);
+  const scalper = String(setup?.signals?.engine_mode || "DESK").toUpperCase() === "SCALPER";
+  const readiness = Math.max(0, Math.min(100, location * 0.20 + confirmation * 0.35 + execution * 0.45));
+  const previewScore = scalper ? readiness : location;
   return {
-    location, confirmation, execution, trade,
-    score: lockedPlan ? trade : location,
-    grade: lockedPlan ? (setup?.trade_grade || qualityGrade(trade)) : qualityGrade(location),
-    label: lockedPlan ? "Trade Grade" : "Location Grade",
+    location, confirmation, execution, trade, readiness, scalper,
+    score: lockedPlan ? trade : previewScore,
+    grade: lockedPlan ? (setup?.trade_grade || qualityGrade(trade)) : qualityGrade(previewScore),
+    label: lockedPlan ? "Trade Grade" : scalper ? "Scalp Readiness" : "Location Grade",
   };
 }
 function stars(strength) {
@@ -1299,16 +1302,28 @@ function hasVisibleScan(setup) {
 }
 
 function scanPhaseText(setup) {
+  const scalp = String(setup?.signals?.engine_mode || "DESK").toUpperCase() === "SCALPER";
   if (hasWatchingPlan(setup) && watchTriggerTouched(setup)) return `Confirming ${setup.direction}`;
-  if (hasWatchingPlan(setup)) return `Scanning ${setup.direction}`;
-  if (hasVisibleScan(setup)) return `Developing ${setup.direction}`;
-  return "Scanning Market";
+  if (hasWatchingPlan(setup)) return `${scalp ? "Scalp" : "Scanning"} ${setup.direction}`;
+  if (hasVisibleScan(setup)) return `${scalp ? "Scalp" : "Developing"} ${setup.direction}`;
+  return scalp ? "Scalp Scan" : "Scanning Market";
+}
+
+function scanBlockReason(setup) {
+  const signalMissing = Array.isArray(setup?.signals?.entry_model_missing) ? setup.signals.entry_model_missing : [];
+  const clusterMissing = Array.isArray(setup?.signals?.cluster_quality_missing) ? setup.signals.cluster_quality_missing : [];
+  const missing = [...signalMissing, ...clusterMissing].filter(Boolean);
+  if (missing.length) return missing.slice(0, 2).join(" · ");
+  const executionReason = String(setup?.execution_reason || "").replace(/^No execution:\s*/i, "").trim();
+  if (executionReason) return executionReason;
+  return confirmationWaitingText(setup);
 }
 
 function scanManagementText(setup) {
-  if (hasWatchingPlan(setup) && watchTriggerTouched(setup)) return "AWAITING MODEL CONFIRMATION";
-  if (hasWatchingPlan(setup)) return "WAITING FOR PRICE REACTION";
-  return "LIVE MODEL SCAN";
+  const reason = scanBlockReason(setup);
+  if (hasWatchingPlan(setup) && watchTriggerTouched(setup)) return `CONFIRMING: ${reason}`;
+  if (hasWatchingPlan(setup)) return `WAITING: ${reason}`;
+  return `SCANNING: ${reason}`;
 }
 
 function renderTradeSetup(setup) {
@@ -1345,7 +1360,7 @@ function renderTradeSetup(setup) {
   const aligned = coreKeys.filter((key) => setup.signals?.[key]).length;
   $("coreAlignment").textContent = lockedPlan
     ? `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} · Execute ${qualityView.execution.toFixed(0)} — plan locked`
-    : `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} — live scan only, no order`;
+    : `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} · Execute ${qualityView.execution.toFixed(0)} — ${qualityView.scalper ? "scalp readiness" : "live scan"}`;
 
   const scanLabel = visibleScan
     ? `${triggerTouched ? "CONFIRM" : "SCAN"} ${setup.direction} · NO ORDER`
@@ -1406,7 +1421,7 @@ function renderChartTradeSetup(setup, context) {
   $("chartProbabilityLabel").style.color = gaugeColor;
   $("chartCoreAlignment").textContent = lockedPlan
     ? `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} · Execute ${qualityView.execution.toFixed(0)}`
-    : `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} — no order`;
+    : `Location ${qualityView.location.toFixed(0)} · Confirm ${qualityView.confirmation.toFixed(0)} · Execute ${qualityView.execution.toFixed(0)} — ${qualityView.scalper ? "scalp readiness" : "no order"}`;
 
   $("chartSetupLabel").textContent = syncing ? "DATA SYNCING" : marketClosed ? "MARKET CLOSED" : label;
   $("chartSetupLabel").className = `${syncing || marketClosed ? "a" : visibleScan || lockedPlan ? classForDirection(setup.direction) : "a"} mono`;

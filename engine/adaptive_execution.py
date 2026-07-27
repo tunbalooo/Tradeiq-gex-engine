@@ -99,6 +99,8 @@ def select_execution(
     composite_score: float = 0.0,
     stop_loss: float | None = None,
     source_model_key: str | None = None,
+    minimum_tp2_r: float = 2.0,
+    scalper_mode: bool = False,
 ) -> ExecutionDecision:
     entry = _number(ideal_entry)
     current = float(current_price)
@@ -112,8 +114,8 @@ def select_execution(
     # A limit may be farther than a market entry, but not so far that it is only
     # a speculative watch level. The freshness score is calibrated to that real
     # retracement envelope rather than to the tighter market-entry tolerance.
-    limit_distance_cap = max(atr * 0.70, tick * 24)
-    freshness_envelope = max(atr * 0.85, tick * 28)
+    limit_distance_cap = max(atr * (0.55 if scalper_mode else 0.70), tick * (18 if scalper_mode else 24))
+    freshness_envelope = max(atr * (0.70 if scalper_mode else 0.85), tick * (22 if scalper_mode else 28))
     freshness = 0.0 if distance is None else max(
         0.0,
         min(100.0, 100.0 * (1.0 - distance / max(freshness_envelope, 1e-9))),
@@ -124,11 +126,11 @@ def select_execution(
         model_confirmed
         and target_not_blocked
         and not target_reached
-        and (tp2_r or 0.0) >= 2.0
+        and (tp2_r or 0.0) >= float(minimum_tp2_r)
         and entry is not None
     )
     if not common:
-        reason = "No execution: confirmation, target path, or minimum 2R safety is incomplete."
+        reason = f"No execution: confirmation, target path, or minimum {float(minimum_tp2_r):.1f}R safety is incomplete."
         if target_reached:
             reason = "No execution: the expected target path was already reached before an order could be placed."
         return ExecutionDecision("NONE", round(freshness, 1), distance, reason, False)
@@ -137,11 +139,11 @@ def select_execution(
     if model_key == CLUSTER_KEY and not source_model_key:
         execution_key = CLUSTER_KEY
 
-    market_tolerance = max(atr * 0.22, tick * 8)
-    at_level_tolerance = max(atr * 0.12, tick * 4)
-    stop_distance_cap = max(atr * 0.35, tick * 12)
+    market_tolerance = max(atr * (0.35 if scalper_mode else 0.22), tick * (12 if scalper_mode else 8))
+    at_level_tolerance = max(atr * (0.20 if scalper_mode else 0.12), tick * (6 if scalper_mode else 4))
+    stop_distance_cap = max(atr * (0.50 if scalper_mode else 0.35), tick * (16 if scalper_mode else 12))
     current_r = _remaining_r(direction, current, stop_value, tp2_value)
-    market_has_room = (current_r is None and (tp2_r or 0.0) >= 2.0) or (current_r is not None and current_r >= 2.0)
+    market_has_room = (current_r is None and (tp2_r or 0.0) >= float(minimum_tp2_r)) or (current_r is not None and current_r >= float(minimum_tp2_r))
 
     # Fast continuation: once confirmed, take the live price only while it is
     # genuinely close to the intended execution and still offers 2R from now.
@@ -154,7 +156,7 @@ def select_execution(
                 "MARKET",
                 round(freshness, 1),
                 round(distance, 4),
-                f"Market execution selected because the confirmed continuation is only {distance:.2f} points from the institutional entry and at least 2R remains from the live price.",
+                f"Market execution selected because the confirmed continuation is only {distance:.2f} points from the institutional entry and at least {float(minimum_tp2_r):.1f}R remains from the live price.",
                 True,
             )
         return ExecutionDecision(
@@ -199,12 +201,12 @@ def select_execution(
                 "MARKET",
                 round(freshness, 1),
                 round(distance, 4),
-                "Market execution selected because the retracement confirmed at the intended institutional price and at least 2R remains from the live price.",
+                f"Market execution selected because the retracement confirmed at the intended institutional price and at least {float(minimum_tp2_r):.1f}R remains from the live price.",
                 True,
             )
 
         tp1_room = abs(tp1_value - entry) if tp1_value is not None else None
-        minimum_tp1_room = max(atr * 0.45, tick * 12)
+        minimum_tp1_room = max(atr * (0.30 if scalper_mode else 0.45), tick * (8 if scalper_mode else 12))
         has_liquidity_room = tp1_room is None or tp1_room >= minimum_tp1_room
         real_limit = bool(
             entry_valid

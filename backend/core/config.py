@@ -48,6 +48,21 @@ class Settings(BaseSettings):
     direction_switch_confirm_bars: int = 2
     setup_expiry_minutes: int = 30
     watch_confirmation_minutes: int = 5
+
+    # v3.1.9 scalping engine. The existing institutional context remains, but
+    # execution is driven by 1-minute structure/confirmation, faster expiry,
+    # dual-direction ranking and realistic scalp reward targets.
+    scalper_mode_enabled: bool = True
+    scalp_setup_expiry_minutes: int = 8
+    scalp_watch_confirmation_minutes: int = 2
+    scalp_confirmation_bar_minutes: int = 1
+    scalp_direction_switch_confirm_bars: int = 1
+    scalp_thesis_lock_max_minutes: int = 15
+    scalp_setup_confidence_floor: float = 35.0
+    scalp_setup_watch_model_score: float = 50.0
+    scalp_entry_model_arm_score: float = 62.0
+    scalp_min_tp1_r: float = 0.8
+    scalp_min_tp2_r: float = 1.5
     # Terminal thesis locks prevent the same cluster/event from being recreated
     # after expiry, invalidation, or a stop. A genuinely new structure event
     # creates a new thesis fingerprint and releases the lock immediately.
@@ -118,6 +133,47 @@ class Settings(BaseSettings):
     rth_end_minute: int = 0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
+    @property
+    def active_setup_expiry_minutes(self) -> int:
+        return self.scalp_setup_expiry_minutes if self.scalper_mode_enabled else self.setup_expiry_minutes
+
+    @property
+    def active_watch_confirmation_minutes(self) -> int:
+        return self.scalp_watch_confirmation_minutes if self.scalper_mode_enabled else self.watch_confirmation_minutes
+
+    @property
+    def active_confirmation_bar_minutes(self) -> int:
+        return self.scalp_confirmation_bar_minutes if self.scalper_mode_enabled else 5
+
+    @property
+    def active_direction_switch_confirm_bars(self) -> int:
+        return self.scalp_direction_switch_confirm_bars if self.scalper_mode_enabled else self.direction_switch_confirm_bars
+
+    @property
+    def active_thesis_lock_max_minutes(self) -> int:
+        return self.scalp_thesis_lock_max_minutes if self.scalper_mode_enabled else self.thesis_lock_max_minutes
+
+    @property
+    def active_setup_confidence_floor(self) -> float:
+        return self.scalp_setup_confidence_floor if self.scalper_mode_enabled else self.setup_confidence_floor
+
+    @property
+    def active_setup_watch_model_score(self) -> float:
+        return self.scalp_setup_watch_model_score if self.scalper_mode_enabled else self.setup_watch_model_score
+
+    @property
+    def active_entry_model_arm_score(self) -> float:
+        return self.scalp_entry_model_arm_score if self.scalper_mode_enabled else self.entry_model_arm_score
+
+    @property
+    def active_min_tp1_r(self) -> float:
+        return self.scalp_min_tp1_r if self.scalper_mode_enabled else 1.0
+
+    @property
+    def active_min_tp2_r(self) -> float:
+        return self.scalp_min_tp2_r if self.scalper_mode_enabled else 2.0
 
     @property
     def use_databento(self) -> bool:

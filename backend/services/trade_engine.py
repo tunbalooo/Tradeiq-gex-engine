@@ -64,7 +64,7 @@ class TradeEngineService:
             if self._current is not None:
                 return self._current.model_copy(deep=True)
             symbol = market_data_service.symbol
-            cutoff = self._utcnow() - timedelta(minutes=max(1, settings.thesis_lock_max_minutes))
+            cutoff = self._utcnow() - timedelta(minutes=max(1, settings.active_thesis_lock_max_minutes))
             for item in storage_service.recent_terminal_theses(symbol=symbol, limit=40):
                 locked_at = item.get("locked_at")
                 if not isinstance(locked_at, datetime) or locked_at < cutoff:
@@ -185,7 +185,7 @@ class TradeEngineService:
         }
 
     def _prune_terminal_thesis_locks(self) -> None:
-        cutoff = self._utcnow() - timedelta(minutes=max(1, settings.thesis_lock_max_minutes))
+        cutoff = self._utcnow() - timedelta(minutes=max(1, settings.active_thesis_lock_max_minutes))
         self._terminal_thesis_locks = {
             key: value for key, value in self._terminal_thesis_locks.items()
             if isinstance(value.get("locked_at"), datetime) and value["locked_at"] >= cutoff
@@ -361,8 +361,8 @@ class TradeEngineService:
             candidate.entry_valid
             and candidate.direction in {"LONG", "SHORT"}
             and candidate.entry is not None
-            and candidate.confidence >= max(WATCH_MIN_CONFIDENCE, settings.setup_confidence_floor - 10)
-            and candidate.primary_model_score >= settings.setup_watch_model_score
+            and candidate.confidence >= max(WATCH_MIN_CONFIDENCE, settings.active_setup_confidence_floor - 10)
+            and candidate.primary_model_score >= settings.active_setup_watch_model_score
             and self._primary_model_eligible(candidate)
         )
 
@@ -393,7 +393,7 @@ class TradeEngineService:
         if self._pending_candidate_candle_time is None or candle.time > self._pending_candidate_candle_time:
             self._pending_candidate_count += 1
             self._pending_candidate_candle_time = candle.time
-        return self._pending_candidate_count >= max(1, settings.direction_switch_confirm_bars)
+        return self._pending_candidate_count >= max(1, settings.active_direction_switch_confirm_bars)
 
     def _preview(self, candidate: TradeSetup, status: str | None = None) -> TradeSetup:
         return candidate.model_copy(update={
@@ -417,10 +417,14 @@ class TradeEngineService:
             bars = max(1, int(contract.get("window_bars") or 1))
         except (TypeError, ValueError):
             bars = 1
-        # Setup evidence is built from completed 5-minute candles. Give each model
-        # enough time to print its native confirmation rather than applying the
-        # old universal five-minute timeout. The configured minimum remains valid.
-        return max(int(settings.watch_confirmation_minutes), bars * 5)
+        # In scalper mode confirmation is built from completed 1-minute candles.
+        # A watch must either confirm quickly or get out of the way; it may not
+        # occupy the screen for hours. Desk mode retains the original 5-minute
+        # confirmation clock.
+        return max(
+            int(settings.active_watch_confirmation_minutes),
+            bars * int(settings.active_confirmation_bar_minutes),
+        )
 
     @classmethod
     def _confirmation_description(cls, setup: TradeSetup) -> tuple[str, list[str]]:
@@ -435,7 +439,7 @@ class TradeEngineService:
     ) -> TradeSetup:
         now = self._utcnow()
         market_candle = market_candle or candle
-        watch_expires_at = now + timedelta(minutes=settings.setup_expiry_minutes)
+        watch_expires_at = now + timedelta(minutes=settings.active_setup_expiry_minutes)
         self._expired_watch = None
         self._reset_pending_candidate()
         trigger = self._finite_number(candidate.entry)
@@ -523,7 +527,7 @@ class TradeEngineService:
         tp1_r = round(reward1 / risk, 2)
         tp2_r = round(reward2 / risk, 2)
         effective_tp2_r = max(tp2_r, float(candidate.tp2_r or 0.0))
-        if effective_tp2_r < 2.0:
+        if effective_tp2_r < float(settings.active_min_tp2_r):
             return self._preview(candidate, "EXECUTION_RR_DEGRADED")
         tp2_r = effective_tp2_r
 
@@ -539,7 +543,7 @@ class TradeEngineService:
         updates = {
             "setup_id": setup_id or str(uuid4()),
             "timestamp": timestamp or now,
-            "valid_until": now + timedelta(minutes=settings.setup_expiry_minutes),
+            "valid_until": now + timedelta(minutes=settings.active_setup_expiry_minutes),
             "watch_started_at": watch_started_at,
             "watch_expires_at": watch_expires_at,
             "watch_phase": "PLAN_FILLED" if execution_type == "MARKET" else "PLAN_ARMED",
@@ -693,7 +697,13 @@ class TradeEngineService:
             distance = abs(float(market_candle.close) - float(trigger or market_candle.close))
             atr_value = self._finite_number(candidate.signals.get("atr")) if isinstance(candidate.signals, dict) else None
             near_watch = distance <= max((atr_value or 0.0) * 0.75, 1.0)
-            if self._is_watch_candidate(candidate) and same_direction and near_watch and watching.watch_touch_count < 2:
+            if (
+                not settings.scalper_mode_enabled
+                and self._is_watch_candidate(candidate)
+                and same_direction
+                and near_watch
+                and watching.watch_touch_count < 2
+            ):
                 extension = self._confirmation_window_minutes(candidate)
                 extended_to = min(watch_expires_at, now + timedelta(minutes=extension))
                 reason = (

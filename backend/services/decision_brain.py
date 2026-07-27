@@ -203,7 +203,7 @@ class DecisionBrainService:
             *,
             composite: bool,
         ) -> dict[str, Any]:
-            minimum_confidence = float(settings.setup_confidence_floor)
+            minimum_confidence = float(settings.active_setup_confidence_floor)
             minimum_freshness = 0.0
             cluster_quality_missing: list[str] = []
             if composite:
@@ -217,12 +217,12 @@ class DecisionBrainService:
 
             common_safety = bool(
                 setup.signals.get("target_not_blocked")
-                and (setup.tp2_r or 0.0) >= 2.0
+                and (setup.tp2_r or 0.0) >= float(settings.active_min_tp2_r)
                 and setup.confidence >= minimum_confidence
             )
             model_gate = bool(
                 primary.eligible
-                and primary.score >= settings.entry_model_arm_score
+                and primary.score >= settings.active_entry_model_arm_score
                 and model_confirmed
             )
             execution = select_execution(
@@ -241,6 +241,8 @@ class DecisionBrainService:
                 composite_score=cluster["score"],
                 stop_loss=setup.stop_loss,
                 source_model_key=single_primary.key if composite else primary.key,
+                minimum_tp2_r=settings.active_min_tp2_r,
+                scalper_mode=settings.scalper_mode_enabled,
             )
             if composite and execution.freshness_score < minimum_freshness:
                 cluster_quality_missing.append(
@@ -338,7 +340,7 @@ class DecisionBrainService:
         elif primary.eligible:
             waiting = model_missing + selected["cluster_quality_missing"]
             if not selected["common_safety"]:
-                waiting.append("target path, minimum 2R, or confidence safety")
+                waiting.append(f"target path, minimum {settings.active_min_tp2_r:.1f}R, or confidence safety")
             if not execution.executable:
                 waiting.append("fresh executable price")
             waiting = list(dict.fromkeys(waiting or ["execution freshness or common risk safety"]))
@@ -353,7 +355,7 @@ class DecisionBrainService:
             )
 
         status = "EXECUTION_READY" if actionable else "DEVELOPING" if (
-            primary.eligible and primary.score >= settings.setup_watch_model_score
+            primary.eligible and primary.score >= settings.active_setup_watch_model_score
         ) else "SCANNING"
         order_state = "ARMED" if actionable else "PREVIEW_ONLY"
 

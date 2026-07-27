@@ -1,3 +1,4 @@
+// Previous cache: tradeiq-v3.1.8-claude-radar-resilience-shell
 // Previous cache: tradeiq-v3.1.2-silent-real-entry-routing-shell
 // Previous cache: tradeiq-v3.1.1-flexible-cluster-tiers-shell
 // Previous cache: tradeiq-v3.0.9-chart-pipeline-integrity-shell
@@ -42,15 +43,15 @@
 // Previous cache: tradeiq-v3.1.5-visible-scanning-level-controls-shell
 // TradeIQ v3.1.6: audit-quality scoring, unique thesis lifecycle and separate trade/scanner logs.
 // TradeIQ v3.1.7: expiry-filtered GEX radar, strike OI/IV and intensity zones.
-// TradeIQ v3.1.8: resilient Claude SSE/JSON transport and transparent radar gates.
-const CACHE_NAME = "tradeiq-v3.1.8-claude-radar-resilience-shell";
+// TradeIQ v3.1.9: execution-first trader scalper engine and fast lifecycle expiry.
+const CACHE_NAME = "tradeiq-v3.1.9-trader-scalper-engine-shell";
 const APP_SHELL = [
   "/",
-  "/static/styles.css?v=318",
-  "/static/boot.js?v=318",
-  "/static/time.js?v=318",
-  "/static/app.js?v=318",
-  "/static/trading_chart.js?v=318",
+  "/static/styles.css?v=319",
+  "/static/boot.js?v=319",
+  "/static/time.js?v=319",
+  "/static/app.js?v=319",
+  "/static/trading_chart.js?v=319",
   "/static/manifest.webmanifest",
   "/static/favicon.svg",
   "/static/app-icon-192.png",
