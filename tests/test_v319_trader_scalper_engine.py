@@ -56,7 +56,7 @@ def test_scalper_mode_is_default_and_uses_fast_active_limits():
     assert settings.active_setup_expiry_minutes == 8
     assert settings.active_watch_confirmation_minutes == 2
     assert settings.active_confirmation_bar_minutes == 1
-    assert settings.active_direction_switch_confirm_bars == 1
+    assert settings.active_direction_switch_confirm_bars == 2
     assert settings.active_min_tp1_r == 0.8
     assert settings.active_min_tp2_r == 1.5
 

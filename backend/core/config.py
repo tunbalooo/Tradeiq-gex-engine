@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     scalp_setup_expiry_minutes: int = 8
     scalp_watch_confirmation_minutes: int = 2
     scalp_confirmation_bar_minutes: int = 1
-    scalp_direction_switch_confirm_bars: int = 1
+    scalp_direction_switch_confirm_bars: int = 2
     scalp_thesis_lock_max_minutes: int = 15
     scalp_setup_confidence_floor: float = 35.0
     scalp_setup_watch_model_score: float = 50.0

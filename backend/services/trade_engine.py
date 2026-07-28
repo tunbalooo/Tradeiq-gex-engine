@@ -896,8 +896,12 @@ class TradeEngineService:
                 return switched
 
         if not same_direction or not candidate_watchable:
-            immediate_opposite = bool(not same_direction and candidate.actionable)
-            stable = immediate_opposite or self._candidate_is_stable(candidate, candle)
+            # A single noisy poll can make the opposite side momentarily score
+            # higher and even look "actionable" from live price alone. Cancelling
+            # the watch on that one tick produced a visible give-it-then-yank-it
+            # flicker. The opposite direction must persist across a closed candle
+            # like every other direction/model switch before it replaces the watch.
+            stable = self._candidate_is_stable(candidate, candle)
             if not stable:
                 return watching.model_copy(update={
                     "last_processed_candle_time": candle.time,
@@ -905,9 +909,7 @@ class TradeEngineService:
                     **self._watch_observation_updates(market_candle),
                 })
             reason = (
-                "A confirmed opposite-direction setup replaced the monitored thesis."
-                if immediate_opposite
-                else "The monitoring candidate was cancelled after its required confirmations weakened across closed candles."
+                "The monitoring candidate was cancelled after its required confirmations weakened across closed candles."
                 if same_direction
                 else "The monitoring direction changed and the replacement remained stable across closed candles."
             )
@@ -1147,10 +1149,20 @@ class TradeEngineService:
             # A locked resting limit/stop is evaluated before fresh context can cancel it.
             # This prevents the exact fill interval from being mislabeled INVALIDATED.
             if not touched_entry:
-                if candidate.direction != active.direction and candidate.confidence >= settings.active_setup_actionable_score:
+                # The dual-direction scanner can hand back either side from one poll to
+                # the next on a near-tied score. Requiring the opposite side to remain
+                # the stronger candidate across a fresh closed candle (like every other
+                # direction switch) stops a single noisy tick from yanking an armed
+                # limit the moment it is shown.
+                if (
+                    candidate.direction != active.direction
+                    and candidate.confidence >= settings.active_setup_actionable_score
+                    and self._candidate_is_stable(candidate, candle)
+                ):
+                    self._reset_pending_candidate()
                     return self._transition(
                         active, "INVALIDATED", candle,
-                        "A strong opposite-direction setup invalidated the unfilled plan.",
+                        "A strong opposite-direction setup invalidated the unfilled plan after remaining stable across closed candles.",
                         actionable=False, closed_at=now, outcome="OPPOSITE_SETUP", **observation,
                     )
                 if not candidate.actionable and (candidate.confidence < 50 or not candidate.signals.get("gex_alignment") or candidate.cluster_score < .35):
