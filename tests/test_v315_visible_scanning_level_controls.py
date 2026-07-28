@@ -8,8 +8,10 @@ MAIN = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 SW = (ROOT / "frontend" / "service-worker.js").read_text(encoding="utf-8")
 
 
-def test_full_levels_are_default_and_clean_is_optional():
-    assert "clean: false" in APP
+def test_grouped_clean_levels_are_default_and_can_be_expanded():
+    # v3.2 declutters the chart by default: grouped confluence clusters replace
+    # a raw line per OTE/zone/GEX level unless the trader opts into full detail.
+    assert "clean: true" in APP
     assert 'scan: true' in APP
     assert 'map: true' in APP
     assert 'data-overlay="clean" title="Compact the active overlays"' in INDEX
@@ -29,13 +31,13 @@ def test_live_scan_is_visible_but_does_not_publish_entry_prices():
     assert 'Entry (publishes when valid)' in APP
     assert '$("setupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";' in APP
     assert '$("chartSetupEntry").textContent = lockedPlan ? fmt(setup.entry) : "—";' in APP
-    assert '`${scanState} ${setup.direction} · ${scanModel} · NO ORDER`' in CHART
+    assert '`${scanState} ${setup.direction} · ${scanModel} · NO ORDER${stackText}`' in CHART
 
 
 def test_all_enabled_raw_levels_render_when_clean_is_off():
     assert '(setup.gex.levels || []).forEach((level) =>' in CHART
     assert ': (setup.zones || []);' in CHART
-    assert 'if (marketMapVisible) renderCleanMarketMapLines(instance, setup);' in CHART
+    assert 'if (marketMapVisible) renderCleanMarketMapLines(instance, setup, cleanMode);' in CHART
     assert 'const marketMapVisible = overlays.map && setup.market_map;' in CHART
 
 

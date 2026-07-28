@@ -71,7 +71,7 @@ const COLORS = {
 };
 const ACTIVE_TRADE_STATES = new Set(["WAITING_FOR_LIMIT", "FILLED", "TP1_HIT"]);
 const DEFAULT_OVERLAYS = {
-  clean: false,
+  clean: true,
   scan: true,
   map: true,
   emas: true,
@@ -177,6 +177,8 @@ const state = {
   timelineLifecycleKey: null,
   marketOpportunities: [],
   marketRadarStatus: null,
+  bestSetup: null,
+  lastGexSnapshotId: null,
   seenOpportunityIds: new Set(JSON.parse(localStorage.getItem("tradeiq-seen-opportunities") || "[]")),
   marketCache: {},
   deskTab: localStorage.getItem("tradeiq-desk-tab") || "setup",
@@ -349,6 +351,39 @@ async function loadMarketRadar(announce = false) {
     state.marketRadarStatus = { running: false, last_error: error.message };
     renderMarketRadar();
   }
+}
+
+function renderBestSetupBadge() {
+  const badge = $("bestSetupBadge");
+  if (!badge) return;
+  const best = state.bestSetup;
+  badge.classList.remove("grade-actionable", "grade-developing", "grade-none");
+  if (!best) {
+    badge.textContent = "BEST SETUP —";
+    badge.title = "Highest-graded setup across every watched market";
+    badge.classList.add("grade-none");
+    return;
+  }
+  const direction = best.direction && best.direction !== "NONE" ? best.direction : "SCANNING";
+  const gradeText = best.actionable ? best.trade_grade : (best.model_score || 0).toFixed(0) + "%";
+  badge.textContent = `BEST ${best.symbol} ${direction} ${gradeText}`;
+  badge.classList.add(best.actionable ? "grade-actionable" : "grade-developing");
+  const reason = best.reason ? ` — ${best.reason}` : "";
+  badge.title = `${best.symbol} ${direction} · ${best.primary_model || "no model yet"} · ${best.status || ""}${reason}`;
+}
+
+async function loadBestSetup() {
+  try {
+    const payload = await fetch("/api/best-setup").then((response) => {
+      if (!response.ok) throw new Error(`Best-setup request failed (${response.status})`);
+      return response.json();
+    });
+    state.bestSetup = payload.best || null;
+  } catch (error) {
+    console.error(error);
+    state.bestSetup = null;
+  }
+  renderBestSetupBadge();
 }
 
 function setDeskTab(tab) {
@@ -1280,12 +1315,18 @@ function marketMapClusterText(cluster) {
   return `${tier} ${cluster.role} · ${Number(cluster.score || 0).toFixed(0)}% · ${stateName}`;
 }
 
+function confluenceStackLabel(setup) {
+  const labels = setup?.composite_cluster_active_category_labels;
+  if (!Array.isArray(labels) || labels.length < 2) return "";
+  return ` · ${labels.length}-FACTOR (${labels.join(" + ")})`;
+}
+
 function clusterDisplay(setup) {
+  if (setup?.composite_cluster_eligible) {
+    return `${clusterTierName(setup)} · ${Number(setup.composite_cluster_score || 0).toFixed(0)}%${confluenceStackLabel(setup)}`;
+  }
   const activeMap = setup?.market_map?.active_cluster;
   if (activeMap) return marketMapClusterText(activeMap);
-  if (setup?.composite_cluster_eligible) {
-    return `${clusterTierName(setup)} · ${Number(setup.composite_cluster_score || 0).toFixed(0)}%`;
-  }
   if (setup?.cluster_low != null) {
     return `${fmt(setup.cluster_low)}–${fmt(setup.cluster_high)} · ${(Number(setup.cluster_score || 0) * 100).toFixed(0)}%`;
   }
@@ -1371,7 +1412,9 @@ function renderTradeSetup(setup) {
   $("setupDirection").textContent = lockedPlan || visibleScan ? `${setup.direction} ${setup.direction === "LONG" ? "↑" : "↓"}` : "WAITING";
   $("setupDirection").className = `v ${lockedPlan || visibleScan ? classForDirection(setup.direction) : "a"}`;
   const triggerName = setup.trigger_entry_model || setup.primary_entry_model;
-  $("setupModel").textContent = setup.primary_entry_model ? `${setup.primary_entry_model} · trigger: ${triggerName || "—"}` : "—";
+  $("setupModel").textContent = setup.primary_entry_model
+    ? `${setup.primary_entry_model} · trigger: ${triggerName || "—"}${confluenceStackLabel(setup)}`
+    : "—";
   $("setupBackups").textContent = (setup.alternative_entry_models || []).slice(0, 3).join(" · ") || "—";
   if ($("setupGradeLabel")) $("setupGradeLabel").textContent = qualityView.label;
   $("setupGrade").textContent = qualityView.grade;
@@ -1395,6 +1438,15 @@ function renderTradeSetup(setup) {
         : "Scanning for a valid setup";
   $("setupStatus").textContent = statusText;
   $("setupStatus").className = `v ${setup.actionable || activeStates.includes(setup.order_state) ? "g" : visibleScan ? "b" : "a"}`;
+  if ($("setupLifecycleStage")) {
+    const stage = String(setup.display_stage || "SCANNING");
+    $("setupLifecycleStage").textContent = stage.replaceAll("_", " ");
+    const stageClass = ["LIMIT_READY", "FILLED", "MANAGING"].includes(stage) ? "g"
+      : ["MONITORING", "AT_LOCATION"].includes(stage) ? "a"
+        : ["CANCELLED", "INVALIDATED", "EXPIRED"].includes(stage) ? "r"
+          : "m";
+    $("setupLifecycleStage").className = `v ${stageClass}`;
+  }
   $("setupCluster").textContent = clusterDisplay(setup);
   $("setupCluster").className = `v ${setup.market_map?.active_cluster?.actionable_location || setup.signals?.gex_ote_zone_cluster ? "g" : "a"}`;
   $("setupSession").textContent = state.session?.display_name || "—";
@@ -1471,6 +1523,35 @@ function renderChartTradeSetup(setup, context) {
 // SCANNING QUIETLY — NO ACTIONABLE ENTRY
 // rankings publish with a validated entry
 
+function renderGexSnapshotWindow(gex = {}) {
+  const el = $("gexSnapshotWindow");
+  if (el) {
+    if (gex.valid_from && gex.valid_until) {
+      el.textContent = `${formatAppTime(gex.valid_from)} → ${formatAppTime(gex.valid_until)}`;
+    } else {
+      el.textContent = "—";
+    }
+  }
+  if (gex.snapshot_id && gex.snapshot_id !== state.lastGexSnapshotId) {
+    const isFirstSnapshotSeen = state.lastGexSnapshotId === null;
+    state.lastGexSnapshotId = gex.snapshot_id;
+    const previous = gex.previous_snapshot;
+    if (!isFirstSnapshotSeen && previous) {
+      const changes = [];
+      if (Number.isFinite(previous.put_wall) && Math.abs(previous.put_wall - gex.put_wall) > 1e-6) {
+        changes.push(`Put Support ${fmt(previous.put_wall)} → ${fmt(gex.put_wall)}`);
+      }
+      if (Number.isFinite(previous.call_wall) && Math.abs(previous.call_wall - gex.call_wall) > 1e-6) {
+        changes.push(`Call Wall ${fmt(previous.call_wall)} → ${fmt(gex.call_wall)}`);
+      }
+      if (Number.isFinite(previous.gamma_flip) && Math.abs(previous.gamma_flip - gex.gamma_flip) > 1e-6) {
+        changes.push(`Gamma Flip ${fmt(previous.gamma_flip)} → ${fmt(gex.gamma_flip)}`);
+      }
+      if (changes.length) toast(`GEX snapshot updated — ${changes.join(" · ")}`);
+    }
+  }
+}
+
 function renderGexSummary(setup) {
   const gex = setup.gex;
   $("gexRegime").textContent = `${gex.regime.charAt(0)}${gex.regime.slice(1).toLowerCase()} Gamma`;
@@ -1487,6 +1568,7 @@ function renderGexSummary(setup) {
   $("priceVsFlip").className = `v ${above ? "g" : "r"}`;
   const sourceEl = $("gexSource");
   if (sourceEl) sourceEl.textContent = gex.source_label || gex.source || "—";
+  renderGexSnapshotWindow(gex);
   const normalized = 50 + Math.tanh(gex.net_gex / 1e9) * 42;
   const needlePosition = Math.max(2, Math.min(98, normalized));
   $("gexNeedle").style.left = `${needlePosition}%`;
@@ -1881,6 +1963,7 @@ async function initialLoad() {
     processMarketOpportunities(radar?.items || [], radar?.status || null, false);
     cacheCurrentMarket();
     loadEconomicCalendar();
+    loadBestSetup();
     connectWebSocket();
   } catch (error) {
     console.error(error);
@@ -2549,5 +2632,10 @@ setInterval(() => {
 }, 300000);
 setInterval(loadEconomicCalendar, 900000);
 setInterval(() => loadMarketRadar(true), 60000);
+setInterval(loadBestSetup, 45000);
+$("bestSetupBadge")?.addEventListener("click", () => {
+  const best = state.bestSetup;
+  if (best && best.symbol && best.symbol !== activeSymbol()) switchMarket(best.symbol);
+});
 
 setInterval(tick, 1000); tick(); initialLoad();

@@ -167,6 +167,7 @@ class DecisionBrainService:
         cluster_confirmed_models: list[str] = []
 
         if cluster["eligible"] and eligible and len(ranking) >= 2:
+            factor_text = " + ".join(cluster.get("active_category_labels") or [])
             cluster_primary = EntryModelScore(
                 key="INSTITUTIONAL_CONFLUENCE_CLUSTER",
                 name="Institutional Confluence Cluster",
@@ -177,7 +178,7 @@ class DecisionBrainService:
                 trigger_price=single_primary.trigger_price,
                 invalidation_price=single_primary.invalidation_price,
                 reason=[
-                    f"{cluster['category_count']} independent evidence categories",
+                    f"Aligned: {factor_text}" if factor_text else f"{cluster['category_count']} independent evidence categories",
                     f"{cluster['tier'].replace('_', ' ').title()} cluster",
                 ],
                 missing=[],
@@ -330,9 +331,12 @@ class DecisionBrainService:
             setup=setup, profile=profile, trigger_model_key=trigger_model.key, location=location_reference,
         )
 
+        cluster_factor_text = " + ".join(cluster.get("active_category_labels") or []) if using_cluster else ""
+        cluster_prefix = f"Confluence ({cluster_factor_text}) qualified this location. " if cluster_factor_text else ""
+
         if actionable:
             reason = (
-                f"{primary.name} ranks first at {primary.score:.1f}%. "
+                f"{cluster_prefix}{primary.name} ranks first at {primary.score:.1f}%. "
                 f"Adaptive execution selected {execution.execution_type}: {execution.reason}"
             )
             if not using_cluster and cluster_eval is not None and prefer_cluster and not cluster_eval["actionable"]:
@@ -345,12 +349,12 @@ class DecisionBrainService:
                 waiting.append("fresh executable price")
             waiting = list(dict.fromkeys(waiting or ["execution freshness or common risk safety"]))
             reason = (
-                f"{primary.name} ranks first at {primary.score:.1f}%, but execution is waiting for: "
+                f"{cluster_prefix}{primary.name} ranks first at {primary.score:.1f}%, but execution is waiting for: "
                 f"{', '.join(waiting)}."
             )
         else:
             reason = (
-                f"{primary.name} is the strongest developing model at {primary.score:.1f}%, "
+                f"{cluster_prefix}{primary.name} is the strongest developing model at {primary.score:.1f}%, "
                 f"but is missing: {', '.join(primary.missing) or 'mandatory confirmation'}."
             )
 
@@ -382,6 +386,7 @@ class DecisionBrainService:
             "composite_cluster_eligible": cluster["eligible"],
             "composite_cluster_tier": cluster["tier"],
             "composite_cluster_active_categories": cluster["active_categories"],
+            "composite_cluster_active_category_labels": cluster["active_category_labels"],
             "composite_cluster_categories": cluster["categories"],
             "composite_cluster_contributors": cluster["contributors"],
             "execution_type": execution.execution_type,
@@ -451,6 +456,7 @@ class DecisionBrainService:
                 "eligible": setup.composite_cluster_eligible,
                 "tier": setup.composite_cluster_tier,
                 "active_categories": setup.composite_cluster_active_categories,
+                "active_category_labels": setup.composite_cluster_active_category_labels,
                 "categories": setup.composite_cluster_categories,
                 "contributors": setup.composite_cluster_contributors,
             },

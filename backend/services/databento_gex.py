@@ -78,6 +78,9 @@ class DatabentoGexService:
         self._summary_cache: dict[str, GexSummary] = {}
         self._summary_cache_key: str | None = None
         self._summary_reference_price: dict[str, float] = {}
+        # Retained across a refresh (unlike _summary_cache, which is cleared) so a
+        # freshly rebuilt snapshot can show what changed from the prior one.
+        self._previous_levels: dict[str, dict[str, Any]] = {}
         self.updated_at: datetime | None = None
         self.last_error: str | None = None
         self.refreshing = False
@@ -120,6 +123,7 @@ class DatabentoGexService:
                 self._summary_cache = {}
                 self._summary_cache_key = None
                 self._summary_reference_price = {}
+                self._previous_levels = {}
                 self.updated_at = None
             self.last_error = None
         if settings.use_databento:
@@ -155,6 +159,17 @@ class DatabentoGexService:
             if _profile_key(self.profile) != key:
                 return False
             with self._lock:
+                # Capture what the previous snapshot looked like before it is
+                # replaced, so the next get_summary() can report an auditable
+                # old-vs-new diff instead of silently jumping to new levels.
+                if self._positions_key == key and self._summary_cache_key == key:
+                    for mode, previous in self._summary_cache.items():
+                        self._previous_levels[mode] = {
+                            "put_wall": previous.put_wall,
+                            "call_wall": previous.call_wall,
+                            "gamma_flip": previous.gamma_flip,
+                            "updated_at": previous.updated_at.isoformat() if previous.updated_at else None,
+                        }
                 self._positions = positions
                 self._positions_key = key
                 self._summary_cache = {}
@@ -393,6 +408,8 @@ class DatabentoGexService:
             available_expiry_filters=available,
             expiry_counts=counts,
         )
+        window_seconds = max(settings.gex_refresh_seconds, 60)
+        valid_from = updated_at or datetime.now(timezone.utc)
         raw.update(
             {
                 "source": f"databento-native-{profile.gex_source_symbol.lower()}",
@@ -405,6 +422,10 @@ class DatabentoGexService:
                 "options_parent": profile.options_parent,
                 "source_label": profile.gex_source_label,
                 "is_parent_market": profile.uses_parent_gex,
+                "snapshot_id": f"{key}:{valid_from.isoformat()}",
+                "valid_from": valid_from,
+                "valid_until": valid_from + timedelta(seconds=window_seconds),
+                "previous_snapshot": self._previous_levels.get(mode),
             }
         )
         summary = GexSummary(**raw)

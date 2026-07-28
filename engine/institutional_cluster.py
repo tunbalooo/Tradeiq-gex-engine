@@ -21,6 +21,24 @@ CATEGORY_WEIGHTS = {
     "imbalance": 14.0,
     "liquidity_structure": 22.0,
     "trend_value": 14.0,
+    "higher_tf_trend": 12.0,
+    "mtf_structure": 10.0,
+    "cross_market": 8.0,
+}
+
+# Human-readable names for the same categories, so a qualified cluster can say
+# exactly which factors aligned (e.g. "GEX + Supply/Demand Zone + Fib/OTE
+# Retracement") instead of only a generic category count.
+CATEGORY_LABELS = {
+    "gex": "GEX",
+    "zone": "Supply/Demand Zone",
+    "retracement": "Fib/OTE Retracement",
+    "imbalance": "FVG Imbalance",
+    "liquidity_structure": "Liquidity/Structure",
+    "trend_value": "EMA 9/21/55 Trend",
+    "higher_tf_trend": "EMA 50/100/200 Trend",
+    "mtf_structure": "5m/15m Structure Alignment",
+    "cross_market": "Cross-Market Correlation",
 }
 
 
@@ -85,6 +103,9 @@ def build_cluster_score(
             _q(signals.get("displacement")),
         ),
         "trend_value": max(_q(signals.get("trend_alignment")), _q(signals.get("vwap_alignment"))),
+        "higher_tf_trend": _q(signals.get("long_term_ema_alignment")),
+        "mtf_structure": _q(signals.get("htf_alignment")),
+        "cross_market": _q(signals.get("cross_market_alignment")),
     }
 
     weighted_total = sum(CATEGORY_WEIGHTS[key] * categories[key] for key in CATEGORY_WEIGHTS)
@@ -133,5 +154,6 @@ def build_cluster_score(
         "categories": {key: round(categories[key] * CATEGORY_WEIGHTS[key], 1) for key in categories},
         "category_quality": {key: round(categories[key] * 100.0, 1) for key in categories},
         "active_categories": active,
+        "active_category_labels": [CATEGORY_LABELS[key] for key in active],
         "contributors": contributors,
     }

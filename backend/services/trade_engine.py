@@ -153,6 +153,47 @@ class TradeEngineService:
         return bool((current_contains and not prior_contains) or crossed_by_latest_price)
 
     @classmethod
+    def _zone_touched_after(
+        cls,
+        zone_low: float | None,
+        zone_high: float | None,
+        candle,
+        *,
+        observed_candle_time: datetime | None,
+        observed_low: float | None,
+        observed_high: float | None,
+        observed_close: float | None,
+    ) -> bool:
+        """Zone variant of _level_touched_after: entering any part of
+        [zone_low, zone_high] counts as a touch, not only crossing one exact
+        price. A confluence is a range, not a single tick.
+        """
+        if zone_low is None or zone_high is None:
+            return False
+        lo, hi = (float(zone_low), float(zone_high)) if zone_low <= zone_high else (float(zone_high), float(zone_low))
+        current_low = float(candle.low)
+        current_high = float(candle.high)
+        current_close = float(candle.close)
+        current_contains = current_low <= hi and current_high >= lo
+        if observed_candle_time is None:
+            return current_contains
+        if candle.time > observed_candle_time:
+            return current_contains
+        if candle.time < observed_candle_time:
+            return False
+        prior_contains = bool(
+            observed_low is not None and observed_high is not None
+            and float(observed_low) <= hi and float(observed_high) >= lo
+        )
+        crossed_by_latest_price = bool(
+            observed_close is not None
+            and min(float(observed_close), current_close) <= hi
+            and max(float(observed_close), current_close) >= lo
+            and float(observed_close) != current_close
+        )
+        return bool((current_contains and not prior_contains) or crossed_by_latest_price)
+
+    @classmethod
     def _watch_observation_updates(cls, candle) -> dict[str, object]:
         observed = cls._observation(candle)
         return {
@@ -433,6 +474,25 @@ class TradeEngineService:
         missing = [str(item) for item in (contract.get("missing") or [])]
         return label, missing
 
+    def _resolve_watch_zone(self, candidate: TradeSetup, trigger: float | None) -> tuple[float | None, float | None]:
+        """Validate the candidate's zone against its own trigger rather than
+        trusting it blindly: a stale or mismatched zone (e.g. entry overridden
+        after the zone was computed) would otherwise arm touch detection
+        against the wrong price range.
+        """
+        if trigger is None:
+            return None, None
+        zone_low = self._finite_number(candidate.watch_zone_low)
+        zone_high = self._finite_number(candidate.watch_zone_high)
+        tick_size = get_instrument(candidate.symbol).tick_size
+        if zone_low is not None and zone_high is not None:
+            lo, hi = min(zone_low, zone_high), max(zone_low, zone_high)
+            if lo - tick_size <= trigger <= hi + tick_size:
+                return zone_low, zone_high
+        atr_value = self._finite_number(candidate.atr) or 0.0
+        band = max(atr_value * 0.15, tick_size * 4, tick_size)
+        return trigger - band, trigger + band
+
     def _start_watching(
         self, candidate: TradeSetup, candle, *, market_candle=None,
         setup_id: str | None = None, timestamp: datetime | None = None,
@@ -445,9 +505,15 @@ class TradeEngineService:
         trigger = self._finite_number(candidate.entry)
         confirmation_label, missing_confirmation = self._confirmation_description(candidate)
         missing_text = ", ".join(missing_confirmation[:3]) or confirmation_label
+        zone_low, zone_high = self._resolve_watch_zone(candidate, trigger)
+        location_text = (
+            f"in the {zone_low:,.2f}–{zone_high:,.2f} zone (preferred entry {trigger:,.2f})"
+            if zone_low is not None and zone_high is not None
+            else f"near {trigger:,.2f}"
+        )
         transition_reason = (
             f"TradeIQ is monitoring a {candidate.direction.lower()} {candidate.primary_entry_model or 'entry'} "
-            f"candidate near {trigger:,.2f}. No order is armed. Waiting for {missing_text}."
+            f"candidate {location_text}. No order is armed. Waiting for {missing_text}."
         )
         watching = candidate.model_copy(deep=True, update={
             "setup_id": setup_id or str(uuid4()),
@@ -457,6 +523,8 @@ class TradeEngineService:
             "watch_expires_at": watch_expires_at,
             "watch_trigger": trigger,
             "watch_invalidation": self._primary_model_invalidation(candidate),
+            "watch_zone_low": zone_low,
+            "watch_zone_high": zone_high,
             "watch_phase": "WAITING_FOR_PRICE",
             "watch_touch_at": None,
             "watch_touch_price": None,
@@ -734,8 +802,11 @@ class TradeEngineService:
                 actionable=False, closed_at=now, outcome="UNCONFIRMED_TOUCH",
             )
 
-        touched_now = self._level_touched_after(
-            trigger,
+        zone_low = self._finite_number(watching.watch_zone_low)
+        zone_high = self._finite_number(watching.watch_zone_high)
+        touched_now = self._zone_touched_after(
+            zone_low if zone_low is not None else trigger,
+            zone_high if zone_high is not None else trigger,
             market_candle,
             observed_candle_time=watching.watch_observed_candle_time,
             observed_low=watching.watch_observed_low,
@@ -1076,7 +1147,7 @@ class TradeEngineService:
             # A locked resting limit/stop is evaluated before fresh context can cancel it.
             # This prevents the exact fill interval from being mislabeled INVALIDATED.
             if not touched_entry:
-                if candidate.direction != active.direction and candidate.confidence >= settings.setup_actionable_score:
+                if candidate.direction != active.direction and candidate.confidence >= settings.active_setup_actionable_score:
                     return self._transition(
                         active, "INVALIDATED", candle,
                         "A strong opposite-direction setup invalidated the unfilled plan.",

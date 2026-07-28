@@ -439,7 +439,7 @@
       const ctx = canvas.getContext("2d");
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = "#090F18";
+      ctx.fillStyle = "#131722";
       ctx.fillRect(0, 0, width, height);
 
       const raw = Array.isArray(payload?.candles) ? payload.candles : [];
@@ -528,7 +528,7 @@
         values.forEach((item, index) => {
           const x = (index + 0.5) * step;
           const up = item.close >= item.open;
-          const color = up ? "#26D07C" : "#FF4D5E";
+          const color = up ? "#26a69a" : "#ef5350";
           ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
           ctx.beginPath(); ctx.moveTo(x, toY(item.high)); ctx.lineTo(x, toY(item.low)); ctx.stroke();
           const yOpen = toY(item.open); const yClose = toY(item.close);
@@ -537,7 +537,7 @@
       }
 
       if (overlays.emas) {
-        [[9,"#F5B93B"],[21,"#48A3FF"],[55,"#A98BFF"]].forEach(([period,color]) => {
+        [[9,"#F5B93B"],[21,"#48A3FF"],[55,"#A98BFF"],[50,"#3DDC97"],[100,"#FF8A65"],[200,"#8D9DB5"]].forEach(([period,color]) => {
           const series = simpleEma(values, period).map((value, index) => ({ x: (index + .5) * step, value }));
           linePath(ctx, series, toY, color, 1);
         });
@@ -549,7 +549,7 @@
       values.forEach((item, index) => {
         const x = (index + .5) * step;
         const barHeight = Number(item.volume || 0) / maxVolume * Math.max(2, volumeBottom - volumeTop);
-        ctx.fillStyle = item.close >= item.open ? "rgba(38,208,124,.42)" : "rgba(255,77,94,.42)";
+        ctx.fillStyle = item.close >= item.open ? "rgba(38,166,154,.42)" : "rgba(239,83,80,.42)";
         ctx.fillRect(x - bodyWidth / 2, volumeBottom - barHeight, bodyWidth, barHeight);
       });
 
@@ -684,17 +684,20 @@
   }
 
   const COLORS = {
-    background: "#090F18",
+    background: "#131722",
     text: "#8492A6",
-    grid: "rgba(135, 151, 173, 0.075)",
-    border: "#1A2636",
-    green: "#26D07C",
-    red: "#FF4D5E",
+    grid: "rgba(42, 46, 57, 0.55)",
+    border: "#2A2E39",
+    green: "#26a69a",
+    red: "#ef5350",
     amber: "#F5B93B",
     blue: "#48A3FF",
     purple: "#A98BFF",
     vwap: "#E4D06F",
     muted: "#58677A",
+    ema50: "#3DDC97",
+    ema100: "#FF8A65",
+    ema200: "#8D9DB5",
   };
 
   const instances = new Map();
@@ -845,7 +848,7 @@
     return candles.map((candle) => ({
       time: candle.time,
       value: Number(candle.volume || 0),
-      color: candle.close >= candle.open ? "rgba(38,208,124,.38)" : "rgba(255,77,94,.38)",
+      color: candle.close >= candle.open ? "rgba(38,166,154,.38)" : "rgba(239,83,80,.38)",
     }));
   }
 
@@ -947,8 +950,8 @@
       },
       crosshair: {
         mode: LC.CrosshairMode?.Normal ?? 0,
-        vertLine: { color: "rgba(200,210,224,.65)", width: 1, style: dashed, labelBackgroundColor: "#303B4B" },
-        horzLine: { color: "rgba(200,210,224,.65)", width: 1, style: dashed, labelBackgroundColor: "#303B4B" },
+        vertLine: { color: "#758696", width: 1, style: dashed, labelBackgroundColor: "#131722" },
+        horzLine: { color: "#758696", width: 1, style: dashed, labelBackgroundColor: "#131722" },
       },
       rightPriceScale: {
         visible: true,
@@ -1047,6 +1050,9 @@
     const ema9 = chart.addSeries(LC.LineSeries, { color: COLORS.amber, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const ema21 = chart.addSeries(LC.LineSeries, { color: COLORS.blue, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const ema55 = chart.addSeries(LC.LineSeries, { color: COLORS.purple, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    const ema50 = chart.addSeries(LC.LineSeries, { color: COLORS.ema50, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    const ema100 = chart.addSeries(LC.LineSeries, { color: COLORS.ema100, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    const ema200 = chart.addSeries(LC.LineSeries, { color: COLORS.ema200, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const volumeSeries = chart.addSeries(LC.HistogramSeries, {
       priceScaleId: "volume",
       priceFormat: { type: "volume" },
@@ -1073,6 +1079,9 @@
       ema9,
       ema21,
       ema55,
+      ema50,
+      ema100,
+      ema200,
       volumeSeries,
       overlayCanvas,
       dataState,
@@ -1273,7 +1282,7 @@
     instance.priceLines.push(line);
   }
 
-  function cleanPriorityZones(instance, setup) {
+  function cleanPriorityZones(instance, setup, limit = 3) {
     const zones = (setup?.zones || []).filter((zone) =>
       Number.isFinite(Number(zone.low)) && Number.isFinite(Number(zone.high)) && Number(zone.high) >= Number(zone.low)
     );
@@ -1302,7 +1311,7 @@
       if (deduped.some((other) => Math.abs(mid - (Number(other.low) + Number(other.high)) / 2) < atr * .18)) return;
       deduped.push(zone);
     });
-    return deduped.slice(0, 3);
+    return deduped.slice(0, limit);
   }
 
   function marketMapColor(cluster, opposing = false) {
@@ -1315,14 +1324,18 @@
     const tier = String(cluster.tier || "CLUSTER").replaceAll("_", " ");
     const state = String(cluster.state || "").replaceAll("_", " ");
     const lead = prefix ? `${prefix} · ` : "";
-    return `${lead}${tier} ${cluster.role} · ${Number(cluster.score || 0).toFixed(0)}%${state ? ` · ${state}` : ""}`;
+    const contributors = Array.isArray(cluster.contributors)
+      ? cluster.contributors.map((item) => item.label).filter(Boolean).slice(0, 3)
+      : [];
+    const contributorText = contributors.length ? ` (${contributors.join(" + ")})` : "";
+    return `${lead}${tier} ${cluster.role} · ${Number(cluster.score || 0).toFixed(0)}%${contributorText}${state ? ` · ${state}` : ""}`;
   }
 
-  function renderCleanMarketMapLines(instance, setup) {
+  function renderCleanMarketMapLines(instance, setup, cleanMode) {
     const map = setup?.market_map;
     if (!map) return false;
     const chosen = [];
-    const add = (cluster, prefix, opposing = false) => {
+    const add = (cluster, prefix, { opposing = false, style = dashed, width = 2 } = {}) => {
       if (!cluster || chosen.some((item) => item.cluster_id === cluster.cluster_id)) return;
       chosen.push(cluster);
       addPriceLine(
@@ -1330,18 +1343,30 @@
         cluster.midpoint,
         marketMapTitle(cluster, prefix),
         marketMapColor(cluster, opposing),
-        opposing ? dotted : dashed,
-        opposing ? 1 : 2,
+        style,
+        width,
         true,
       );
     };
-    add(map.active_cluster, "ACTIVE CLUSTER", false);
-    add(map.opposing_cluster, "OPPOSING LIQUIDITY", true);
+    add(map.active_cluster, "ACTIVE CLUSTER", { style: dashed, width: 2 });
+    add(map.opposing_cluster, "OPPOSING LIQUIDITY", { opposing: true, style: dotted, width: 1 });
     if (!map.active_cluster) {
-      add(map.nearest_resistance, "NEAREST RESISTANCE", true);
-      add(map.nearest_support, "NEAREST SUPPORT", true);
+      add(map.nearest_resistance, "NEAREST RESISTANCE", { opposing: true, style: dotted, width: 1 });
+      add(map.nearest_support, "NEAREST SUPPORT", { opposing: true, style: dotted, width: 1 });
+    }
+    // In grouped/clean mode, the rest of the ranked ladder replaces individual
+    // OTE/zone/GEX-node lines instead of stacking on top of them: each entry is
+    // already a labeled, scored confluence cluster with its contributors named.
+    if (cleanMode) {
+      (map.ladder || []).forEach((cluster) => add(cluster, "CLUSTER", { style: dotted, width: 1 }));
     }
     return chosen.length > 0;
+  }
+
+  function confluenceStackText(setup) {
+    const labels = setup?.composite_cluster_active_category_labels;
+    if (!Array.isArray(labels) || labels.length < 2) return "";
+    return ` · ${labels.length}-FACTOR (${labels.join(" + ")})`;
   }
 
   function rebuildPriceLines(instance) {
@@ -1357,10 +1382,20 @@
       const scanPrice = watchTrigger(setup);
       const scanModel = String(setup.primary_entry_model || "candidate").toUpperCase();
       const scanState = watchTriggerTouched(setup) ? "CONFIRMING" : "SCANNING";
-      addPriceLine(instance, scanPrice, `${scanState} ${setup.direction} · ${scanModel} · NO ORDER`, COLORS.amber, dotted, 1, true);
+      const stackText = confluenceStackText(setup);
+      const zoneLow = Number(setup.watch_zone_low);
+      const zoneHigh = Number(setup.watch_zone_high);
+      const hasZone = Number.isFinite(zoneLow) && Number.isFinite(zoneHigh) && zoneHigh > zoneLow;
+      if (hasZone) {
+        addPriceLine(instance, zoneHigh, `${scanState} ${setup.direction} ZONE · ${scanModel} · NO ORDER${stackText}`, COLORS.amber, dotted, 1, true);
+        addPriceLine(instance, zoneLow, "", COLORS.amber, dotted, 1, false);
+        addPriceLine(instance, scanPrice, "PREFERRED ENTRY", COLORS.amber, dashed, 1, true);
+      } else {
+        addPriceLine(instance, scanPrice, `${scanState} ${setup.direction} · ${scanModel} · NO ORDER${stackText}`, COLORS.amber, dotted, 1, true);
+      }
     }
     if (overlays.trade && hasLockedTradePlan(setup)) {
-      addPriceLine(instance, setup.entry, executionOrderLabel(setup), COLORS.amber, dashed, 2);
+      addPriceLine(instance, setup.entry, `${executionOrderLabel(setup)}${confluenceStackText(setup)}`, COLORS.amber, dashed, 2);
       addPriceLine(instance, initialStop(setup), "SL", COLORS.red, dashed, 2);
       if (Math.abs(activeStop(setup) - initialStop(setup)) > Number(instance.tickSize || .25) / 2)
         addPriceLine(instance, activeStop(setup), "ACTIVE SL / BE", COLORS.amber, dotted, 2);
@@ -1369,7 +1404,12 @@
     }
 
     const marketMapVisible = overlays.map && setup.market_map;
-    if (marketMapVisible) renderCleanMarketMapLines(instance, setup);
+    if (marketMapVisible) renderCleanMarketMapLines(instance, setup, cleanMode);
+    // In grouped/clean mode, the ranked ladder already represents OTE/Fib and
+    // supply/demand context as scored, contributor-labeled clusters. Drawing
+    // the raw per-level lines underneath them would just recreate the clutter
+    // the grouping is meant to remove.
+    const groupedByMarketMap = cleanMode && marketMapVisible;
 
     if (overlays.gex && setup.gex) {
       addPriceLine(instance, setup.gex.call_wall, "GAMMA RES / CALL WALL", COLORS.blue, dashed, 2);
@@ -1394,7 +1434,7 @@
         const fib618 = setup.direction === "LONG" ? zoneLow : zoneHigh;
         addPriceLine(instance, fib50, "FIB 50%", COLORS.amber, dotted, 2, true);
         addPriceLine(instance, fib618, "FIB 61.8%", COLORS.amber, dotted, 2, true);
-      } else {
+      } else if (!groupedByMarketMap) {
         const cleanRatios = [0.618, 0.705, 0.786];
         const fibs = cleanMode
           ? (setup.fib_levels || []).filter((level) => cleanRatios.some((ratio) => Math.abs(Number(level.ratio) - ratio) < .003))
@@ -1417,8 +1457,10 @@
     }
 
     if (overlays.zones) {
+      // Per the always-visible list, one nearest supply and one nearest demand
+      // zone remain even when grouped clusters replace everything else.
       const zones = cleanMode
-        ? cleanPriorityZones(instance, setup)
+        ? cleanPriorityZones(instance, setup, groupedByMarketMap ? 2 : 3)
         : (setup.zones || []);
       zones.forEach((zone) => {
         const color = zone.kind === "DEMAND" ? "#21875A" : "#9D3542";
@@ -1638,9 +1680,15 @@
       const e9 = emaData(candles, 9).at(-1);
       const e21 = emaData(candles, 21).at(-1);
       const e55 = emaData(candles, 55).at(-1);
+      const e50 = emaData(candles, 50).at(-1);
+      const e100 = emaData(candles, 100).at(-1);
+      const e200 = emaData(candles, 200).at(-1);
       if (e9) instance.ema9.update(e9);
       if (e21) instance.ema21.update(e21);
       if (e55) instance.ema55.update(e55);
+      if (e50) instance.ema50.update(e50);
+      if (e100) instance.ema100.update(e100);
+      if (e200) instance.ema200.update(e200);
     } else {
       instance.candleSeries.setData(candles);
       instance.closeSeries.setData(closeData(candles));
@@ -1648,6 +1696,9 @@
       instance.ema9.setData(emaData(candles, 9));
       instance.ema21.setData(emaData(candles, 21));
       instance.ema55.setData(emaData(candles, 55));
+      instance.ema50.setData(emaData(candles, 50));
+      instance.ema100.setData(emaData(candles, 100));
+      instance.ema200.setData(emaData(candles, 200));
       if (savedRange && instance.userInteracted) {
         requestAnimationFrame(() => instance.chart.timeScale().setVisibleLogicalRange(savedRange));
       }
@@ -1660,6 +1711,9 @@
     instance.ema9.applyOptions({ visible: Boolean(data.overlays?.emas) });
     instance.ema21.applyOptions({ visible: Boolean(data.overlays?.emas) });
     instance.ema55.applyOptions({ visible: Boolean(data.overlays?.emas) });
+    instance.ema50.applyOptions({ visible: Boolean(data.overlays?.emas) });
+    instance.ema100.applyOptions({ visible: Boolean(data.overlays?.emas) });
+    instance.ema200.applyOptions({ visible: Boolean(data.overlays?.emas) });
 
     if (instance.firstRender || !sameTimeframe || !sameSymbol) {
       instance.firstRender = false;

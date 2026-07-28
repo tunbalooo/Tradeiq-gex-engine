@@ -77,8 +77,8 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 @media(max-width:1100px){.page-shell.two-col{grid-template-columns:1fr}.workspace{grid-template-columns:minmax(0,1fr)}.right{grid-template-columns:repeat(2,minmax(0,1fr));display:grid}.right .panel:first-child{grid-row:span 2}}@media(max-width:760px){.app{grid-template-columns:1fr}.side{display:none}.bottom3,.footer3,.right{grid-template-columns:1fr}.page-stats{grid-template-columns:1fr 1fr}}
 
 /* v0.8 interactive TradingView-style chart surface. Dashboard layout and engines unchanged. */
-#chartWrap{height:400px;position:relative;background:#090f18}
-.tv-chart-surface{position:relative;width:100%;height:100%;overflow:hidden;background:#090f18}
+#chartWrap{height:400px;position:relative;background:#131722}
+.tv-chart-surface{position:relative;width:100%;height:100%;overflow:hidden;background:#131722}
 .tv-chart-surface.compact{height:400px}
 .tv-chart-surface.full{height:calc(100vh - 176px);min-height:560px}
 .tv-chart-host{position:absolute;inset:0;z-index:1}
@@ -271,7 +271,7 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 .source-chip.estimated{color:var(--amber);border-color:rgba(245,185,59,.34);background:rgba(245,185,59,.07)}
 
 /* v1.6: iOS/mobile chart reliability and full news timestamps. */
-.tradeiq-canvas-fallback{position:absolute;inset:0;display:block;width:100%;height:100%;background:#090f18}
+.tradeiq-canvas-fallback{position:absolute;inset:0;display:block;width:100%;height:100%;background:#131722}
 .news-datetime{min-width:150px;white-space:normal;line-height:1.35}
 
 @media (max-width:900px){
@@ -343,9 +343,9 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
   .tv-chart-layout{height:calc(100% - 102px);background:#080f17}
   .tv-workstation{height:100%!important;grid-template-columns:0 minmax(0,1fr);grid-template-rows:minmax(0,1fr) 43px;background:#080f17}
   .tv-workstation.mobile-pane-active{display:grid}.tv-left-tools{display:none}
-  .tv-chart-surface.full{grid-column:2;grid-row:1;height:100%!important;min-height:260px;background:#080f17;border:0}
-  .tv-chart-host{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;contain:none!important;background:#080f17}
-  .tradeiq-canvas-fallback{z-index:4;touch-action:none;background:#080f17}
+  .tv-chart-surface.full{grid-column:2;grid-row:1;height:100%!important;min-height:260px;background:#131722;border:0}
+  .tv-chart-host{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;contain:none!important;background:#131722}
+  .tradeiq-canvas-fallback{z-index:4;touch-action:none;background:#131722}
   .tv-ohlc.large{top:10px;left:12px;max-width:75%;padding:0;background:transparent;backdrop-filter:none;font:500 8.5px var(--mono);gap:5px}
   .tv-nav-controls,.large-nav,.chart-interaction-note{display:none!important}.tv-attribution{left:12px;right:auto;bottom:6px;font-size:7px;opacity:.65}
   .mobile-chart-footer{grid-column:1 / -1;grid-row:2;display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid #1b2a3a;background:#09111a}
@@ -490,6 +490,12 @@ table{width:100%;border-collapse:collapse}th{text-align:left;font-size:10px;lett
 .mode-badge.stale,.mode-badge.error{border-color:var(--red);color:var(--red);background:rgba(255,77,94,.07)}
 .feed-age{padding:2px 5px;border:1px solid var(--line2);border-radius:4px;color:var(--muted);white-space:nowrap}
 .feed-age.stale{border-color:rgba(255,77,94,.45);color:var(--red)}
+
+/* TradeIQ v3.1.9 — cross-market best-setup badge */
+.best-setup-badge{cursor:pointer;font-family:var(--mono);background:none}
+.best-setup-badge.grade-actionable{border-color:var(--green);color:var(--green);background:rgba(38,208,124,.06)}
+.best-setup-badge.grade-developing{border-color:var(--amber);color:var(--amber);background:rgba(245,185,59,.06)}
+.best-setup-badge.grade-none{opacity:.55;cursor:default}
 @media(max-width:900px){.live .feed-age{display:none}}
 
 /* TradeIQ v3.0.6 — timezone-aware setup history */

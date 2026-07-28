@@ -210,6 +210,9 @@ class MultiMarketMonitorService:
             current_price=latest.close,
             missing_gates=missing_gates,
             alertable=qualified and not active_market,
+            trade_quality_score=float(candidate.trade_quality_score or 0.0),
+            trade_grade=candidate.trade_grade or "—",
+            actionable=bool(candidate.actionable),
         )
         if opportunity.alertable:
             self._maybe_emit_alert(opportunity, now)

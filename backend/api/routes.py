@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
@@ -97,6 +99,79 @@ async def scan_multi_market_now(x_admin_token: str | None = Header(default=None)
     require_admin(x_admin_token)
     items = await multi_market_monitor_service.scan_once()
     return {"items": items, "status": multi_market_monitor_service.status()}
+
+
+def _best_setup_rank_key(candidate: dict) -> tuple:
+    # An actionable setup always outranks a merely developing one; trade_quality_score
+    # (location + confirmation + execution, from the Decision Brain) breaks ties among
+    # actionable setups, and a blended model/confidence score breaks ties when nothing
+    # anywhere is actionable yet.
+    return (
+        1 if candidate["actionable"] else 0,
+        round(float(candidate["trade_quality_score"] or 0.0), 2),
+        round(float(candidate["model_score"] or 0.0) * 0.5 + float(candidate["confidence"] or 0.0) * 0.5, 2),
+    )
+
+
+@router.get("/best-setup")
+def best_setup():
+    """Rank the single strongest setup across every symbol the radar watches.
+
+    The active chart's setup comes from the live, stateful trade engine (so its
+    order_state/actionable flag reflect the real lifecycle, not a re-derived
+    preview); every other symbol comes from the read-only Market Radar's last
+    scan. Both already carry the Decision Brain's trade_quality_score/trade_grade,
+    so ranking never invents a new scoring rule.
+    """
+    active_symbol = instrument_registry.active.symbol
+    live_setup = trade_engine_service.current_setup()
+    candidates: list[dict] = []
+
+    for item in multi_market_monitor_service.snapshot():
+        if item.symbol == active_symbol and live_setup is not None:
+            continue
+        candidates.append({
+            "symbol": item.symbol,
+            "display_symbol": item.display_symbol,
+            "is_active_market": item.active_market,
+            "direction": item.direction,
+            "actionable": item.actionable,
+            "status": item.status,
+            "primary_model": item.model,
+            "model_score": item.model_score,
+            "confidence": item.confidence,
+            "trade_quality_score": item.trade_quality_score,
+            "trade_grade": item.trade_grade,
+            "reason": item.reason,
+            "watch_price": item.watch_price,
+            "entry": None,
+        })
+
+    if live_setup is not None:
+        candidates.append({
+            "symbol": live_setup.symbol,
+            "display_symbol": get_instrument(live_setup.symbol).display_symbol,
+            "is_active_market": True,
+            "direction": live_setup.direction,
+            "actionable": bool(live_setup.actionable),
+            "status": live_setup.order_state,
+            "primary_model": live_setup.primary_entry_model,
+            "model_score": float(live_setup.primary_model_score or 0.0),
+            "confidence": float(live_setup.confidence or 0.0),
+            "trade_quality_score": float(live_setup.trade_quality_score or 0.0),
+            "trade_grade": live_setup.trade_grade or "—",
+            "reason": live_setup.model_selection_reason,
+            "watch_price": live_setup.watch_trigger if live_setup.watch_trigger is not None else live_setup.entry,
+            "entry": live_setup.entry,
+        })
+
+    ranked = sorted(candidates, key=_best_setup_rank_key, reverse=True)
+    return {
+        "generated_at": datetime.now(timezone.utc),
+        "best": ranked[0] if ranked else None,
+        "alternatives": ranked[1:3],
+        "candidates_considered": len(ranked),
+    }
 
 
 @router.get("/market/snapshot")
@@ -294,7 +369,7 @@ def read_settings():
         "gex_refresh_seconds": settings.gex_refresh_seconds,
         "engine_mode": "SCALPER" if settings.scalper_mode_enabled else "DESK",
         "scalper_mode_enabled": settings.scalper_mode_enabled,
-        "actionable_score": settings.setup_actionable_score,
+        "actionable_score": settings.active_setup_actionable_score,
         "expiry_minutes": settings.active_setup_expiry_minutes,
         "watch_confirmation_minutes": settings.active_watch_confirmation_minutes,
         "confirmation_bar_minutes": settings.active_confirmation_bar_minutes,

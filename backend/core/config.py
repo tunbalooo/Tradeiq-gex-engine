@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     nq_contract_multiplier: int = 20  # deprecated: instrument registry supplies multipliers
 
     setup_actionable_score: float = 75.0
+    scalp_setup_actionable_score: float = 58.0
     setup_confidence_floor: float = 45.0
     setup_watch_model_score: float = 58.0
     entry_model_arm_score: float = 72.0
@@ -162,6 +163,10 @@ class Settings(BaseSettings):
     @property
     def active_setup_watch_model_score(self) -> float:
         return self.scalp_setup_watch_model_score if self.scalper_mode_enabled else self.setup_watch_model_score
+
+    @property
+    def active_setup_actionable_score(self) -> float:
+        return self.scalp_setup_actionable_score if self.scalper_mode_enabled else self.setup_actionable_score
 
     @property
     def active_entry_model_arm_score(self) -> float:

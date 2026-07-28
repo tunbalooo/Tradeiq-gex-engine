@@ -180,9 +180,9 @@ def test_market_map_cluster_is_used_as_real_opposing_liquidity_target():
 
 
 def test_clean_chart_uses_ranked_map_instead_of_every_raw_level():
-    assert "function renderCleanMarketMapLines(instance, setup)" in CHART
-    assert 'add(map.active_cluster, "ACTIVE CLUSTER", false);' in CHART
-    assert 'add(map.opposing_cluster, "OPPOSING LIQUIDITY", true);' in CHART
+    assert "function renderCleanMarketMapLines(instance, setup, cleanMode)" in CHART
+    assert 'add(map.active_cluster, "ACTIVE CLUSTER", { style: dashed, width: 2 });' in CHART
+    assert 'add(map.opposing_cluster, "OPPOSING LIQUIDITY", { opposing: true, style: dotted, width: 1 });' in CHART
     assert "if (marketMapVisible && renderCleanMarketMapLines(instance, setup)) return;" in CHART
     assert "market-map-ladder" in APP
 

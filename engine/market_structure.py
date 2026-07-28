@@ -23,6 +23,55 @@ def _atr(candles: list[Candle], period: int = 14) -> float:
     return sum(selected) / len(selected) if selected else 1.0
 
 
+def _confirmed_pivots(window: list[Candle], wing: int) -> list[dict]:
+    """Confirmed swing high/low pivots: a local extreme with `wing` candles on
+    each side that are lower (for a high) or higher (for a low). A pivot can
+    only be confirmed once price has moved away from it for `wing` bars, so
+    the most recent pivot is always at least that many bars old — that lag is
+    the price of it being a real turning point rather than an arbitrary
+    rolling min/max.
+    """
+    pivots: list[dict] = []
+    for index in range(wing, len(window) - wing):
+        candle = window[index]
+        left = window[index - wing:index]
+        right = window[index + 1:index + 1 + wing]
+        if all(candle.high >= other.high for other in left) and all(candle.high >= other.high for other in right):
+            pivots.append({"index": index, "type": "HIGH", "price": float(candle.high)})
+        if all(candle.low <= other.low for other in left) and all(candle.low <= other.low for other in right):
+            pivots.append({"index": index, "type": "LOW", "price": float(candle.low)})
+    return pivots
+
+
+def _swing_points(window: list[Candle], wing: int = 3, fallback_bars: int = 35) -> tuple[float, float]:
+    """Return (swing_low, swing_high) for the most recent coherent leg.
+
+    Finds the most recently confirmed pivot, then the most recent
+    opposite-type pivot before it, so the pair belongs to one actual up/down
+    leg instead of two unrelated extremes. Falls back to a simple rolling
+    min/max when there aren't enough confirmed pivots yet (e.g. a strong
+    one-directional run, or too little history).
+    """
+    if window:
+        pivots = sorted(_confirmed_pivots(window, wing), key=lambda item: item["index"])
+        if pivots:
+            latest = pivots[-1]
+            opposite_type = "LOW" if latest["type"] == "HIGH" else "HIGH"
+            earlier_opposite = next(
+                (item for item in reversed(pivots[:-1]) if item["type"] == opposite_type), None,
+            )
+            if earlier_opposite is not None:
+                high_price = latest["price"] if latest["type"] == "HIGH" else earlier_opposite["price"]
+                low_price = latest["price"] if latest["type"] == "LOW" else earlier_opposite["price"]
+                if high_price > low_price:
+                    return low_price, high_price
+
+    fallback = window[-fallback_bars:] if window else []
+    if not fallback:
+        return 0.0, 0.0
+    return min(c.low for c in fallback), max(c.high for c in fallback)
+
+
 def analyze_market_structure(candles: list[Candle]) -> dict:
     if len(candles) < 60:
         last = candles[-1] if candles else None
@@ -39,6 +88,8 @@ def analyze_market_structure(candles: list[Candle]) -> dict:
             "swing_low": last.low if last else 0.0, "swing_high": last.high if last else 0.0,
             "previous_liquidity_low": last.low if last else 0.0,
             "previous_liquidity_high": last.high if last else 0.0,
+            "long_term_ema_bullish": False, "long_term_ema_bearish": False,
+            "ema50": None, "ema100": None, "ema200": None,
         }
 
     closes = [c.close for c in candles]
@@ -46,6 +97,18 @@ def analyze_market_structure(candles: list[Candle]) -> dict:
     bullish_ema = ema9[-1] > ema21[-1] > ema55[-1]
     bearish_ema = ema9[-1] < ema21[-1] < ema55[-1]
     trend = "BULLISH" if bullish_ema else "BEARISH" if bearish_ema else "NEUTRAL"
+
+    # Additional swing/trend confluence beyond the fast 9/21/55 stack used for
+    # `trend`. This never changes the trend classification itself; it only
+    # supplies an extra independent factor a confluence cluster can stack.
+    ema50, ema100, ema200 = ema(closes, 50), ema(closes, 100), ema(closes, 200)
+    has_long_term_history = len(closes) >= 200
+    long_term_bullish = bool(
+        has_long_term_history and ema50[-1] > ema100[-1] > ema200[-1] and closes[-1] > ema50[-1]
+    )
+    long_term_bearish = bool(
+        has_long_term_history and ema50[-1] < ema100[-1] < ema200[-1] and closes[-1] < ema50[-1]
+    )
 
     recent = candles[-80:]
     atr = _atr(recent)
@@ -103,7 +166,42 @@ def analyze_market_structure(candles: list[Candle]) -> dict:
                         return {"sweep": sweep, "displacement": displacement, "fvg": fvgs[-1], "age": age}
         return None
 
+    def find_inverse_fvg(direction: str):
+        """A directional FVG that price has since closed through (failed as its
+        original support/resistance) and has not since failed the other way is
+        an inverse FVG: the same zone now acts as opposite-direction support or
+        resistance.
+        """
+        opposite = "SHORT" if direction == "LONG" else "LONG"
+        candidates = [e for e in events if e["type"] == "fvg" and e["direction"] == opposite]
+        for fvg in reversed(candidates):
+            zone_low, zone_high = fvg["low"], fvg["high"]
+            after = recent[fvg["index"] + 1:]
+            inverted_index = None
+            for offset, candle in enumerate(after):
+                if direction == "LONG" and candle.close > zone_high:
+                    inverted_index = fvg["index"] + 1 + offset
+                    break
+                if direction == "SHORT" and candle.close < zone_low:
+                    inverted_index = fvg["index"] + 1 + offset
+                    break
+            if inverted_index is None:
+                continue
+            age = len(recent) - 1 - inverted_index
+            if age > settings.event_max_age_bars:
+                continue
+            later = recent[inverted_index + 1:]
+            failed_back = any(
+                (c.close < zone_low if direction == "LONG" else c.close > zone_high)
+                for c in later
+            )
+            if failed_back:
+                continue
+            return {"low": zone_low, "high": zone_high, "time": recent[inverted_index].time}
+        return None
+
     bull_seq, bear_seq = find_sequence("LONG"), find_sequence("SHORT")
+    bull_ifvg, bear_ifvg = find_inverse_fvg("LONG"), find_inverse_fvg("SHORT")
     latest_sell_sweep = latest_event("sweep", "LONG")
     latest_buy_sweep = latest_event("sweep", "SHORT")
     latest_bull_disp = latest_event("displacement", "LONG")
@@ -114,7 +212,7 @@ def analyze_market_structure(candles: list[Candle]) -> dict:
     latest_sweep = max([e for e in (latest_sell_sweep, latest_buy_sweep) if e], key=lambda x: x["index"], default=None)
     latest_disp = max([e for e in (latest_bull_disp, latest_bear_disp) if e], key=lambda x: x["index"], default=None)
 
-    swing_window = recent[-35:]
+    swing_low, swing_high = _swing_points(recent)
     liquidity_window = recent[-25:-1]
     return {
         "trend": trend,
@@ -138,6 +236,12 @@ def analyze_market_structure(candles: list[Candle]) -> dict:
         "displacement_direction": "BULLISH" if latest_disp and latest_disp["direction"] == "LONG" else "BEARISH" if latest_disp else "NONE",
         "bullish_fvg": latest_bull_fvg is not None,
         "bearish_fvg": latest_bear_fvg is not None,
+        "bullish_inverse_fvg": bull_ifvg is not None,
+        "bearish_inverse_fvg": bear_ifvg is not None,
+        "bullish_inverse_fvg_low": bull_ifvg.get("low") if bull_ifvg else None,
+        "bullish_inverse_fvg_high": bull_ifvg.get("high") if bull_ifvg else None,
+        "bearish_inverse_fvg_low": bear_ifvg.get("low") if bear_ifvg else None,
+        "bearish_inverse_fvg_high": bear_ifvg.get("high") if bear_ifvg else None,
         "bullish_sequence": bull_seq is not None,
         "bearish_sequence": bear_seq is not None,
         "sequence_age_bars": (bull_seq or bear_seq or {}).get("age"),
@@ -148,8 +252,11 @@ def analyze_market_structure(candles: list[Candle]) -> dict:
         "bullish_fvg_high": bull_seq["fvg"].get("high") if bull_seq else None,
         "bearish_fvg_low": bear_seq["fvg"].get("low") if bear_seq else None,
         "bearish_fvg_high": bear_seq["fvg"].get("high") if bear_seq else None,
-        "swing_low": min(item.low for item in swing_window),
-        "swing_high": max(item.high for item in swing_window),
+        "swing_low": swing_low,
+        "swing_high": swing_high,
         "previous_liquidity_low": float(min(item.low for item in liquidity_window)),
         "previous_liquidity_high": float(max(item.high for item in liquidity_window)),
+        "long_term_ema_bullish": long_term_bullish,
+        "long_term_ema_bearish": long_term_bearish,
+        "ema50": float(ema50[-1]), "ema100": float(ema100[-1]), "ema200": float(ema200[-1]),
     }

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class Candle(BaseModel):
@@ -81,6 +81,10 @@ class GexSummary(BaseModel):
     iv_observed_count: int = 0
     iv_estimated_count: int = 0
     calculation_note: str = ""
+    snapshot_id: str | None = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    previous_snapshot: dict[str, Any] | None = None
 
 
 class Zone(BaseModel):
@@ -177,6 +181,9 @@ class MarketOpportunity(BaseModel):
     current_price: float | None = None
     missing_gates: list[str] = Field(default_factory=list)
     alertable: bool = False
+    trade_quality_score: float = 0.0
+    trade_grade: str = "—"
+    actionable: bool = False
 
 
 class AlertItem(BaseModel):
@@ -259,6 +266,7 @@ class TradeSetup(BaseModel):
     composite_cluster_eligible: bool = False
     composite_cluster_tier: str = "NONE"
     composite_cluster_active_categories: list[str] = Field(default_factory=list)
+    composite_cluster_active_category_labels: list[str] = Field(default_factory=list)
     composite_cluster_categories: dict[str, float] = Field(default_factory=dict)
     composite_cluster_contributors: list[str] = Field(default_factory=list)
     execution_type: str = "NONE"
@@ -291,6 +299,9 @@ class TradeSetup(BaseModel):
     watch_expires_at: datetime | None = None
     watch_trigger: float | None = None
     watch_invalidation: float | None = None
+    watch_zone_low: float | None = None
+    watch_zone_high: float | None = None
+    watch_zone_source: str | None = None
     watch_phase: str = "WAITING_FOR_PRICE"
     watch_touch_at: datetime | None = None
     watch_touch_price: float | None = None
@@ -364,6 +375,18 @@ class TradeSetup(BaseModel):
     selected_zone_low: float | None = None
     selected_zone_high: float | None = None
     selected_zone_timeframe: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def display_stage(self) -> str:
+        """Additive, non-breaking lifecycle vocabulary layered on top of
+        order_state: SCANNING/AT_LOCATION/MONITORING/LIMIT_READY/FILLED/
+        MANAGING/CANCELLED/INVALIDATED/EXPIRED. order_state and
+        last_transition_reason remain the authoritative detail.
+        """
+        from backend.services.lifecycle_labels import display_stage as _display_stage
+
+        return _display_stage(self)
 
 
 class DashboardMeta(BaseModel):

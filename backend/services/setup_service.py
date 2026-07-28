@@ -37,12 +37,20 @@ def clear_fallback_gex_cache(symbol: str | None = None) -> None:
 
 
 def _stable_fallback_gex(current_price: float, profile: InstrumentProfile) -> GexSummary:
-    """Build a fallback GEX map once per refresh window instead of every tick."""
+    """Build a fallback GEX map once per refresh window instead of every tick.
+
+    The synthetic strike book only re-centers on the live price when a new
+    window opens (same cadence as before); within a window the exact same
+    summary, including its walls/flip, is returned every time so estimated
+    levels do not visibly drift with every price tick.
+    """
     now = datetime.now(timezone.utc)
+    window_seconds = max(60, settings.gex_refresh_seconds)
     with _FALLBACK_GEX_LOCK:
         cached = _FALLBACK_GEX_CACHE.get(profile.symbol)
-        if cached and (now - cached[0]).total_seconds() < max(60, settings.gex_refresh_seconds):
+        if cached and (now - cached[0]).total_seconds() < window_seconds:
             return cached[1].model_copy(deep=True)
+        previous = cached[1] if cached else None
 
     positions = mock_option_chain(current_price, profile)
     raw = derive_gex_summary_from_positions(
@@ -51,6 +59,14 @@ def _stable_fallback_gex(current_price: float, profile: InstrumentProfile) -> Ge
         flip_range_points=profile.gex_strike_range_points,
         flip_step=profile.gex_flip_step,
     )
+    previous_snapshot = None
+    if previous is not None:
+        previous_snapshot = {
+            "put_wall": previous.put_wall,
+            "call_wall": previous.call_wall,
+            "gamma_flip": previous.gamma_flip,
+            "updated_at": previous.updated_at.isoformat() if previous.updated_at else None,
+        }
     raw.update({
         "source": "simulated-fallback",
         "updated_at": now,
@@ -62,6 +78,10 @@ def _stable_fallback_gex(current_price: float, profile: InstrumentProfile) -> Ge
         "options_parent": profile.options_parent,
         "source_label": f"Fallback {profile.gex_source_label}",
         "is_parent_market": profile.uses_parent_gex,
+        "snapshot_id": f"{profile.symbol}-fallback-{int(now.timestamp())}",
+        "valid_from": now,
+        "valid_until": now + timedelta(seconds=window_seconds),
+        "previous_snapshot": previous_snapshot,
     })
     summary = GexSummary(**raw)
     with _FALLBACK_GEX_LOCK:
@@ -120,6 +140,53 @@ def proximity_score(price: float, low: float, high: float, tolerance: float) -> 
     if low <= price <= high:
         return 1.0
     return max(0.0, 1.0 - min(abs(price - low), abs(price - high)) / max(tolerance, .25))
+
+
+def _compute_watch_zone(
+    direction: str,
+    trigger_price: float | None,
+    market_map: InstitutionalMarketMap | None,
+    atr: float,
+    tick_size: float,
+) -> tuple[float | None, float | None, str | None]:
+    """A single trigger price is too rigid for a confluence that is really a
+    range. Prefer the institutional map's active cluster (already a real
+    low/high range) when it's role-aligned with the trade direction and
+    actually contains the trigger; otherwise fall back to a small ATR band
+    around the point trigger so a watch zone always exists.
+    """
+    if trigger_price is None:
+        return None, None, None
+    desired_role = "SUPPORT" if direction == "LONG" else "RESISTANCE"
+    active = market_map.active_cluster if market_map else None
+    if active is not None and active.role == desired_role and active.low is not None and active.high is not None:
+        tolerance = max(float(tick_size) * 8, float(atr) * 0.35)
+        if active.low - tolerance <= trigger_price <= active.high + tolerance:
+            return round(float(active.low), 2), round(float(active.high), 2), "market_map"
+    band = max(float(atr) * 0.15, float(tick_size) * 4)
+    return round(trigger_price - band, 2), round(trigger_price + band, 2), "atr_band"
+
+
+# ES and NQ tend to move together; a same-direction correlated market is an
+# independent extra confluence factor, never a requirement for the primary
+# market's own signals. Only wired for the pair we actually have both sides
+# of today; other families (e.g. Gold) have no natural correlate here.
+CROSS_MARKET_FAMILY_REFERENCE = {"NASDAQ": "ES", "SP500": "NQ"}
+
+
+def _cross_market_alignment(profile: InstrumentProfile, direction: str) -> tuple[str | None, str, bool]:
+    correlated_symbol = CROSS_MARKET_FAMILY_REFERENCE.get(profile.family)
+    if not correlated_symbol or correlated_symbol == profile.symbol:
+        return None, "NEUTRAL", False
+    try:
+        candles = market_data_service.cached_snapshot(correlated_symbol, limit=300)
+    except Exception:
+        return correlated_symbol, "NEUTRAL", False
+    if len(candles) < 60:
+        return correlated_symbol, "NEUTRAL", False
+    trend = analyze_market_structure(candles).get("trend", "NEUTRAL")
+    aligned = trend == ("BULLISH" if direction == "LONG" else "BEARISH")
+    return correlated_symbol, trend, aligned
 
 
 def _enrich_gex(gex: GexSummary, current_price: float) -> GexSummary:
@@ -257,6 +324,11 @@ def build_candidate_setup(
 
     structure = analyze_market_structure(execution_candles)
     structure_5m = analyze_market_structure(candles_5m)
+    # Higher-timeframe alignment is deliberately capped at 15m: with
+    # databento_history_limit=2400 one-minute bars, 1H/2H/4H aggregates fall
+    # under analyze_market_structure's 60-bar minimum and would always read
+    # NEUTRAL, which would be a fabricated confluence rather than a real one.
+    structure_15m = analyze_market_structure(candles_15m)
     zones = (
         (detect_supply_demand(candles_1m, timeframe="1m", lookback=120) if settings.scalper_mode_enabled else [])
         + detect_supply_demand(candles_5m, timeframe="5m", lookback=90)
@@ -332,8 +404,24 @@ def build_candidate_setup(
     direction_sweep = structure["sell_side_sweep"] if direction == "LONG" else structure["buy_side_sweep"]
     direction_displacement = structure["bullish_displacement"] if direction == "LONG" else structure["bearish_displacement"]
     direction_fvg = structure["bullish_fvg"] if direction == "LONG" else structure["bearish_fvg"]
+    direction_inverse_fvg = structure.get("bullish_inverse_fvg") if direction == "LONG" else structure.get("bearish_inverse_fvg")
+    inverse_fvg_low = structure.get("bullish_inverse_fvg_low") if direction == "LONG" else structure.get("bearish_inverse_fvg_low")
+    inverse_fvg_high = structure.get("bullish_inverse_fvg_high") if direction == "LONG" else structure.get("bearish_inverse_fvg_high")
+    inverse_fvg_mid = (
+        (float(inverse_fvg_low) + float(inverse_fvg_high)) / 2.0
+        if inverse_fvg_low is not None and inverse_fvg_high is not None else None
+    )
+    # A reclaimed FVG that fails back through the zone the original way invalidates
+    # the inversion; the near edge of the zone is that failure line.
+    inverse_fvg_invalidation = inverse_fvg_low if direction == "LONG" else inverse_fvg_high
     ordered_sequence = structure["bullish_sequence"] if direction == "LONG" else structure["bearish_sequence"]
     trend_alignment = structure["bullish_ema_aligned"] if direction == "LONG" else structure["bearish_ema_aligned"]
+    long_term_ema_alignment = structure["long_term_ema_bullish"] if direction == "LONG" else structure["long_term_ema_bearish"]
+    # Two independent, separate confluence checks: neither requires the other.
+    htf_5m_aligned = structure_5m.get("trend") == ("BULLISH" if direction == "LONG" else "BEARISH")
+    htf_15m_aligned = structure_15m.get("trend") == ("BULLISH" if direction == "LONG" else "BEARISH")
+    htf_alignment = bool(htf_5m_aligned and htf_15m_aligned)
+    cross_market_symbol, cross_market_trend, cross_market_alignment = _cross_market_alignment(profile, direction)
     fib_pullback = analyze_fib_pullback_continuation(
         execution_candles, direction=direction, swing_low=swing_low, swing_high=swing_high,
         current_price=current_price, atr=atr, tick_size=profile.tick_size,
@@ -424,6 +512,12 @@ def build_candidate_setup(
         "structure_event_key": structure_event_key,
         "structure_event_time": event_time_text,
         "trend_alignment": bool(trend_alignment), "gex_alignment": bool(gex_alignment),
+        "long_term_ema_alignment": bool(long_term_ema_alignment),
+        "ema50": structure.get("ema50"), "ema100": structure.get("ema100"), "ema200": structure.get("ema200"),
+        "htf_alignment": htf_alignment,
+        "htf_5m_trend": structure_5m.get("trend", "NEUTRAL"), "htf_15m_trend": structure_15m.get("trend", "NEUTRAL"),
+        "cross_market_alignment": cross_market_alignment,
+        "cross_market_symbol": cross_market_symbol, "cross_market_trend": cross_market_trend,
         "liquidity_sweep": bool(direction_sweep), "displacement": bool(direction_displacement),
         "directional_fvg": bool(direction_fvg), "ordered_sequence": bool(ordered_sequence),
         "sequence_detail": structure["sequence_detail"],
@@ -440,6 +534,11 @@ def build_candidate_setup(
         "volume_expansion": volume_expansion_quality >= .6,
         "directional_fvg_low": structure.get("bullish_fvg_low") if direction == "LONG" else structure.get("bearish_fvg_low"),
         "directional_fvg_high": structure.get("bullish_fvg_high") if direction == "LONG" else structure.get("bearish_fvg_high"),
+        "inverse_fvg": bool(direction_inverse_fvg),
+        "inverse_fvg_mid": round(float(inverse_fvg_mid), profile.price_precision) if inverse_fvg_mid is not None else None,
+        "inverse_fvg_low": inverse_fvg_low,
+        "inverse_fvg_high": inverse_fvg_high,
+        "inverse_fvg_invalidation": inverse_fvg_invalidation,
         "previous_liquidity_low": structure.get("previous_liquidity_low"),
         "previous_liquidity_high": structure.get("previous_liquidity_high"),
         "sweep_price": structure.get("sweep_price"),
@@ -604,6 +703,12 @@ def build_candidate_setup(
         volume_expansion=volume_expansion_quality, session_quality=session_quality,
     )
     selected = decision_brain_service.select(setup, rank_entry_models(model_context))
+    zone_low, zone_high, zone_source = _compute_watch_zone(
+        selected.direction, selected.entry, selected.market_map, atr, profile.tick_size,
+    )
+    selected = selected.model_copy(update={
+        "watch_zone_low": zone_low, "watch_zone_high": zone_high, "watch_zone_source": zone_source,
+    })
     if settings.scalper_mode_enabled and direction_override is None:
         opposite_direction = "SHORT" if selected.direction == "LONG" else "LONG"
         opposite = build_candidate_setup(

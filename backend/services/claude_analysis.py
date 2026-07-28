@@ -32,11 +32,18 @@ Use lifecycle_timeline only as historical context. Never rewrite or contradict t
 
 State rules:
 - PREVIEW_ONLY is not a forecast, scheduled trade, or guarantee. Explain that no plan exists yet and name the strongest present and missing confirmations.
-- WATCHING/MONITORING: the watch_trigger is NOT an entry and no limit is armed. Explain precisely which confirmations are
-  present, which mandatory confirmations are still missing, and what would allow the engine to produce a locked limit plan.
-  If watch_phase is TRIGGER_TOUCHED, state that price reached the monitoring level, no fill occurred, and the engine is waiting
+- WATCHING/MONITORING: the watch_trigger is NOT an entry and no limit is armed. The monitored location is a zone
+  (watch_zone_low–watch_zone_high in lifecycle_event), not one exact price; watch_trigger is only the preferred entry
+  inside that zone. Explain precisely which confirmations are present, which mandatory confirmations are still missing,
+  and what would allow the engine to produce a locked limit plan.
+  If watch_phase is TRIGGER_TOUCHED, state that price reached the monitoring zone, no fill occurred, and the engine is waiting
   inside a finite confirmation window. For WATCHING → WATCHING, use last_transition_reason to distinguish a trigger touch
   from a primary-entry-model switch; never assume that every same-state transition is a model switch.
+- The CONFIRMED and MISSING/NEXT bullets in every state must be built directly from
+  lifecycle_event.confirmation_checklist: one bullet per item in confirmed (prefix ✓) and one per item in missing
+  (prefix ✗). Do not invent confirmations that are not listed there. If confirmation_checklist.confluence_factors has
+  2 or more entries, mention them by name (e.g. "GEX + Supply/Demand Zone + EMA Trend") — this is a real stacked
+  confluence the deterministic engine already computed, not a Claude inference.
 - WAITING_FOR_LIMIT: explain why the plan qualified, why the entry area was selected, what invalidates the idea at the
   supplied stop, and what market structures/sources justify TP1 and TP2. State that all levels are locked.
 - FILLED: explain that the locked limit was touched, then explain the supplied protective stop and both targets.
@@ -129,16 +136,38 @@ class ClaudeAnalysisService:
 
         lifecycle_timeline = storage_service.setup_timeline(setup.setup_id, limit=12)
 
+        # The confirmation contract for whichever model actually gates execution
+        # (the trigger model, which is the underlying single model even when a
+        # composite cluster is selected) is already computed by
+        # engine/model_confirmations.py. Surface it as a first-class checklist so
+        # the CONFIRMED/MISSING bullets can be built directly from real evidence
+        # instead of being re-derived from prose.
+        signals = setup_data.get("signals") or {}
+        model_confirmations = signals.get("model_confirmations") or {}
+        confirmation_key = setup_data.get("trigger_entry_model_key") or setup_data.get("primary_entry_model_key")
+        contract = model_confirmations.get(confirmation_key) or {}
+        confirmation_checklist = {
+            "model_key": confirmation_key,
+            "label": contract.get("label"),
+            "confirmed": contract.get("evidence") or [],
+            "missing": contract.get("missing") or [],
+            "confluence_factors": setup_data.get("composite_cluster_active_category_labels") or [],
+        }
+
         lifecycle_event = {
             "setup_id": setup_data.get("setup_id"),
+            "display_stage": setup_data.get("display_stage"),
             "previous_state": setup_data.get("last_transition_from"),
             "current_state": setup_data.get("order_state"),
             "transition_to": setup_data.get("last_transition_to"),
             "reason": setup_data.get("last_transition_reason"),
             "occurred_at": setup_data.get("last_transition_at"),
             "transition_price": setup_data.get("last_transition_price"),
+            "confirmation_checklist": confirmation_checklist,
             "watch_trigger": setup_data.get("watch_trigger"),
             "watch_invalidation": setup_data.get("watch_invalidation"),
+            "watch_zone_low": setup_data.get("watch_zone_low"),
+            "watch_zone_high": setup_data.get("watch_zone_high"),
             "watch_phase": setup_data.get("watch_phase"),
             "watch_touch_at": setup_data.get("watch_touch_at"),
             "watch_touch_price": setup_data.get("watch_touch_price"),
